@@ -43,7 +43,7 @@ Runs as a **Dockerized PHP + Apache app** with SQLite logging, live alerts, and 
 
 ### 1. Clone Repo
 ```bash
-git clone https://github.com/<youruser>/uisp-noc.git
+git clone https://github.com/asparks1987/UISP-NOC.git
 cd uisp-noc
 ```
 
