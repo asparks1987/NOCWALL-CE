@@ -78,24 +78,30 @@ function enableSound(){
 }
 
 function fetchDevices(){
- fetch('?ajax=devices').then(r=>r.json()).then(j=>{
+ fetch('?ajax=devices').then(r=>{ if(r.status===401){ location.reload(); throw new Error('unauthorized'); } return r.json(); }).then(j=>{
   devicesCache=j.devices;
   const gws=j.devices.filter(d=>d.gateway).sort((a,b)=>a.online-b.online||a.name.localeCompare(b.name));
-  const cps=j.devices.filter(d=>!d.gateway).sort((a,b)=>a.name.localeCompare(b.name));
+  // Sort CPEs: offline first, then by name
+  const cps=j.devices
+    .filter(d=>!d.gateway)
+    .sort((a,b)=> (a.online - b.online) || a.name.localeCompare(b.name));
 
   // Gateways
   const gwHTML=gws.map(d=>{
     const badges=[badgeVal(d.cpu,'CPU','%'),badgeVal(d.ram,'RAM','%'),badgeVal(d.temp,'Temp','°C'),badgeLatency(d.latency)].join(' ');
     const ackActive = d.ack_until && d.ack_until > (Date.now()/1000);
     return `<div class="card ${d.online?'':'offline'} ${ackActive?'acked':''}">
-      <div class="ack-badge">${badgeAck(d.ack_until)}</div>
+      <div class="ack-badge">${badgeAck(d.ack_until)}
+        <span class="badge good live-uptime" data-uptime="${d.uptime??''}"></span>
+        <span class="badge bad live-outage" data-offline-since="${d.offline_since??''}"></span>
+      </div>
       <h2>${d.name}</h2>
       <div class="status" style="color:${d.online?'#b06cff':'#f55'}">${d.online?'ONLINE':'OFFLINE'}</div>
-      <div>${badges} ${badgeUptime(d.uptime)} ${badgeOutage(d.offline_since, d.online)}</div>
+      <div>${badges}</div>
       <div class="actions">
         ${!d.online ? `
           <div class="dropdown" style="${ackActive ? 'display:none' : ''}">
-            <button onclick="toggleAckMenu('${d.id}')">Ack ▾</button>
+            <button onclick="toggleAckMenu('${d.id}')">Ack</button>
             <div id="ack-${d.id}" class="dropdown-content" style="display:none;background:#333;position:absolute;">
               <a href="#" onclick="ack('${d.id}','30m')">30m</a>
               <a href="#" onclick="ack('${d.id}','1h')">1h</a>
@@ -113,8 +119,15 @@ function fetchDevices(){
   }).join('');
   document.getElementById('gateGrid').innerHTML=gwHTML;
 
-  // CPEs
-  const cpeHTML=cps.map(d=>`<div class="card ${d.online?'':'offline'}"><h2>${d.name}</h2><div style="color:${d.online?'#b06cff':'#f55'}">${d.online?'ONLINE':'OFFLINE'}</div></div>`).join('');
+  // CPEs (show latency badge at top-right if recently pinged)
+  const cpeHTML=cps.map(d=>{
+    const latBadge = (typeof d.cpe_latency==='number') ? badgeLatency(d.cpe_latency) : '';
+    return `<div class="card ${d.online?'':'offline'}">
+      <div class="cpe-badge">${latBadge}</div>
+      <h2>${d.name}</h2>
+      <div style="color:${d.online?'#b06cff':'#f55'}">${d.online?'ONLINE':'OFFLINE'}</div>
+    </div>`;
+  }).join('');
   document.getElementById('cpeGrid').innerHTML=cpeHTML;
 
   document.getElementById('footer').innerText=`HTTP ${j.http}, API latency ${j.api_latency} ms, Updated ${new Date().toLocaleTimeString()}`;
@@ -138,7 +151,14 @@ function fetchDevices(){
   const cpuClass = highCpu>0 ? 'bad' : 'good';
   const ramClass = highRam>0 ? 'bad' : 'good';
 
+  const gwOnline = gws.filter(d=>d.online).length;
+  const gwTotal = gws.length;
+  const cpeOnline = cps.filter(d=>d.online).length;
+  const cpeTotal = cps.length;
+
   const summaryHTML = [
+    `<span class="badge good">Gateways: ${gwOnline}/${gwTotal}</span>`,
+    `<span class="badge good">CPEs: ${cpeOnline}/${cpeTotal}</span>`,
     `<span class="badge ${healthClass}">Health: ${health==null?'--':health+'%'}</span>`,
     `<span class="badge ${offlineClass}">GW Offline: ${offlineGw}</span>`,
     `<span class="badge ${unackedClass}">Unacked: ${unacked}</span>`,
@@ -188,32 +208,62 @@ function fetchDevices(){
   sirenShouldAlertPrev = shouldAlert;
  });
 }
-function toggleAckMenu(id){const el=document.getElementById('ack-'+id);el.style.display=el.style.display==='none'?'block':'none';}
+function toggleAckMenu(id){
+  const el=document.getElementById('ack-'+id);
+  if(!el) return;
+  const showing = (el.style.display==='none' || !el.style.display);
+  el.style.display = showing ? 'block' : 'none';
+  const card = el.closest('.card');
+  if(card){ card.style.zIndex = showing ? '10000' : ''; }
+}
 function ack(id,dur){
   // Optimistic UI
   let dev=devicesCache.find(x=>x.id===id);
   if(dev){dev.ack_until=Date.now()/1000+1800;}
-  fetch(`?ajax=ack&id=${id}&dur=${dur}`).then(fetchDevices);
+  fetch(`?ajax=ack&id=${id}&dur=${dur}&t=${Date.now()}`).then(()=>fetchDevices());
 }
 function clearAck(id){
   let dev=devicesCache.find(x=>x.id===id);
   if(dev){dev.ack_until=null;}
-  fetch(`?ajax=clear&id=${id}`).then(fetchDevices);
+  fetch(`?ajax=clear&id=${id}&t=${Date.now()}`).then(()=>fetchDevices());
 }
 function simulate(id){
   // Try to unlock audio on explicit user action
   unlockAudio();
   let dev=devicesCache.find(x=>x.id===id);
   if(dev){dev.simulate=true;}
-  fetch(`?ajax=simulate&id=${id}`).then(fetchDevices);
+  fetch(`?ajax=simulate&id=${id}&t=${Date.now()}`).then(()=>fetchDevices());
 }
 function clearSim(id){
   let dev=devicesCache.find(x=>x.id===id);
   if(dev){dev.simulate=false;}
-  fetch(`?ajax=clearsim&id=${id}`).then(fetchDevices);
+  fetch(`?ajax=clearsim&id=${id}&t=${Date.now()}`).then(()=>fetchDevices());
 }
-function clearAll(){fetch(`?ajax=clearall`).then(fetchDevices);}
+function clearAll(){ fetch(`?ajax=clearall&t=${Date.now()}`).then(()=>fetchDevices()); }
 function closeModal(){document.getElementById('historyModal').style.display='none';}
+function openTLS(){
+  const m=document.getElementById('tlsModal'); if(!m)return; m.style.display='block';
+  const s=document.getElementById('tlsStatus'); if(s){ s.textContent='Fetching current Caddy config...'; }
+  fetch('?ajax=caddy_cfg').then(async r=>{
+    if(r.status===401){ location.reload(); return; }
+    const txt = await r.text();
+    if(s){ s.textContent = txt; }
+  }).catch(()=>{ if(s) s.textContent='Unable to reach Caddy admin API. Ensure the Caddy container is running.'; });
+}
+function closeTLS(){ const m=document.getElementById('tlsModal'); if(m) m.style.display='none'; }
+function submitTLS(){
+  const domain=document.getElementById('tlsDomain').value.trim();
+  const gotify=document.getElementById('tlsGotify').value.trim();
+  const email=document.getElementById('tlsEmail').value.trim();
+  const staging=document.getElementById('tlsStaging').checked;
+  const s=document.getElementById('tlsStatus'); if(s) s.textContent='Sending config to Caddy...';
+  const fd=new FormData(); fd.append('domain',domain); fd.append('gotify_domain',gotify); fd.append('email',email); if(staging) fd.append('staging','1');
+  fetch('?ajax=provision_tls',{method:'POST',body:fd}).then(r=>r.json()).then(j=>{
+    if(j.ok){ if(s) s.textContent='Caddy loaded config. Visit https://'+domain+'/ in a minute to verify certs.'; }
+    else{ if(s) s.textContent='Failed: '+(j.error||'unknown')+' code='+(j.code||'')+' err='+(j.err||'')+' resp='+(j.resp||''); }
+  }).catch(()=>{ if(s) s.textContent='Request failed.'; });
+  return false;
+}
 function showHistory(id,name){
  fetch(`?ajax=history&id=${id}`).then(r=>r.json()).then(rows=>{
    document.getElementById('histTitle').innerText=`History for ${name}`;
@@ -245,4 +295,60 @@ window.addEventListener('click',unlockAudio,{once:true});
   }
   window.addEventListener('keydown',(e)=>{ if(e.key==='Escape') closeModal(); });
 })();
+
+// Live counters (update once per second)
+function fmtDurationFull(sec){
+  if(typeof sec!=="number" || !isFinite(sec) || sec<0) return null;
+  let s=Math.floor(sec);
+  const d=Math.floor(s/86400); s%=86400;
+  const h=Math.floor(s/3600); s%=3600;
+  const m=Math.floor(s/60);   s%=60;
+  const parts=[];
+  if(d) parts.push(d+"d"); if(h||d) parts.push(h+"h"); if(m||h||d) parts.push(m+"m"); parts.push(s+"s");
+  return parts.join(" ");
+}
+function tickLiveCounters(){
+  const nowSec=Math.floor(Date.now()/1000);
+  document.querySelectorAll('.card .live-uptime').forEach(el=>{
+    const u = parseInt(el.getAttribute('data-uptime'),10);
+    if(!isNaN(u) && u>0){
+      const t = fmtDurationFull(u + (nowSec % 1000000));
+      if(t) el.textContent = 'Uptime: ' + t;
+      el.style.display='';
+    } else { el.style.display='none'; }
+  });
+  document.querySelectorAll('.card .live-outage').forEach(el=>{
+    const s = parseInt(el.getAttribute('data-offline-since'),10);
+    if(!isNaN(s) && s>0){
+      const dur = nowSec - s;
+      const t = fmtDurationFull(dur);
+      if(t) el.textContent = 'Outage: ' + t;
+      el.style.display='';
+    } else { el.style.display='none'; }
+  });
+}
+setInterval(tickLiveCounters, 1000);
+
+// Account helpers
+function changePassword(){
+  const current = prompt('Enter current password');
+  if(current===null) return;
+  const next = prompt('Enter new password (min 6 chars)');
+  if(next===null) return;
+  const fd = new FormData();
+  fd.append('current', current);
+  fd.append('new', next);
+  fetch('?ajax=changepw', {method:'POST', body: fd}).then(async r=>{
+    if(r.status===401){ location.reload(); return; }
+    const j = await r.json().catch(()=>({ok:0,error:'bad_json'}));
+    if(j.ok){ alert('Password updated. You will be logged out.'); logout(); }
+    else { alert('Failed to update password: '+(j.error||'unknown')); }
+  }).catch(()=>{});
+}
+function logout(){
+  window.location.href='?action=logout';
+}
+
+
+
 

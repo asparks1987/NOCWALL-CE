@@ -7,11 +7,42 @@ services:
     environment:
       - UISP_URL=https://changeme.unmsapp.com
       - UISP_TOKEN=YOUR_API_TOKEN_HERE
-    ports:
-      - "12443:80"
+      # Optional: Embedded Gotify defaults (change on first run)
+      - GOTIFY_DEFAULTUSER_NAME=admin
+      - GOTIFY_DEFAULTUSER_PASS=changeme
+      # If you create an application in Gotify, place token here for auto-send
+      # - GOTIFY_TOKEN=your_gotify_application_token
+    # No direct host port exposure; Caddy will proxy 80/443
+    # Uncomment to expose directly without Caddy:
+    # ports:
+    #   - "1200:80"
+    #   - "18080:18080"  # Expose Gotify UI/API (optional)
     volumes:
       - noc_cache:/var/www/html/cache
     restart: unless-stopped
 
+  caddy:
+    image: caddy:2
+    container_name: uisp-caddy
+    depends_on:
+      - uisp-noc
+    environment:
+      # Set your public domain(s) and ACME email for real certs
+      - NOC_DOMAIN=noc.example.com
+      # Optional: serve embedded Gotify on its own hostname
+      # - GOTIFY_DOMAIN=gotify.example.com
+      # Email used for Let's Encrypt/ACME notifications
+      - ACME_EMAIL=admin@example.com
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
 volumes:
   noc_cache:
+  caddy_data:
+  caddy_config:

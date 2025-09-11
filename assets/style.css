@@ -48,6 +48,7 @@ header {
   transition: transform 0.2s;
   position: relative; /* allow absolute-positioned badges */
 }
+.card h2 { text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000; }
 .card:hover {
   transform: scale(1.02);
 }
@@ -144,7 +145,7 @@ footer {
   position: absolute;
   top: 100%;
   left: 0;
-  z-index: 9999;
+  z-index: 100000; /* ensure above neighboring cards */
   min-width: 220px;
   padding: 6px 0;
   background: #2a2a2a;
@@ -164,8 +165,10 @@ footer {
 .dropdown-content a:active { background: #444; }
 
 /* Ack timer at top-right of card */
-.ack-badge { position: absolute; top: 8px; right: 8px; }
-.ack-badge .badge { font-size: 12px; padding: 3px 8px; }
+.ack-badge { position: absolute; top: 8px; right: 8px; display:flex; flex-direction:column; gap:4px; align-items:flex-end; z-index: 2; pointer-events: none; }
+.ack-badge .badge { font-size: 11px; padding: 2px 6px; }
+.cpe-badge { position: absolute; top: 8px; right: 8px; z-index: 2; pointer-events: none; }
+.cpe-badge .badge { font-size: 11px; padding: 2px 6px; }
 
 /* Hide dropdown if card is already acked */
 .card.acked .dropdown { display: none !important; }

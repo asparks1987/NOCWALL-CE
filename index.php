@@ -1,28 +1,116 @@
 <?php
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
+session_start();
 
 date_default_timezone_set('America/Chicago');
 
 // Config
 $UISP_URL   = getenv("UISP_URL") ?: "https://changeme.unmsapp.com";
 $UISP_TOKEN = getenv("UISP_TOKEN") ?: "changeme";
+// Feature flags / UI toggles
+$SHOW_TLS_UI = in_array(strtolower((string)getenv('SHOW_TLS_UI')), ['1','true','yes'], true);
+
+// Embedded Gotify (notifications)
+$GOTIFY_URL   = getenv('GOTIFY_URL') ?: 'http://127.0.0.1:18080';
+$GOTIFY_TOKEN = getenv('GOTIFY_TOKEN');
+if(!$GOTIFY_TOKEN){
+    $tokFile = __DIR__ . '/cache/gotify_app_token.txt';
+    if(is_file($tokFile)){
+        $t = trim(@file_get_contents($tokFile));
+        if($t !== '') $GOTIFY_TOKEN = $t;
+    }
+}
 
 $CACHE_DIR  = __DIR__ . "/cache";
 $CACHE_FILE = $CACHE_DIR . "/status_cache.json";
 $DB_FILE    = $CACHE_DIR . "/metrics.sqlite";
+$AUTH_FILE  = $CACHE_DIR . "/auth.json";
 
 $FIRST_OFFLINE_THRESHOLD = 30;
 
-// Ensure cache dir
-if (!is_dir($CACHE_DIR)) mkdir($CACHE_DIR, 0775, true);
+// Ensure cache dir and basic permissions
+if (!is_dir($CACHE_DIR)) @mkdir($CACHE_DIR, 0775, true);
+if (!is_writable($CACHE_DIR)) @chmod($CACHE_DIR, 0775);
+
+// Simple Sign-On: bootstrap default admin/admin on first run
+function load_auth($file){
+    if(is_file($file)){
+        $j = json_decode(@file_get_contents($file), true);
+        if(is_array($j) && isset($j['username']) && isset($j['password_hash'])) return $j;
+    }
+    $default = [
+        'username' => 'admin',
+        'password_hash' => password_hash('admin', PASSWORD_DEFAULT),
+        'updated_at' => date('c')
+    ];
+    @file_put_contents($file, json_encode($default));
+    return $default;
+}
+function save_auth($file, $username, $password){
+    $data = [
+        'username' => $username,
+        'password_hash' => password_hash($password, PASSWORD_DEFAULT),
+        'updated_at' => date('c')
+    ];
+    @file_put_contents($file, json_encode($data));
+    return $data;
+}
+$AUTH = load_auth($AUTH_FILE);
+
+// Handle login/logout actions early
+if(isset($_GET['action']) && $_GET['action']==='login' && $_SERVER['REQUEST_METHOD']==='POST'){
+    $u = trim($_POST['username'] ?? '');
+    $p = $_POST['password'] ?? '';
+    if($u === ($AUTH['username'] ?? '') && password_verify($p, $AUTH['password_hash'] ?? '')){
+        $_SESSION['auth_ok'] = 1;
+        header('Location: ./');
+        exit;
+    } else {
+        $_SESSION['auth_err'] = 'Invalid credentials';
+        header('Location: ./?login=1');
+        exit;
+    }
+}
+if(isset($_GET['action']) && $_GET['action']==='logout'){
+    session_destroy();
+    header('Location: ./?login=1');
+    exit;
+}
+
+// For AJAX endpoints, require login except for a health or login check
+function require_login_for_ajax(){
+    if(!isset($_SESSION['auth_ok'])){
+        http_response_code(401);
+        header('Content-Type: application/json');
+        echo json_encode(['error'=>'unauthorized']);
+        exit;
+    }
+}
 
 // Load cache
 $cache = file_exists($CACHE_FILE) ? json_decode(file_get_contents($CACHE_FILE), true) : [];
 if (!is_array($cache)) $cache = [];
 
-// SQLite init
-$db = new SQLite3($DB_FILE);
+// SQLite init with robust error handling
+try {
+    if (!file_exists($DB_FILE)) {
+        // Best-effort create the file so SQLite has a handle
+        @touch($DB_FILE);
+        @chmod($DB_FILE, 0664);
+    }
+    $db = new SQLite3($DB_FILE);
+} catch (Exception $e) {
+    http_response_code(500);
+    header('Content-Type: text/plain');
+    echo "Fatal: Unable to open SQLite database at: $DB_FILE\n";
+    echo "Error: ".$e->getMessage()."\n\n";
+    echo "Checks:\n";
+    echo "- Ensure directory exists and is writable: $CACHE_DIR\n";
+    echo "- If using a Docker volume, fix permissions (chown/chmod) for www-data.\n";
+    echo "- Example inside container: chown -R www-data:www-data /var/www/html/cache && chmod -R u+rwX,g+rwX /var/www/html/cache\n";
+    exit;
+}
 $db->exec('PRAGMA journal_mode = wal;');
 $db->busyTimeout(5000);
 $db->exec("CREATE TABLE IF NOT EXISTS metrics (
@@ -52,8 +140,39 @@ function is_gateway($d){ return strtolower($d['identification']['role']??'')==="
 function is_online($d){ $s=strtolower($d['overview']['status']??''); return in_array($s,['ok','online','active','connected','reachable','enabled']); }
 function ping_host($ip){ if(!$ip) return null; $ip=preg_replace('/\/\d+$/','',$ip); $out=@shell_exec("ping -c 1 -W 1 ".escapeshellarg($ip)." 2>&1"); if(preg_match('/time=([\d\.]+)\s*ms/',$out,$m)) return floatval($m[1]); return null; }
 
+function send_gotify($title,$message,$priority=5){
+    global $GOTIFY_URL,$GOTIFY_TOKEN;
+    if(!$GOTIFY_TOKEN){
+        @file_put_contents(__DIR__.'/cache/gotify_log.txt', date('c')." missing GOTIFY_TOKEN\n", FILE_APPEND);
+        return false;
+    }
+    $url = rtrim($GOTIFY_URL,'/').'/message';
+    $payload = json_encode(['title'=>$title,'message'=>$message,'priority'=>$priority]);
+    $ch=curl_init();
+    curl_setopt_array($ch,[
+        CURLOPT_URL=>$url,
+        CURLOPT_POST=>true,
+        CURLOPT_POSTFIELDS=>$payload,
+        CURLOPT_HTTPHEADER=>[
+            'Content-Type: application/json',
+            'X-Gotify-Key: '.$GOTIFY_TOKEN
+        ],
+        CURLOPT_RETURNTRANSFER=>true,
+        CURLOPT_TIMEOUT=>5
+    ]);
+    $resp = curl_exec($ch);
+    $err  = curl_error($ch);
+    $code = curl_getinfo($ch,CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    if(!($code>=200 && $code<300)){
+        @file_put_contents(__DIR__.'/cache/gotify_log.txt', date('c')." code=$code err=".($err?:'-')." resp=".$resp."\n", FILE_APPEND);
+    }
+    return $code>=200 && $code<300;
+}
+
 // AJAX
 if(isset($_GET['ajax'])){
+    require_login_for_ajax();
     header("Content-Type: application/json");
     // Prevent caching of AJAX responses
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
@@ -75,8 +194,37 @@ if(isset($_GET['ajax'])){
         $devices=json_decode($resp,true)?:[];
 
         $now=time();
+        $prev_cache = $cache; // snapshot to detect state transitions
         $out=[];
         $cache_changed=false;
+        // Prepare CPE ping batch: up to 10 random CPEs every 3 minutes, avoiding any pinged within the last hour
+        $batch_int = intdiv($now, 180); // 3-minute windows
+        $meta = $cache['_cpe_batch'] ?? [];
+        $selected_cpe_ids = $meta['ids'] ?? [];
+        if (($meta['last_batch_int'] ?? null) !== $batch_int) {
+            $candidates = [];
+            foreach ($devices as $dx) {
+                if (!is_gateway($dx)) {
+                    $cid = device_key($dx);
+                    $lip = $dx['ipAddress'] ?? null;
+                    if ($lip) {
+                        $lp = $cache[$cid]['last_cpe_ping_at'] ?? 0;
+                        if (($now - $lp) >= 3600) { // not pinged in last hour
+                            $candidates[] = $cid;
+                        }
+                    }
+                }
+            }
+            if (!empty($candidates)) {
+                shuffle($candidates);
+                $selected_cpe_ids = array_slice($candidates, 0, 10);
+            } else {
+                $selected_cpe_ids = [];
+            }
+            $cache['_cpe_batch'] = ['last_batch_int'=>$batch_int, 'ids'=>$selected_cpe_ids];
+            $cache_changed = true;
+        }
+        $cpe_ping_set = array_flip($selected_cpe_ids);
         foreach($devices as $d){
             $id=device_key($d);
             $name=$d['identification']['name']??$id;
@@ -91,9 +239,20 @@ if(isset($_GET['ajax'])){
                 ?? $d['overview']['uptime_sec']
                 ?? null;
             $lat=null;
+            $cpe_lat=null;
 
             if($isGw){
-                $lat=ping_host($d['ipAddress']??null);
+                // Ping no more than once per minute per gateway
+                $lastPingAt = $cache[$id]['last_ping_at'] ?? 0;
+                $cachedLat  = $cache[$id]['last_ping_ms'] ?? null;
+                if(($now - $lastPingAt) >= 60 || $cachedLat===null){
+                    $lat=ping_host($d['ipAddress']??null);
+                    $cache[$id]['last_ping_at']=$now;
+                    $cache[$id]['last_ping_ms']=$lat;
+                    $cache_changed=true;
+                } else {
+                    $lat=$cachedLat;
+                }
                 if($now%60===0){
                     $stmt=$db->prepare("INSERT INTO metrics (device_id,name,cpu,ram,temp,latency,online) VALUES (?,?,?,?,?,?,?)");
                     $stmt->bindValue(1,$id,SQLITE3_TEXT);
@@ -105,6 +264,16 @@ if(isset($_GET['ajax'])){
                     $stmt->bindValue(7,$on?1:0,SQLITE3_INTEGER);
                     @$stmt->execute();
                 }
+            } else {
+                // CPE: ping only if selected in this 3-minute window
+                if (isset($cpe_ping_set[$id])) {
+                    $cpe_lat = ping_host($d['ipAddress']??null);
+                    $cache[$id]['last_cpe_ping_at'] = $now;
+                    $cache[$id]['last_cpe_ping_ms'] = $cpe_lat;
+                    $cache_changed = true;
+                } else {
+                    $cpe_lat = $cache[$id]['last_cpe_ping_ms'] ?? null;
+                }
             }
 
             $sim=!empty($cache[$id]['simulate']);
@@ -115,9 +284,30 @@ if(isset($_GET['ajax'])){
             if(!$on){
                 if(empty($cache[$id]['offline_since'])){ $cache[$id]['offline_since']=$now; $cache_changed=true; }
                 $offline_since=$cache[$id]['offline_since'];
+                // Notify when gateway is offline: first after threshold, then every 10 minutes while still offline
+                $threshold_met = ($now - ($cache[$id]['offline_since']??$now)) >= $FIRST_OFFLINE_THRESHOLD;
+                $last_sent = $cache[$id]['gf_last_offline_notif'] ?? null;
+                $should_repeat = ($last_sent && ($now - $last_sent) >= 600);
+                if($isGw && $threshold_met && (!$last_sent || $should_repeat)){
+                    @file_put_contents($CACHE_DIR.'/gotify_log.txt', date('c')." offline eval: id=$id name=$name threshold_met=$threshold_met last_sent=".($last_sent?:'null')." repeat=$should_repeat\n", FILE_APPEND);
+                    if(send_gotify('Gateway Offline', $name.' is OFFLINE', 8)){
+                        $cache[$id]['gf_last_offline_notif']=$now; $cache_changed=true;
+                    } else {
+                        @file_put_contents($CACHE_DIR.'/gotify_log.txt', date('c')." offline send_gotify returned false for id=$id name=$name\n", FILE_APPEND);
+                    }
+                }
             } else {
                 if(!empty($cache[$id]['offline_since'])){ unset($cache[$id]['offline_since']); $cache_changed=true; }
                 $offline_since=null;
+                // If previously offline, send recovery notification
+                if(!empty($prev_cache[$id]['offline_since']) && $isGw){
+                    @file_put_contents($CACHE_DIR.'/gotify_log.txt', date('c')." online eval: id=$id name=$name\n", FILE_APPEND);
+                    if(send_gotify('Gateway Online', $name.' is back ONLINE', 5)){
+                        unset($cache[$id]['gf_last_offline_notif']); $cache_changed=true;
+                    }
+                } else {
+                    if(isset($cache[$id]['gf_last_offline_notif'])){ unset($cache[$id]['gf_last_offline_notif']); $cache_changed=true; }
+                }
             }
 
             $ack_until=$cache[$id]['ack_until']??null;
@@ -125,6 +315,7 @@ if(isset($_GET['ajax'])){
             $out[]=[
                 'id'=>$id,'name'=>$name,'gateway'=>$isGw,
                 'online'=>$on,'cpu'=>$cpu,'ram'=>$ram,'temp'=>$temp,'latency'=>$lat,
+                'cpe_latency'=>$cpe_lat,
                 'uptime'=>$uptime,
                 'offline_since'=>$offline_since,
                 'simulate'=>$sim,'ack_until'=>$ack_until
@@ -145,6 +336,104 @@ if(isset($_GET['ajax'])){
         echo json_encode(array_reverse($rows)); exit;
     }
 
+    if($_GET['ajax']==='gotifytest'){
+        $ok = send_gotify('Test from UISP NOC','This is a test notification.', 5);
+        echo json_encode(['ok'=>$ok?1:0]); exit;
+    }
+
+    // --- Caddy TLS helpers ---
+    if($_GET['ajax']==='caddy_cfg'){
+        $ch=curl_init();
+        curl_setopt_array($ch,[
+            CURLOPT_URL=>'http://caddy:2019/config/',
+            CURLOPT_RETURNTRANSFER=>true,
+            CURLOPT_TIMEOUT=>4
+        ]);
+        $resp=curl_exec($ch);
+        $err=curl_error($ch);
+        $code=curl_getinfo($ch,CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if($code>=200 && $code<300){ echo $resp; } else { echo json_encode(['error'=>'caddy_unreachable','code'=>$code,'err'=>$err]); }
+        exit;
+    }
+
+    if($_GET['ajax']==='provision_tls' && $_SERVER['REQUEST_METHOD']==='POST'){
+        $domain = trim($_POST['domain'] ?? '');
+        $gdomain = trim($_POST['gotify_domain'] ?? '');
+        $email = trim($_POST['email'] ?? '');
+        $staging = !empty($_POST['staging']);
+        if($domain===''){ echo json_encode(['ok'=>0,'error'=>'missing_domain']); exit; }
+        if($email===''){ echo json_encode(['ok'=>0,'error'=>'missing_email']); exit; }
+        $issuers = [['module'=>'acme','email'=>$email]];
+        if($staging){ $issuers[0]['ca']='https://acme-staging-v02.api.letsencrypt.org/directory'; }
+
+        $routes=[];
+        $routes[] = [
+            'match'=>[['host'=>[$domain]]],
+            'handle'=>[[
+                'handler'=>'reverse_proxy',
+                'upstreams'=>[['dial'=>'uisp-noc:80']]
+            ]]
+        ];
+        if($gdomain!==''){
+            $routes[] = [
+                'match'=>[['host'=>[$gdomain]]],
+                'handle'=>[[
+                    'handler'=>'reverse_proxy',
+                    'upstreams'=>[['dial'=>'uisp-noc:18080']]
+                ]]
+            ];
+        }
+        $cfg = [
+            'apps'=>[
+                'tls'=>[
+                    'automation'=>[
+                        'policies'=>[[ 'issuers'=>$issuers ]]
+                    ]
+                ],
+                'http'=>[
+                    'servers'=>[
+                        'srv0'=>[
+                            'listen'=>[':80',':443'],
+                            'routes'=>$routes
+                        ]
+                    ]
+                ]
+            ]
+        ];
+        $payload=json_encode($cfg);
+        $ch=curl_init();
+        curl_setopt_array($ch,[
+            CURLOPT_URL=>'http://caddy:2019/load',
+            CURLOPT_POST=>true,
+            CURLOPT_POSTFIELDS=>$payload,
+            CURLOPT_HTTPHEADER=>['Content-Type: application/json'],
+            CURLOPT_RETURNTRANSFER=>true,
+            CURLOPT_TIMEOUT=>10
+        ]);
+        $resp=curl_exec($ch);
+        $err=curl_error($ch);
+        $code=curl_getinfo($ch,CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if($code>=200 && $code<300){ echo json_encode(['ok'=>1,'message'=>'caddy_config_loaded']); }
+        else { echo json_encode(['ok'=>0,'error'=>'caddy_load_failed','code'=>$code,'err'=>$err,'resp'=>$resp]); }
+        exit;
+    }
+
+    if($_GET['ajax']==='changepw' && $_SERVER['REQUEST_METHOD']==='POST'){
+        $cur = $_POST['current'] ?? '';
+        $new = $_POST['new'] ?? '';
+        $user = $_POST['username'] ?? ($AUTH['username'] ?? 'admin');
+        if(!password_verify($cur, $AUTH['password_hash'] ?? '')){
+            echo json_encode(['ok'=>0,'error'=>'current_password_incorrect']); exit;
+        }
+        if(strlen($new) < 6){
+            echo json_encode(['ok'=>0,'error'=>'new_password_too_short']); exit;
+        }
+        $AUTH = save_auth($AUTH_FILE, $user, $new);
+        echo json_encode(['ok'=>1]); exit;
+    }
+
     if($_GET['ajax']==='ack' && !empty($_GET['id']) && !empty($_GET['dur'])){
         $id=$_GET['id']; $dur=$_GET['dur'];
         $durmap=['30m'=>1800,'1h'=>3600,'6h'=>21600,'8h'=>28800,'12h'=>43200];
@@ -163,12 +452,20 @@ if(isset($_GET['ajax'])){
         echo json_encode(['ok'=>1]); exit;
     }
     if($_GET['ajax']==='clearsim' && !empty($_GET['id'])){
-        $cache[$_GET['id']]['simulate']=false;
+        $did = $_GET['id'];
+        if(isset($cache[$did]['simulate'])) unset($cache[$did]['simulate']);
+        // Proactively clear any outage state created by simulation so UI snaps back immediately
+        if(isset($cache[$did]['offline_since'])) unset($cache[$did]['offline_since']);
+        if(isset($cache[$did]['gf_last_offline_notif'])) unset($cache[$did]['gf_last_offline_notif']);
         file_put_contents($CACHE_FILE,json_encode($cache));
         echo json_encode(['ok'=>1]); exit;
     }
     if($_GET['ajax']==='clearall'){
-        foreach($cache as &$c) $c['ack_until']=null;
+        foreach($cache as $k=>&$c){
+            if(is_array($c)){
+                if(array_key_exists('ack_until',$c)) unset($c['ack_until']);
+            }
+        }
         file_put_contents($CACHE_FILE,json_encode($cache));
         echo json_encode(['ok'=>1]); exit;
     }
@@ -180,6 +477,42 @@ if(!isset($_GET['ajax'])){
     header('Pragma: no-cache');
 }
 ?>
+<?php if(!isset($_SESSION['auth_ok'])): ?>
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>UISP NOC - Login</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Arial,sans-serif;background:#111;color:#eee;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+    .login{background:#1b1b1b;padding:24px;border-radius:8px;box-shadow:0 0 0 1px #333;width:320px}
+    .login h2{margin:0 0 12px 0;font-weight:600}
+    .field{margin:10px 0}
+    .field label{display:block;margin-bottom:6px;color:#ccc;font-size:12px}
+    .field input{width:100%;padding:10px;border:1px solid #333;border-radius:6px;background:#0f0f0f;color:#eee}
+    .btn{width:100%;padding:10px;margin-top:10px;background:#6c5ce7;border:none;border-radius:6px;color:#fff;font-weight:600;cursor:pointer}
+    .hint{color:#aaa;font-size:12px;margin-top:8px}
+    .err{color:#f55;margin-bottom:8px;font-size:13px}
+  </style>
+</head>
+<body>
+  <form class="login" method="post" action="?action=login">
+    <h2>Sign in</h2>
+    <?php if(!empty($_SESSION['auth_err'])){ echo '<div class="err">'.htmlspecialchars($_SESSION['auth_err']).'</div>'; unset($_SESSION['auth_err']); } ?>
+    <div class="field">
+      <label>Username</label>
+      <input type="text" name="username" value="admin" autocomplete="username" required>
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input type="password" name="password" autocomplete="current-password" required>
+    </div>
+    <button class="btn" type="submit">Login</button>
+    <div class="hint">Default: admin / admin. You can change it after login.</div>
+  </form>
+</body>
+</html>
+<?php exit; endif; ?>
 <!doctype html>
 <html>
 <head>
@@ -193,6 +526,11 @@ if(!isset($_GET['ajax'])){
   <span id="overallSummary"></span>
   <button id="enableSoundBtn" class="btn-accent" onclick="enableSound()" style="float:right;margin-right:10px;">Enable Sound</button>
   <button onclick="clearAll()" style="float:right;margin-right:10px;">Clear All Acks</button>
+  <button onclick="changePassword()" style="float:right;margin-right:10px;">Change Password</button>
+  <button onclick="logout()" style="float:right;margin-right:10px;">Logout</button>
+  <?php if($SHOW_TLS_UI): ?>
+    <button onclick="openTLS()" style="float:right;margin-right:10px;">TLS/Certs</button>
+  <?php endif; ?>
 </header>
 <div class="tabs">
   <button class="tablink active" onclick="openTab('gateways')">Gateways</button>
@@ -213,6 +551,28 @@ if(!isset($_GET['ajax'])){
     <button onclick="closeModal()">Close</button>
   </div>
 </div>
+
+<div id="tlsModal" class="modal">
+  <div class="modal-content">
+    <h3>TLS / Certificates</h3>
+    <button class="modal-close" onclick="closeTLS()" aria-label="Close">&times;</button>
+    <p>Provision HTTPS certificates via Caddy. Ensure your DNS points to this host and ports 80/443 are reachable from the internet.</p>
+    <form id="tlsForm" onsubmit="return submitTLS();" style="display:block;max-width:560px">
+      <label>Site Domain (UI)</label>
+      <input id="tlsDomain" type="text" placeholder="noc.example.com" style="width:100%;padding:8px;border-radius:6px;border:1px solid #444;background:#111;color:#eee" required>
+      <div style="height:8px"></div>
+      <label>Gotify Domain (optional)</label>
+      <input id="tlsGotify" type="text" placeholder="gotify.example.com" style="width:100%;padding:8px;border-radius:6px;border:1px solid #444;background:#111;color:#eee">
+      <div style="height:8px"></div>
+      <label>ACME Email</label>
+      <input id="tlsEmail" type="email" placeholder="admin@example.com" style="width:100%;padding:8px;border-radius:6px;border:1px solid #444;background:#111;color:#eee" required>
+      <div><label><input id="tlsStaging" type="checkbox"> Use Let’s Encrypt Staging (testing)</label></div>
+      <div style="height:10px"></div>
+      <button class="btn-accent" type="submit">Provision / Reload Caddy</button>
+    </form>
+    <pre id="tlsStatus" style="background:#111;border:1px solid #333;border-radius:8px;padding:10px;color:#8ad;overflow:auto;max-height:260px"></pre>
+  </div>
+ </div>
 
 <audio id="siren" src="buz.mp3?v=<?=$ASSET_VERSION?>" preload="auto"></audio>
 
