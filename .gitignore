@@ -1,0 +1,22 @@
+# Ignore PowerShell scripts and build scripts
+*.ps1
+# Any file/dir starting with 'build' (build scripts, helpers, build folders)
+build*
+# Specific patterns for old names
+build-*.sh
+build-*.ps1
+
+# Ignore build artifacts and caches
+cache/
+*.sqlite
+*.log
+
+# Ignore env and secrets
+.env
+*.env
+
+# Node / editor / OS
+node_modules/
+.vscode/
+.DS_Store
+Thumbs.db
