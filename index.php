@@ -136,7 +136,12 @@ $ASSET_VERSION = max(
 
 // Helpers
 function device_key($dev){ $id=$dev['identification']??[]; return $id['mac'] ?? $id['id'] ?? $id['name'] ?? 'unknown'; }
-function is_gateway($d){ return strtolower($d['identification']['role']??'')==="gateway"; }
+function device_role($dev){ return strtolower($dev['identification']['role']??''); }
+function device_role_label($role){ $role=trim((string)$role); return $role!=='' ? ucfirst($role) : 'Device'; }
+function is_gateway($d){ return device_role($d)==='gateway'; }
+function is_router($d){ return device_role($d)==='router'; }
+function is_switch($d){ return device_role($d)==='switch'; }
+function is_backbone($d){ $role=device_role($d); return in_array($role,['gateway','router','switch'],true); }
 function is_online($d){ $s=strtolower($d['overview']['status']??''); return in_array($s,['ok','online','active','connected','reachable','enabled']); }
 function ping_host($ip){ if(!$ip) return null; $ip=preg_replace('/\/\d+$/','',$ip); $out=@shell_exec("ping -c 1 -W 1 ".escapeshellarg($ip)." 2>&1"); if(preg_match('/time=([\d\.]+)\s*ms/',$out,$m)) return floatval($m[1]); return null; }
 
@@ -204,7 +209,7 @@ if(isset($_GET['ajax'])){
         if (($meta['last_batch_int'] ?? null) !== $batch_int) {
             $candidates = [];
             foreach ($devices as $dx) {
-                if (!is_gateway($dx)) {
+                if (!is_backbone($dx)) {
                     $cid = device_key($dx);
                     $lip = $dx['ipAddress'] ?? null;
                     if ($lip) {
@@ -228,7 +233,11 @@ if(isset($_GET['ajax'])){
         foreach($devices as $d){
             $id=device_key($d);
             $name=$d['identification']['name']??$id;
+            $role=device_role($d);
             $isGw=is_gateway($d);
+            $isRouter=is_router($d);
+            $isSwitch=is_switch($d);
+            $isBackbone=is_backbone($d);
             $on=is_online($d);
             $cpu=$d['overview']['cpu']??null;
             $ram=$d['overview']['ram']??null;
@@ -241,8 +250,8 @@ if(isset($_GET['ajax'])){
             $lat=null;
             $cpe_lat=null;
 
-            if($isGw){
-                // Ping no more than once per minute per gateway
+            if($isBackbone){
+                // Ping no more than once per minute per backbone device
                 $lastPingAt = $cache[$id]['last_ping_at'] ?? 0;
                 $cachedLat  = $cache[$id]['last_ping_ms'] ?? null;
                 if(($now - $lastPingAt) >= 60 || $cachedLat===null){
@@ -279,6 +288,8 @@ if(isset($_GET['ajax'])){
             $sim=!empty($cache[$id]['simulate']);
             if($sim) $on=false;
 
+            $roleLabel = device_role_label($role);
+
             // Track offline start time to compute outage duration
             if(!isset($cache[$id])) $cache[$id]=[];
             if(!$on){
@@ -288,9 +299,9 @@ if(isset($_GET['ajax'])){
                 $threshold_met = ($now - ($cache[$id]['offline_since']??$now)) >= $FIRST_OFFLINE_THRESHOLD;
                 $last_sent = $cache[$id]['gf_last_offline_notif'] ?? null;
                 $should_repeat = ($last_sent && ($now - $last_sent) >= 600);
-                if($isGw && $threshold_met && (!$last_sent || $should_repeat)){
-                    @file_put_contents($CACHE_DIR.'/gotify_log.txt', date('c')." offline eval: id=$id name=$name threshold_met=$threshold_met last_sent=".($last_sent?:'null')." repeat=$should_repeat\n", FILE_APPEND);
-                    if(send_gotify('Gateway Offline', $name.' is OFFLINE', 8)){
+                if($isBackbone && $threshold_met && (!$last_sent || $should_repeat)){
+                    @file_put_contents($CACHE_DIR.'/gotify_log.txt', date('c')." offline eval: id=$id name=$name role=$role threshold_met=$threshold_met last_sent=".($last_sent?:'null')." repeat=$should_repeat\n", FILE_APPEND);
+                    if(send_gotify($roleLabel.' Offline', $name.' is OFFLINE', 8)){
                         $cache[$id]['gf_last_offline_notif']=$now; $cache_changed=true;
                     } else {
                         @file_put_contents($CACHE_DIR.'/gotify_log.txt', date('c')." offline send_gotify returned false for id=$id name=$name\n", FILE_APPEND);
@@ -300,9 +311,9 @@ if(isset($_GET['ajax'])){
                 if(!empty($cache[$id]['offline_since'])){ unset($cache[$id]['offline_since']); $cache_changed=true; }
                 $offline_since=null;
                 // If previously offline, send recovery notification
-                if(!empty($prev_cache[$id]['offline_since']) && $isGw){
-                    @file_put_contents($CACHE_DIR.'/gotify_log.txt', date('c')." online eval: id=$id name=$name\n", FILE_APPEND);
-                    if(send_gotify('Gateway Online', $name.' is back ONLINE', 5)){
+                if(!empty($prev_cache[$id]['offline_since']) && $isBackbone){
+                    @file_put_contents($CACHE_DIR.'/gotify_log.txt', date('c')." online eval: id=$id name=$name role=$role\n", FILE_APPEND);
+                    if(send_gotify($roleLabel.' Online', $name.' is back ONLINE', 5)){
                         unset($cache[$id]['gf_last_offline_notif']); $cache_changed=true;
                     }
                 } else {
@@ -314,6 +325,7 @@ if(isset($_GET['ajax'])){
 
             $out[]=[
                 'id'=>$id,'name'=>$name,'gateway'=>$isGw,
+                'router'=>$isRouter,'switch'=>$isSwitch,'role'=>$role,'backbone'=>$isBackbone,
                 'online'=>$on,'cpu'=>$cpu,'ram'=>$ram,'temp'=>$temp,'latency'=>$lat,
                 'cpe_latency'=>$cpe_lat,
                 'uptime'=>$uptime,
@@ -535,9 +547,11 @@ if(!isset($_GET['ajax'])){
 <div class="tabs">
   <button class="tablink active" onclick="openTab('gateways')">Gateways</button>
   <button class="tablink" onclick="openTab('cpes')">CPEs</button>
+    <button class="tablink" onclick="openTab('backbone')">Routers & Switches</button>
 </div>
 <div id="gateways" class="tabcontent" style="display:block"><div id="gateGrid" class="grid"></div></div>
 <div id="cpes" class="tabcontent" style="display:none"><div id="cpeGrid" class="grid"></div></div>
+<div id="backbone" class="tabcontent" style="display:none"><div id="routerGrid" class="grid"></div></div>
 <footer id="footer"></footer>
 
 <div id="historyModal" class="modal">

@@ -85,6 +85,10 @@ function fetchDevices(){
   const cps=j.devices
     .filter(d=>!d.gateway)
     .sort((a,b)=> (a.online - b.online) || a.name.localeCompare(b.name));
+  // Backbone devices: routers and switches (excluding gateways already in gws)
+  const backbones = j.devices
+    .filter(d=> (d.router || d.switch) && !d.gateway )
+    .sort((a,b)=> (a.online - b.online) || a.name.localeCompare(b.name));
 
   // Gateways
   const gwHTML=gws.map(d=>{
@@ -130,6 +134,38 @@ function fetchDevices(){
   }).join('');
   document.getElementById('cpeGrid').innerHTML=cpeHTML;
 
+  // Routers & Switches grid
+  const rbHTML = backbones.map(d=>{
+    const badges=[badgeVal(d.cpu,'CPU','%'),badgeVal(d.ram,'RAM','%'),badgeVal(d.temp,'Temp','°C'),badgeLatency(d.latency)].join(' ');
+    const ackActive = d.ack_until && d.ack_until > (Date.now()/1000);
+    return `<div class="card ${d.online?'':'offline'} ${ackActive?'acked':''}">
+      <div class="ack-badge">${badgeAck(d.ack_until)}
+        <span class="badge good live-uptime" data-uptime="${d.uptime??''}"></span>
+        <span class="badge bad live-outage" data-offline-since="${d.offline_since??''}"></span>
+      </div>
+      <h2>${d.name}</h2>
+      <div class="status" style="color:${d.online?'#b06cff':'#f55'}">${d.online?'ONLINE':'OFFLINE'}</div>
+      <div>${badges}</div>
+      <div class="actions">
+        ${!d.online ? `
+          <div class="dropdown" style="${ackActive ? 'display:none' : ''}">
+            <button onclick="toggleAckMenu('${d.id}')">Ack</button>
+            <div id="ack-${d.id}" class="dropdown-content" style="display:none;background:#333;position:absolute;">
+              <a href="#" onclick="ack('${d.id}','30m')">30m</a>
+              <a href="#" onclick="ack('${d.id}','1h')">1h</a>
+              <a href="#" onclick="ack('${d.id}','6h')">6h</a>
+              <a href="#" onclick="ack('${d.id}','8h')">8h</a>
+              <a href="#" onclick="ack('${d.id}','12h')">12h</a>
+            </div>
+          </div>
+          ${ackActive ? `<button onclick="clearAck('${d.id}')">Clear Ack</button>`:''}
+        `:``}
+        <button onclick="showHistory('${d.id}','${d.name}')">History</button>
+      </div>
+    </div>`;
+  }).join('');
+  const routerGrid = document.getElementById('routerGrid'); if(routerGrid) routerGrid.innerHTML = rbHTML;
+
   document.getElementById('footer').innerText=`HTTP ${j.http}, API latency ${j.api_latency} ms, Updated ${new Date().toLocaleTimeString()}`;
 
   // Overall header summary
@@ -155,9 +191,12 @@ function fetchDevices(){
   const gwTotal = gws.length;
   const cpeOnline = cps.filter(d=>d.online).length;
   const cpeTotal = cps.length;
+  const rbOnline = backbones.filter(d=>d.online).length;
+  const rbTotal = backbones.length;
 
   const summaryHTML = [
     `<span class="badge good">Gateways: ${gwOnline}/${gwTotal}</span>`,
+    `<span class="badge good">Routers/Switches: ${rbOnline}/${rbTotal}</span>`,
     `<span class="badge good">CPEs: ${cpeOnline}/${cpeTotal}</span>`,
     `<span class="badge ${healthClass}">Health: ${health==null?'--':health+'%'}</span>`,
     `<span class="badge ${offlineClass}">GW Offline: ${offlineGw}</span>`,
@@ -169,7 +208,7 @@ function fetchDevices(){
   const overallEl=document.getElementById('overallSummary');
   if(overallEl) overallEl.innerHTML=summaryHTML;
 
-  // Siren logic: only for UNACKED offline gateways
+  // Siren logic: only for UNACKED offline gateways (routers/switches do NOT trigger sound)
   const shouldAlert = gws.some(d=>!d.online && !(d.ack_until && d.ack_until>nowSec));
 
   if(shouldAlert){
