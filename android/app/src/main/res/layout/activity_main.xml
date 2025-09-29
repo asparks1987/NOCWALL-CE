@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <WebView
+        android:id="@+id/webview"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Overlay prompt shown on first run or when URL not set -->
+    <LinearLayout
+        android:id="@+id/url_prompt"
+        android:orientation="vertical"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#CC000000"
+        android:padding="24dp"
+        android:gravity="center">
+
+        <LinearLayout
+            android:orientation="vertical"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@android:color/white"
+            android:padding="16dp"
+            android:layout_margin="24dp"
+            android:elevation="4dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Enter dashboard URL"
+                android:textStyle="bold"
+                android:paddingBottom="8dp" />
+
+            <EditText
+                android:id="@+id/url_input"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="textUri"
+                android:hint="http://192.168.1.5:1200" />
+
+            <Button
+                android:id="@+id/btn_load"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Load" />
+        </LinearLayout>
+    </LinearLayout>
+
+</RelativeLayout>
