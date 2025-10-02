@@ -30,23 +30,92 @@
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Enter dashboard URL"
+                android:text="UISP Dashboard Settings"
                 android:textStyle="bold"
-                android:paddingBottom="8dp" />
+                android:textSize="18sp"
+                android:paddingBottom="12dp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Dashboard URL"
+                android:textStyle="bold"
+                android:paddingBottom="4dp" />
 
             <EditText
                 android:id="@+id/url_input"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:inputType="textUri"
-                android:hint="http://192.168.1.5:1200" />
+                android:hint="https://noc.example.com" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="12dp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="UISP API Token"
+                android:textStyle="bold"
+                android:paddingBottom="4dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <EditText
+                    android:id="@+id/token_input"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:inputType="textVisiblePassword|textNoSuggestions"
+                    android:hint="Paste UISP API token"
+                    android:maxLines="2"
+                    android:minLines="1" />
+
+                <Button
+                    android:id="@+id/btn_paste_token"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:text="Paste"
+                    android:minWidth="72dp"
+                    android:paddingLeft="12dp"
+                    android:paddingRight="12dp"
+                    android:textAllCaps="false" />
+            </LinearLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="16dp" />
 
             <Button
                 android:id="@+id/btn_load"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Load" />
+                android:text="Save and Open"
+                android:paddingTop="12dp"
+                android:paddingBottom="12dp" />
         </LinearLayout>
     </LinearLayout>
+
+    <Button
+        android:id="@+id/btn_open_settings"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Settings"
+        android:paddingLeft="16dp"
+        android:paddingRight="16dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp"
+        android:layout_alignParentTop="true"
+        android:layout_alignParentEnd="true"
+        android:layout_marginTop="16dp"
+        android:layout_marginEnd="16dp"
+        android:background="@android:drawable/btn_default"
+        android:textAllCaps="false"
+        android:visibility="gone" />
 
 </RelativeLayout>

@@ -1,8 +1,8 @@
-function openTab(id){
+function openTab(id, ev){
   document.querySelectorAll('.tabcontent').forEach(x=>x.style.display='none');
   document.querySelectorAll('.tablink').forEach(x=>x.classList.remove('active'));
   document.getElementById(id).style.display='block';
-  event.target.classList.add('active');
+  try{ if(ev && ev.target) ev.target.classList.add('active'); }catch(e){}
 }
 function badgeVal(v,label,suf){if(v==null)return'';let cls='good';if(v>90)cls='bad';else if(v>75)cls='warn';return `<span class="badge ${cls}">${label}: ${v}${suf}</span>`;}
 function badgeLatency(v){if(v==null)return'';let cls='good';if(v>500)cls='bad';else if(v>100)cls='warn';return `<span class="badge ${cls}">Latency: ${v} ms</span>`;}

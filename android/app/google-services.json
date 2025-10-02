@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "24778591963",
+    "project_id": "uisp-noc-1",
+    "storage_bucket": "uisp-noc-1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:24778591963:android:5a5f0e7b4f8c98171986fe",
+        "android_client_info": {
+          "package_name": "com.uisp.noc"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCUQcdv6MkDezvwOJCyng_jpN288btoq0k"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

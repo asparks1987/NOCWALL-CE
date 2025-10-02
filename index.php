@@ -545,9 +545,9 @@ if(!isset($_GET['ajax'])){
   <?php endif; ?>
 </header>
 <div class="tabs">
-  <button class="tablink active" onclick="openTab('gateways')">Gateways</button>
-  <button class="tablink" onclick="openTab('cpes')">CPEs</button>
-    <button class="tablink" onclick="openTab('backbone')">Routers & Switches</button>
+    <button class="tablink active" onclick="openTab('gateways', event)">Gateways</button>
+    <button class="tablink" onclick="openTab('cpes', event)">CPEs</button>
+    <button class="tablink" onclick="openTab('backbone', event)">Routers & Switches</button>
 </div>
 <div id="gateways" class="tabcontent" style="display:block"><div id="gateGrid" class="grid"></div></div>
 <div id="cpes" class="tabcontent" style="display:none"><div id="cpeGrid" class="grid"></div></div>
