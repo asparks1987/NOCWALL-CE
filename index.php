@@ -28,6 +28,13 @@ $DB_FILE    = $CACHE_DIR . "/metrics.sqlite";
 $AUTH_FILE  = $CACHE_DIR . "/auth.json";
 
 $FIRST_OFFLINE_THRESHOLD = 30;
+$FLAP_ALERT_THRESHOLD = 3;
+$FLAP_ALERT_WINDOW = 900;
+$FLAP_ALERT_SUPPRESS = 1800;
+$LATENCY_ALERT_THRESHOLD = 200;
+$LATENCY_ALERT_SUPPRESS = 900;
+$LATENCY_ALERT_WINDOW = 900;
+$LATENCY_ALERT_STREAK = 3;
 
 // Ensure cache dir and basic permissions
 if (!is_dir($CACHE_DIR)) @mkdir($CACHE_DIR, 0775, true);
@@ -322,6 +329,82 @@ if(isset($_GET['ajax'])){
             }
 
             $ack_until=$cache[$id]['ack_until']??null;
+            $ack_active = $ack_until && $ack_until > $now;
+
+            $flap_history = $cache[$id]['flap_history'] ?? [];
+            if(!empty($flap_history)){
+                $filtered = [];
+                foreach($flap_history as $ts){
+                    if(($now - $ts) <= $FLAP_ALERT_WINDOW) $filtered[] = $ts;
+                }
+                if(count($filtered) !== count($flap_history)){
+                    $flap_history = $filtered;
+                    $cache[$id]['flap_history'] = $flap_history;
+                    $cache_changed = true;
+                }
+            }
+            if($isBackbone && !empty($prev_cache[$id]['offline_since']) && $on){
+                $flap_history[] = $now;
+                $cache[$id]['flap_history'] = $flap_history;
+                $cache_changed = true;
+            }
+            $flaps_recent = count($flap_history);
+
+            $flap_alert_active = ($isBackbone && $flaps_recent >= $FLAP_ALERT_THRESHOLD);
+            $latency_alert_active = false;
+
+            if($isBackbone){
+                if($flap_alert_active && !$ack_active){
+                    $last_flap_sent = $cache[$id]['flap_alert_sent_at'] ?? 0;
+                    if(($now - $last_flap_sent) >= $FLAP_ALERT_SUPPRESS){
+                        if(send_gotify($roleLabel.' Flapping', $name.' flapped '. $flaps_recent.' times in last '.(int)($FLAP_ALERT_WINDOW/60).' minutes', 6)){
+                            $cache[$id]['flap_alert_sent_at'] = $now;
+                            $cache_changed = true;
+                        }
+                    }
+                } else {
+                    if(isset($cache[$id]['flap_alert_sent_at']) && !$flap_alert_active){
+                        unset($cache[$id]['flap_alert_sent_at']);
+                        $cache_changed = true;
+                    }
+                }
+
+                $streak = $cache[$id]['latency_high_streak'] ?? 0;
+                if($lat !== null && is_numeric($lat)){
+                    if($lat >= $LATENCY_ALERT_THRESHOLD){
+                        $streak++;
+                    } else {
+                        $streak = 0;
+                    }
+                } else {
+                    $streak = 0;
+                }
+                if(($cache[$id]['latency_high_streak'] ?? null) !== $streak){
+                    $cache[$id]['latency_high_streak'] = $streak;
+                    $cache_changed = true;
+                }
+                if($streak >= $LATENCY_ALERT_STREAK){
+                    $latency_alert_active = true;
+                    if(!$ack_active){
+                        $last_lat_sent = $cache[$id]['latency_alert_sent_at'] ?? 0;
+                        if(($now - $last_lat_sent) >= $LATENCY_ALERT_SUPPRESS){
+                            $message = $lat !== null ? ($name.' latency '. $lat.' ms') : ($name.' latency sustained high');
+                            if(send_gotify($roleLabel.' Latency High', $message, 5)){
+                                $cache[$id]['latency_alert_sent_at'] = $now;
+                                $cache_changed = true;
+                            }
+                        }
+                    }
+                } else {
+                    if(isset($cache[$id]['latency_alert_sent_at']) && ($now - $cache[$id]['latency_alert_sent_at']) > $LATENCY_ALERT_SUPPRESS){
+                        unset($cache[$id]['latency_alert_sent_at']);
+                        $cache_changed = true;
+                    }
+                }
+            } else {
+                $flaps_recent = 0;
+            }
+
 
             $out[]=[
                 'id'=>$id,'name'=>$name,'gateway'=>$isGw,
@@ -330,6 +413,9 @@ if(isset($_GET['ajax'])){
                 'cpe_latency'=>$cpe_lat,
                 'uptime'=>$uptime,
                 'offline_since'=>$offline_since,
+                'flaps_recent'=>$flaps_recent,
+                'latency_alert'=>$latency_alert_active,
+                'flap_alert'=>$flap_alert_active,
                 'simulate'=>$sim,'ack_until'=>$ack_until
             ];
         }
@@ -580,7 +666,7 @@ if(!isset($_GET['ajax'])){
       <div style="height:8px"></div>
       <label>ACME Email</label>
       <input id="tlsEmail" type="email" placeholder="admin@example.com" style="width:100%;padding:8px;border-radius:6px;border:1px solid #444;background:#111;color:#eee" required>
-      <div><label><input id="tlsStaging" type="checkbox"> Use Let’s Encrypt Staging (testing)</label></div>
+      <div><label><input id="tlsStaging" type="checkbox"> Use Let's Encrypt Staging (testing)</label></div>
       <div style="height:10px"></div>
       <button class="btn-accent" type="submit">Provision / Reload Caddy</button>
     </form>

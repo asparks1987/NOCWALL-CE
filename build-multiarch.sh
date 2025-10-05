@@ -19,12 +19,12 @@
 #   -h, --help            Show this help message.
 #
 # Example:
-#   ./build-multiarch.sh --image predheadtx/uisp-noc:latest --build-arg BUILD_SHA=77936931c1068e0a86ce2c09b93ba683258fd59c
-#
+#   ./build-multiarch.sh --image predheadtx/uisp-noc:latest --build-arg BUILD_SHA=$(git rev-parse HEAD)
+
 set -euo pipefail
 
 show_help() {
-  sed -n '2,32p' "/bin/bash"
+  sed -n '2,32p' "$0"
 }
 
 image=""
@@ -37,22 +37,22 @@ pull=false
 no_cache=false
 build_args=()
 
-while [[ 0 -gt 0 ]]; do
-  case "" in
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --image)
-      image=""
+      image="$2"
       shift 2
       ;;
     --context)
-      context=""
+      context="$2"
       shift 2
       ;;
     --platforms)
-      platforms=""
+      platforms="$2"
       shift 2
       ;;
     --builder)
-      builder=""
+      builder="$2"
       shift 2
       ;;
     --push)
@@ -74,7 +74,7 @@ while [[ 0 -gt 0 ]]; do
       shift
       ;;
     --build-arg)
-      build_args+=("--build-arg" "")
+      build_args+=("--build-arg" "$2")
       shift 2
       ;;
     -h|--help)
@@ -82,14 +82,14 @@ while [[ 0 -gt 0 ]]; do
       exit 0
       ;;
     *)
-      echo "Unknown option: " >&2
+      echo "Unknown option: $1" >&2
       show_help
       exit 1
       ;;
   esac
 done
 
-if [[ -z "" ]]; then
+if [[ -z "$image" ]]; then
   echo "Error: --image <name> is required." >&2
   show_help
   exit 1
@@ -105,43 +105,47 @@ if ! docker info >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "Using builder: "
-if ! docker buildx inspect "" >/dev/null 2>&1; then
-  echo "Creating buildx builder ''"
-  docker buildx create --name "" --use >/dev/null
+echo "Using builder: $builder"
+if ! docker buildx inspect "$builder" >/dev/null 2>&1; then
+  echo "Creating buildx builder '$builder'"
+  docker buildx create --name "$builder" --use >/dev/null
 else
-  docker buildx use "" >/dev/null
+  docker buildx use "$builder" >/dev/null
 fi
 
 echo "Bootstrapping builder (if required)..."
-docker buildx inspect --bootstrap >/dev/null
+docker buildx inspect "$builder" --bootstrap >/dev/null
 
-cmd=(docker buildx build "--platform" "" "-t" "")
+cmd=(docker buildx build --platform "$platforms" -t "$image")
 
-if ; then
-  cmd+=("--push")
-elif ; then
-  cmd+=("--load")
+if $push; then
+  cmd+=(--push)
+elif $load; then
+  cmd+=(--load)
 else
-  # fallback to push if both flags somehow false
-  cmd+=("--push")
+  cmd+=(--push)
 fi
 
-if ; then
-  cmd+=("--pull")
+if $pull; then
+  cmd+=(--pull)
 fi
 
-if ; then
-  cmd+=("--no-cache")
+if $no_cache; then
+  cmd+=(--no-cache)
 fi
 
-if [[ 0 -gt 0 ]]; then
-  cmd+=("")
+if [[ ${#build_args[@]} -gt 0 ]]; then
+  cmd+=("${build_args[@]}")
 fi
 
-cmd+=("")
+cmd+=("$context")
 
-echo "\nRunning: \n"
-""
+echo
+echo "Running: ${cmd[*]}"
+echo
 
-echo "\nMulti-arch build completed successfully." >&2
+"${cmd[@]}"
+
+echo
+echo "Multi-arch build completed successfully." >&2
+
