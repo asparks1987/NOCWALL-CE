@@ -77,6 +77,15 @@ function enableSound(){
   unlockAudio();
 }
 
+const autoUnlockEvents=['click','pointerdown','touchstart','keydown'];
+function handleAutoUnlock(){
+  unlockAudio();
+  if(audioUnlocked){
+    autoUnlockEvents.forEach(evt=>window.removeEventListener(evt, handleAutoUnlock));
+  }
+}
+autoUnlockEvents.forEach(evt=>window.addEventListener(evt, handleAutoUnlock, false));
+
 function fetchDevices(){
  fetch('?ajax=devices').then(r=>{ if(r.status===401){ location.reload(); throw new Error('unauthorized'); } return r.json(); }).then(j=>{
   devicesCache=j.devices;
@@ -116,6 +125,7 @@ function fetchDevices(){
           </div>
           ${ackActive ? `<button onclick="clearAck('${d.id}')">Clear Ack</button>`:''}
         `:``}
+        ${d.simulate ? `<button onclick="clearSim('${d.id}')">End Test</button>` : (d.online ? `<button onclick="simulate('${d.id}')">Test Outage</button>` : '')}
         
         <button onclick="showHistory('${d.id}','${d.name}')">History</button>
       </div>
@@ -160,6 +170,7 @@ function fetchDevices(){
           </div>
           ${ackActive ? `<button onclick="clearAck('${d.id}')">Clear Ack</button>`:''}
         `:``}
+        ${d.simulate ? `<button onclick="clearSim('${d.id}')">End Test</button>` : (d.online ? `<button onclick="simulate('${d.id}')">Test Outage</button>` : '')}
         <button onclick="showHistory('${d.id}','${d.name}')">History</button>
       </div>
     </div>`;
@@ -320,11 +331,8 @@ function showHistory(id,name){
    modal.style.display='block';
  });
 }
-setInterval(fetchDevices,10000);
+setInterval(fetchDevices,5000);
 fetchDevices();
-
-// Best-effort unlock on first user click anywhere
-window.addEventListener('click',unlockAudio,{once:true});
 
 // Close history modal when clicking the overlay or pressing Escape
 (function(){
