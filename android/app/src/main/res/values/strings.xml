@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">UISP NOC</string>
+    <string name="loading_indicator_description">Loading data</string>
+</resources>
