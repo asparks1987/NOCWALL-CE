@@ -20,7 +20,7 @@
     return;
   }
 
-  const POLL_MS = 5000;
+  const POLL_MS = 1024;
   const HISTORY_MS = 60000;
   let deviceReqId = 0;
   let deviceTimer = null;

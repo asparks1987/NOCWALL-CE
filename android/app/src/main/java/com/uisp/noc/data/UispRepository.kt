@@ -15,6 +15,7 @@ import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -202,11 +203,13 @@ class UispRepository(private val httpClient: HttpClient = defaultClient()) {
                 }
 
                 // Centralize response validation and error handling.
+                // Centralize response validation and error handling.
                 install(HttpResponseValidator) {
-                    handleResponseExceptionWithRequest { exception, _ ->
-                        val clientException = exception as? ResponseException ?: return@handleResponseExceptionWithRequest
+                    handleResponseExceptionWithRequest { cause, _ ->
+                        val clientException = cause as? ResponseException ?: return@handleResponseExceptionWithRequest
                         val response = clientException.response
                         val errorBody = try {
+                            // No more runBlocking needed because the lambda is a suspend function
                             response.bodyAsText()
                         } catch (e: Exception) {
                             "(Could not read response body)"

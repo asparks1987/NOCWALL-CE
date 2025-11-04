@@ -209,43 +209,66 @@ footer {
   background: #111;
   color: #eee;
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow-x: hidden;
 }
 .detail-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   gap: 20px;
   background: #222;
   padding: 16px 24px;
   border-bottom: 2px solid #b06cff;
+  width: min(100%, 1100px);
+  margin: 16px auto 0;
+  border-radius: 12px 12px 0 0;
+  box-shadow: 0 0 0 1px #2a2a2a;
+  position: relative;
 }
 .detail-title h1 {
   margin: 0;
   font-size: 24px;
   font-weight: 600;
+  text-align: center;
 }
 .detail-subtitle {
   font-size: 13px;
   color: #aaa;
   margin-top: 4px;
+  text-align: center;
+}
+.detail-header > .btn-outline {
+  position: absolute;
+  left: 24px;
+  top: 50%;
+  transform: translateY(-50%);
 }
 .detail-header-right {
   font-size: 12px;
   color: #bbb;
+  position: absolute;
+  right: 24px;
+  top: 50%;
+  transform: translateY(-50%);
 }
 .detail-main {
-  max-width: 1100px;
-  margin: 0 auto;
+  width: min(100%, 1100px);
+  margin: 0 auto 48px;
   padding: 24px 20px 60px;
   display: flex;
   flex-direction: column;
   gap: 28px;
+  align-items: stretch;
 }
 .detail-summary, .detail-actions, .detail-history {
   background: #1b1b1b;
   border-radius: 10px;
   padding: 20px;
   box-shadow: 0 0 0 1px #2a2a2a;
+  text-align: center;
 }
 .detail-status-row {
   display: flex;
@@ -297,6 +320,7 @@ footer {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  justify-content: center;
 }
 .chart-grid {
   display: grid;
@@ -328,8 +352,13 @@ footer {
   .card { padding: 10px; }
   .detail-header {
     flex-direction: column;
-    align-items: flex-start;
+    align-items: center;
     gap: 12px;
+  }
+  .detail-header > .btn-outline,
+  .detail-header-right {
+    position: static;
+    transform: none;
   }
   .detail-main { padding: 20px 14px 40px; }
 }
