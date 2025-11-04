@@ -53,6 +53,19 @@ let sirenNextDelayMs=30000;     // 30s for first alert, 10m for repeats
 let sirenShouldAlertPrev=false; // Track transitions to reset delay
 let devicesCache=[];
 let audioUnlocked=false;
+const ACK_DURATION_MAP={'30m':1800,'1h':3600,'6h':21600,'8h':28800,'12h':43200};
+let renderMeta={http:'--',api_latency:'--',updated:'--'};
+let fetchRequestId=0;
+let mutationVersion=0;
+const pendingSimOverrides=new Map();
+const SIM_OVERRIDE_TTL_MS = 60000;
+
+function touchMutation(){
+  mutationVersion++;
+  if(mutationVersion > 1e9){
+    mutationVersion = 1;
+  }
+}
 
 function unlockAudio(){
   if(audioUnlocked) return;
@@ -86,23 +99,61 @@ function handleAutoUnlock(){
 }
 autoUnlockEvents.forEach(evt=>window.addEventListener(evt, handleAutoUnlock, false));
 
-function fetchDevices(){
- fetch('?ajax=devices').then(r=>{ if(r.status===401){ location.reload(); throw new Error('unauthorized'); } return r.json(); }).then(j=>{
-  devicesCache=j.devices;
-  const gws=j.devices.filter(d=>d.gateway).sort((a,b)=>a.online-b.online||a.name.localeCompare(b.name));
-  // Sort CPEs: offline first, then by name
-  const cps=j.devices
+function renderDevices(meta, opts){
+  const fromServer = !!(opts && opts.fromServer);
+  if(meta){
+    renderMeta = Object.assign({}, renderMeta, meta);
+  }
+  const devices = Array.isArray(devicesCache) ? devicesCache : [];
+  const nowMs = Date.now();
+  const nowSec=Math.floor(nowMs/1000);
+
+  devices.forEach(dev=>{
+    if(!dev || !dev.id) return;
+    const pending = pendingSimOverrides.get(dev.id);
+    if(!pending) return;
+    if(nowMs > pending.expires){
+      pendingSimOverrides.delete(dev.id);
+      return;
+    }
+    if(pending.mode === 'simulate'){
+      if(fromServer && (dev.simulate || dev.online === false)){
+        pendingSimOverrides.delete(dev.id);
+        return;
+      }
+      dev.simulate = true;
+      dev.online = false;
+      if(!dev.offline_since){
+        dev.offline_since = pending.since ?? nowSec;
+      }
+      pending.expires = nowMs + SIM_OVERRIDE_TTL_MS;
+    } else if(pending.mode === 'clearSim'){
+      if(fromServer && !dev.simulate){
+        pendingSimOverrides.delete(dev.id);
+        return;
+      }
+      dev.simulate = false;
+      dev.online = true;
+      if(Object.prototype.hasOwnProperty.call(dev,'offline_since')){
+        delete dev.offline_since;
+      }
+      pending.expires = nowMs + SIM_OVERRIDE_TTL_MS;
+    }
+  });
+
+  const gws = devices
+    .filter(d=>d.gateway)
+    .sort((a,b)=>a.online-b.online||a.name.localeCompare(b.name));
+  const cps = devices
     .filter(d=>!d.gateway)
     .sort((a,b)=> (a.online - b.online) || a.name.localeCompare(b.name));
-  // Backbone devices: routers and switches (excluding gateways already in gws)
-  const backbones = j.devices
+  const backbones = devices
     .filter(d=> (d.router || d.switch) && !d.gateway )
     .sort((a,b)=> (a.online - b.online) || a.name.localeCompare(b.name));
 
-  // Gateways
   const gwHTML=gws.map(d=>{
-    const badges=[badgeVal(d.cpu,'CPU','%'),badgeVal(d.ram,'RAM','%'),badgeVal(d.temp,'Temp','°C'),badgeLatency(d.latency)].join(' ');
-    const ackActive = d.ack_until && d.ack_until > (Date.now()/1000);
+    const badges=[badgeVal(d.cpu,'CPU','%'),badgeVal(d.ram,'RAM','%'),badgeVal(d.temp,'Temp','&deg;C'),badgeLatency(d.latency)].join(' ');
+    const ackActive = d.ack_until && d.ack_until > nowSec;
     return `<div class="card ${d.online?'':'offline'} ${ackActive?'acked':''}">
       <div class="ack-badge">${badgeAck(d.ack_until)}
         <span class="badge good live-uptime" data-uptime="${d.uptime??''}"></span>
@@ -131,9 +182,9 @@ function fetchDevices(){
       </div>
     </div>`;
   }).join('');
-  document.getElementById('gateGrid').innerHTML=gwHTML;
+  const gateGrid=document.getElementById('gateGrid');
+  if(gateGrid) gateGrid.innerHTML=gwHTML;
 
-  // CPEs (show latency badge at top-right if recently pinged)
   const cpeHTML=cps.map(d=>{
     const latBadge = (typeof d.cpe_latency==='number') ? badgeLatency(d.cpe_latency) : '';
     return `<div class="card ${d.online?'':'offline'}">
@@ -142,12 +193,12 @@ function fetchDevices(){
       <div style="color:${d.online?'#b06cff':'#f55'}">${d.online?'ONLINE':'OFFLINE'}</div>
     </div>`;
   }).join('');
-  document.getElementById('cpeGrid').innerHTML=cpeHTML;
+  const cpeGrid=document.getElementById('cpeGrid');
+  if(cpeGrid) cpeGrid.innerHTML=cpeHTML;
 
-  // Routers & Switches grid
   const rbHTML = backbones.map(d=>{
-    const badges=[badgeVal(d.cpu,'CPU','%'),badgeVal(d.ram,'RAM','%'),badgeVal(d.temp,'Temp','°C'),badgeLatency(d.latency)].join(' ');
-    const ackActive = d.ack_until && d.ack_until > (Date.now()/1000);
+    const badges=[badgeVal(d.cpu,'CPU','%'),badgeVal(d.ram,'RAM','%'),badgeVal(d.temp,'Temp','&deg;C'),badgeLatency(d.latency)].join(' ');
+    const ackActive = d.ack_until && d.ack_until > nowSec;
     return `<div class="card ${d.online?'':'offline'} ${ackActive?'acked':''}">
       <div class="ack-badge">${badgeAck(d.ack_until)}
         <span class="badge good live-uptime" data-uptime="${d.uptime??''}"></span>
@@ -175,14 +226,19 @@ function fetchDevices(){
       </div>
     </div>`;
   }).join('');
-  const routerGrid = document.getElementById('routerGrid'); if(routerGrid) routerGrid.innerHTML = rbHTML;
+  const routerGrid = document.getElementById('routerGrid');
+  if(routerGrid) routerGrid.innerHTML = rbHTML;
 
-  document.getElementById('footer').innerText=`HTTP ${j.http}, API latency ${j.api_latency} ms, Updated ${new Date().toLocaleTimeString()}`;
+  const footer=document.getElementById('footer');
+  if(footer){
+    const httpTxt = renderMeta.http ?? '--';
+    const latTxt = renderMeta.api_latency ?? '--';
+    const updatedTxt = renderMeta.updated ?? new Date().toLocaleTimeString();
+    footer.innerText=`HTTP ${httpTxt}, API latency ${latTxt}, Updated ${updatedTxt}`;
+  }
 
-  // Overall header summary
-  const nowSec=Math.floor(Date.now()/1000);
-  const total=j.devices.length;
-  const online=j.devices.filter(d=>d.online).length;
+  const total=devices.length;
+  const online=devices.filter(d=>d.online).length;
   const health = total>0 ? Math.round((online/total)*100) : null;
   const offlineGw=gws.filter(d=>!d.online).length;
   const unacked=gws.filter(d=>!d.online && !(d.ack_until && d.ack_until>nowSec)).length;
@@ -219,18 +275,15 @@ function fetchDevices(){
   const overallEl=document.getElementById('overallSummary');
   if(overallEl) overallEl.innerHTML=summaryHTML;
 
-  // Siren logic: only for UNACKED offline gateways (routers/switches do NOT trigger sound)
   const shouldAlert = gws.some(d=>!d.online && !(d.ack_until && d.ack_until>nowSec));
 
   if(shouldAlert){
-    // Reset to initial 30s delay when entering alert state
     if(!sirenShouldAlertPrev){
       clearTimeout(sirenTimeout); sirenTimeout=null;
-      sirenNextDelayMs=30000; // initial grace period
+      sirenNextDelayMs=30000;
     }
     if(!sirenTimeout){
       sirenTimeout=setTimeout(()=>{
-        // Re-evaluate at fire time using freshest cache
         const stillAlert = devicesCache
           .filter(d=>d.gateway)
           .some(d=>!d.online && !(d.ack_until && d.ack_until>(Date.now()/1000)));
@@ -241,22 +294,45 @@ function fetchDevices(){
             const pr=a.play();
             if(pr && pr.catch){ pr.catch(()=>{ const b=document.getElementById('enableSoundBtn'); if(b) b.style.display=''; }); }
           }
-          // After first fire, repeat every 10 minutes while unacked
           sirenNextDelayMs=10*60*1000;
         }
-        // Clear timer and allow next scheduling on next poll
         clearTimeout(sirenTimeout); sirenTimeout=null;
       }, sirenNextDelayMs);
     }
   } else {
-    // No unacked offline => cancel and silence
     clearTimeout(sirenTimeout); sirenTimeout=null;
     sirenNextDelayMs=30000;
     const a=document.getElementById('siren');
     if(a){ a.pause(); a.currentTime=0; }
   }
   sirenShouldAlertPrev = shouldAlert;
- });
+}
+
+function fetchDevices(){
+  const requestId = ++fetchRequestId;
+  const versionAtStart = mutationVersion;
+  fetch('?ajax=devices').then(r=>{
+    if(r.status===401){
+      location.reload();
+      throw new Error('unauthorized');
+    }
+    return r.json();
+  }).then(j=>{
+    if(requestId !== fetchRequestId || versionAtStart !== mutationVersion) return;
+    devicesCache = Array.isArray(j.devices) ? j.devices : [];
+    renderDevices({
+      http: j.http ?? '--',
+      api_latency: (j.api_latency==null?'--':j.api_latency+' ms'),
+      updated: new Date().toLocaleTimeString()
+    }, {fromServer:true});
+  }).catch(()=>{
+    if(requestId !== fetchRequestId || versionAtStart !== mutationVersion) return;
+    renderDevices({
+      http:'ERR',
+      api_latency:'--',
+      updated:new Date().toLocaleTimeString()
+    });
+  });
 }
 function toggleAckMenu(id){
   const el=document.getElementById('ack-'+id);
@@ -267,29 +343,78 @@ function toggleAckMenu(id){
   if(card){ card.style.zIndex = showing ? '10000' : ''; }
 }
 function ack(id,dur){
-  // Optimistic UI
-  let dev=devicesCache.find(x=>x.id===id);
-  if(dev){dev.ack_until=Date.now()/1000+1800;}
+  touchMutation();
+  const seconds = ACK_DURATION_MAP[dur] ?? 1800;
+  const nowSec = Date.now()/1000;
+  const dev = devicesCache.find(x=>x.id===id);
+  if(dev){
+    dev.ack_until = nowSec + seconds;
+    renderDevices();
+  }
   fetch(`?ajax=ack&id=${id}&dur=${dur}&t=${Date.now()}`).then(()=>fetchDevices());
 }
 function clearAck(id){
-  let dev=devicesCache.find(x=>x.id===id);
-  if(dev){dev.ack_until=null;}
+  touchMutation();
+  const dev = devicesCache.find(x=>x.id===id);
+  if(dev && dev.ack_until){
+    dev.ack_until=null;
+    renderDevices();
+  }
   fetch(`?ajax=clear&id=${id}&t=${Date.now()}`).then(()=>fetchDevices());
 }
 function simulate(id){
-  // Try to unlock audio on explicit user action
+  touchMutation();
   unlockAudio();
-  let dev=devicesCache.find(x=>x.id===id);
-  if(dev){dev.simulate=true;}
+  const nowMs = Date.now();
+  const nowSec = Math.floor(nowMs/1000);
+  pendingSimOverrides.set(id,{
+    mode:'simulate',
+    since: nowSec,
+    expires: nowMs + SIM_OVERRIDE_TTL_MS
+  });
+  const dev=devicesCache.find(x=>x.id===id);
+  if(dev){
+    dev.simulate=true;
+    dev.online=false;
+    if(!dev.offline_since){
+      dev.offline_since=nowSec;
+    }
+  }
+  renderDevices();
   fetch(`?ajax=simulate&id=${id}&t=${Date.now()}`).then(()=>fetchDevices());
 }
 function clearSim(id){
-  let dev=devicesCache.find(x=>x.id===id);
-  if(dev){dev.simulate=false;}
+  touchMutation();
+  const expires = Date.now() + SIM_OVERRIDE_TTL_MS;
+  pendingSimOverrides.set(id,{
+    mode:'clearSim',
+    expires
+  });
+  const dev=devicesCache.find(x=>x.id===id);
+  if(dev){
+    dev.simulate=false;
+    dev.online=true;
+    if(Object.prototype.hasOwnProperty.call(dev,'offline_since')){
+      delete dev.offline_since;
+    }
+  }
+  renderDevices();
   fetch(`?ajax=clearsim&id=${id}&t=${Date.now()}`).then(()=>fetchDevices());
 }
-function clearAll(){ fetch(`?ajax=clearall&t=${Date.now()}`).then(()=>fetchDevices()); }
+function clearAll(){
+  let changed=false;
+  devicesCache.forEach(dev=>{
+    if(dev && dev.ack_until){
+      dev.ack_until=null;
+      changed=true;
+    }
+  });
+  if(changed){
+    touchMutation();
+    renderDevices();
+  }
+  fetch(`?ajax=clearall&t=${Date.now()}`).then(()=>fetchDevices());
+}
 function closeModal(){document.getElementById('historyModal').style.display='none';}
 function openTLS(){
   const m=document.getElementById('tlsModal'); if(!m)return; m.style.display='block';
@@ -395,7 +520,3 @@ function changePassword(){
 function logout(){
   window.location.href='?action=logout';
 }
-
-
-
-

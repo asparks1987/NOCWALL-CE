@@ -190,6 +190,24 @@ if(isset($_GET['ajax'])){
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
     header('Pragma: no-cache');
 
+    if($_GET['ajax']==='mobile_config'){
+        $base = rtrim((string)$UISP_URL, '/');
+        if(!$UISP_TOKEN || $UISP_TOKEN === 'changeme'){
+            http_response_code(503);
+            echo json_encode([
+                'error' => 'uisp_token_not_configured',
+                'message' => 'UISP token has not been configured on the server.'
+            ]);
+            exit;
+        }
+        echo json_encode([
+            'uisp_base_url' => $base,
+            'uisp_token' => $UISP_TOKEN,
+            'issued_at' => date('c')
+        ]);
+        exit;
+    }
+
     if($_GET['ajax']==='devices'){
         $ch=curl_init();
         $start=microtime(true);

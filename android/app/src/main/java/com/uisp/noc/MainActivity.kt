@@ -1,134 +1,143 @@
 package com.uisp.noc
 
-import android.annotation.SuppressLint
-import android.content.ClipData
-import android.content.ClipboardManager
+import android.net.Uri
 import android.os.Bundle
+import android.view.Menu
+import android.view.MenuItem
 import android.view.View
-import android.widget.Button
-import android.widget.EditText
-import android.webkit.WebChromeClient
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
-import androidx.activity.OnBackPressedCallback
+import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
-import android.widget.Toast
+import androidx.core.view.isVisible
+import androidx.fragment.app.commit
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.snackbar.Snackbar
+import com.uisp.noc.data.SessionStore
+import com.uisp.noc.data.UispRepository
+import com.uisp.noc.ui.DashboardFragment
+import com.uisp.noc.ui.LoginFragment
+import com.uisp.noc.ui.MainViewModel
+import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
-    private lateinit var webView: WebView
 
-    @SuppressLint("SetJavaScriptEnabled")
+    private val viewModel: MainViewModel by viewModels {
+        MainViewModel.Factory(
+            repository = UispRepository(),
+            sessionStore = SessionStore(this)
+        )
+    }
+
+    private lateinit var toolbar: MaterialToolbar
+    private lateinit var loadingOverlay: View
+    private var optionsMenu: Menu? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        webView = findViewById(R.id.webview)
-        val settings: WebSettings = webView.settings
-        settings.javaScriptEnabled = true
-        settings.domStorageEnabled = true
-        settings.useWideViewPort = true
-        settings.loadWithOverviewMode = true
+        toolbar = findViewById(R.id.toolbar)
+        loadingOverlay = findViewById(R.id.loading_overlay)
+        setSupportActionBar(toolbar)
 
-        webView.webViewClient = WebViewClient()
-        webView.webChromeClient = WebChromeClient()
-
-        // Default URL for now (user-editable). The user asked for 192.168.1.5:1200
-        val defaultUrl = "http://192.168.1.5:1200/"
-
-        val prefs = getSharedPreferences("uisp_prefs", MODE_PRIVATE)
-        val prompt = findViewById<View>(R.id.url_prompt)
-        val urlInput = findViewById<EditText>(R.id.url_input)
-        val tokenInput = findViewById<EditText>(R.id.token_input)
-        val btnLoad = findViewById<Button>(R.id.btn_load)
-        val btnPaste = findViewById<Button>(R.id.btn_paste_token)
-        val btnSettings = findViewById<Button>(R.id.btn_open_settings)
-
-        val savedUrl = prefs.getString("dashboard_url", null)
-        val savedToken = prefs.getString("api_token", "")
-
-        fun hidePrompt() {
-            prompt.visibility = View.GONE
-            btnSettings.visibility = View.VISIBLE
-        }
-
-        fun showPrompt(prefillDefaults: Boolean) {
-            if (prefillDefaults) {
-                val latestUrl = prefs.getString("dashboard_url", null) ?: defaultUrl
-                val latestToken = prefs.getString("api_token", "") ?: ""
-                urlInput.setText(latestUrl)
-                tokenInput.setText(latestToken)
-            }
-            prompt.visibility = View.VISIBLE
-            btnSettings.visibility = View.GONE
-        }
-
-        fun persistAndSync(url: String, token: String) {
-            prefs.edit()
-                .putString("dashboard_url", url)
-                .putString("api_token", token)
-                .apply()
-            WearSyncManager.syncStoredConfig(this)
-        }
-
-        btnSettings.setOnClickListener {
-            showPrompt(prefillDefaults = true)
-        }
-
-        btnPaste.setOnClickListener {
-            val clipboard = getSystemService(CLIPBOARD_SERVICE) as? ClipboardManager
-            val clipText = clipboard?.primaryClip?.takeIf { it.itemCount > 0 }
-                ?.getItemAt(0)
-                ?.coerceToText(this)
-                ?.toString()
-                ?.trim()
-            if (!clipText.isNullOrEmpty()) {
-                tokenInput.setText(clipText)
-                tokenInput.setSelection(clipText.length)
-                Toast.makeText(this, "Token pasted from clipboard", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(this, "Clipboard is empty", Toast.LENGTH_SHORT).show()
+        if (savedInstanceState == null) {
+            supportFragmentManager.commit {
+                replace(R.id.content_container, LoginFragment())
             }
         }
 
-        btnLoad.setOnClickListener {
-            var url = urlInput.text.toString().trim()
-            val token = tokenInput.text.toString().trim()
-            if (!url.startsWith("http://") && !url.startsWith("https://")) {
-                url = "http://$url"
-            }
-            persistAndSync(url, token)
-            hidePrompt()
-            webView.loadUrl(url)
-        }
+        collectFlows()
+    }
 
-        if (savedUrl.isNullOrBlank()) {
-            showPrompt(prefillDefaults = true)
-        } else {
-            hidePrompt()
-            urlInput.setText(savedUrl)
-            tokenInput.setText(savedToken ?: "")
-            webView.loadUrl(savedUrl)
-            WearSyncManager.syncStoredConfig(this)
+    private fun collectFlows() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.sessionState.collect { renderSessionState(it) }
+            }
         }
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() {
-                if (webView.canGoBack()) {
-                    webView.goBack()
-                } else {
-                    isEnabled = false
-                    onBackPressedDispatcher.onBackPressed()
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.events.collect { event ->
+                    when (event) {
+                        is MainViewModel.UiEvent.Message -> showMessage(event.text)
+                    }
                 }
             }
-        })
-
-        if (!savedUrl.isNullOrBlank()) {
-            btnSettings.visibility = View.VISIBLE
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        WearSyncManager.syncStoredConfig(this)
+    private fun renderSessionState(state: MainViewModel.SessionState) {
+        updateMenu(state)
+        when (state) {
+            MainViewModel.SessionState.Loading -> {
+                showLoading(true)
+            }
+            is MainViewModel.SessionState.Unauthenticated -> {
+                showLoading(false)
+                showLogin()
+                toolbar.subtitle = null
+            }
+            is MainViewModel.SessionState.Authenticated -> {
+                showLoading(false)
+                showDashboard()
+                toolbar.subtitle = state.session.uispBaseUrl.toHostLabel()
+            }
+        }
+    }
+
+    private fun showLogin() {
+        val current = supportFragmentManager.findFragmentById(R.id.content_container)
+        if (current !is LoginFragment) {
+            supportFragmentManager.commit {
+                replace(R.id.content_container, LoginFragment())
+            }
+        }
+    }
+
+    private fun showDashboard() {
+        val current = supportFragmentManager.findFragmentById(R.id.content_container)
+        if (current !is DashboardFragment) {
+            supportFragmentManager.commit {
+                replace(R.id.content_container, DashboardFragment())
+            }
+        }
+    }
+
+    private fun showLoading(show: Boolean) {
+        loadingOverlay.isVisible = show
+    }
+
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menuInflater.inflate(R.menu.menu_main, menu)
+        optionsMenu = menu
+        updateMenu(viewModel.sessionState.value)
+        return true
+    }
+
+    private fun updateMenu(state: MainViewModel.SessionState) {
+        val logout = optionsMenu?.findItem(R.id.action_logout)
+        logout?.isVisible = state is MainViewModel.SessionState.Authenticated
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        return when (item.itemId) {
+            R.id.action_logout -> {
+                viewModel.logout()
+                true
+            }
+            else -> super.onOptionsItemSelected(item)
+        }
+    }
+
+    private fun showMessage(message: String) {
+        val root = findViewById<View>(R.id.content_container)
+        Snackbar.make(root, message, Snackbar.LENGTH_LONG).show()
+    }
+
+    private fun String.toHostLabel(): String {
+        val parsed = runCatching { Uri.parse(this) }.getOrNull()
+        return parsed?.host ?: this
     }
 }

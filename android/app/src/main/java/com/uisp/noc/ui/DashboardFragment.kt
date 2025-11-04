@@ -1,0 +1,247 @@
+﻿package com.uisp.noc.ui
+
+import android.os.Bundle
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.widget.LinearLayout
+import android.widget.TextView
+import androidx.core.view.isVisible
+import androidx.fragment.app.Fragment
+import androidx.fragment.app.activityViewModels
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+import com.google.android.material.card.MaterialCardView
+import com.uisp.noc.R
+import com.uisp.noc.data.Session
+import com.uisp.noc.data.model.DeviceStatus
+import kotlinx.coroutines.launch
+import java.text.DateFormat
+import java.util.Date
+import kotlin.math.roundToInt
+
+class DashboardFragment : Fragment() {
+
+    private val viewModel: MainViewModel by activityViewModels()
+
+    private lateinit var swipeRefresh: SwipeRefreshLayout
+    private lateinit var connectionSummary: TextView
+    private lateinit var lastUpdated: TextView
+    private lateinit var overviewGatewaysValue: TextView
+    private lateinit var overviewGatewaysLabel: TextView
+    private lateinit var overviewBackboneValue: TextView
+    private lateinit var overviewBackboneLabel: TextView
+    private lateinit var overviewCpesValue: TextView
+    private lateinit var overviewCpesLabel: TextView
+    private lateinit var listOfflineGateways: LinearLayout
+    private lateinit var listOfflineBackbone: LinearLayout
+    private lateinit var listOfflineCpes: LinearLayout
+    private lateinit var listLatency: LinearLayout
+    private lateinit var errorCard: MaterialCardView
+    private lateinit var errorText: TextView
+
+    private var layoutInflaterRef: LayoutInflater? = null
+    private var currentSession: Session? = null
+
+    override fun onCreateView(
+        inflater: LayoutInflater,
+        container: ViewGroup?,
+        savedInstanceState: Bundle?
+    ): View {
+        return inflater.inflate(R.layout.fragment_dashboard, container, false)
+    }
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+        layoutInflaterRef = layoutInflater
+        bindViews(view)
+        swipeRefresh.setOnRefreshListener {
+            viewModel.refreshSummary()
+        }
+        collectState()
+    }
+
+    private fun bindViews(root: View) {
+        swipeRefresh = root.findViewById(R.id.swipe_refresh)
+        connectionSummary = root.findViewById(R.id.text_connection_summary)
+        lastUpdated = root.findViewById(R.id.text_last_updated)
+
+        val gatewaysInclude = root.findViewById<View>(R.id.overview_gateways)
+        overviewGatewaysValue = gatewaysInclude.findViewById(R.id.text_value)
+        overviewGatewaysLabel = gatewaysInclude.findViewById(R.id.text_label)
+
+        val backboneInclude = root.findViewById<View>(R.id.overview_backbone)
+        overviewBackboneValue = backboneInclude.findViewById(R.id.text_value)
+        overviewBackboneLabel = backboneInclude.findViewById(R.id.text_label)
+
+        val cpesInclude = root.findViewById<View>(R.id.overview_cpes)
+        overviewCpesValue = cpesInclude.findViewById(R.id.text_value)
+        overviewCpesLabel = cpesInclude.findViewById(R.id.text_label)
+
+        listOfflineGateways = root.findViewById(R.id.list_offline_gateways)
+        listOfflineBackbone = root.findViewById(R.id.list_offline_backbone)
+        listOfflineCpes = root.findViewById(R.id.list_offline_cpes)
+        listLatency = root.findViewById(R.id.list_latency)
+
+        errorCard = root.findViewById(R.id.card_error)
+        errorText = root.findViewById(R.id.text_error)
+    }
+
+    private fun collectState() {
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                launch {
+                    viewModel.dashboardState.collect { state ->
+                        swipeRefresh.isRefreshing = state.isLoading
+                        renderSummary(state)
+                    }
+                }
+                launch {
+                    viewModel.sessionState.collect { state ->
+                        when (state) {
+                            is MainViewModel.SessionState.Authenticated -> {
+                                currentSession = state.session
+                                val host = state.session.uispBaseUrl.substringAfter("://")
+                                connectionSummary.text =
+                                    "Connected to $host\nSigned in as ${state.session.username}"
+                            }
+                            is MainViewModel.SessionState.Unauthenticated -> {
+                                currentSession = null
+                                connectionSummary.text = "Not connected"
+                            }
+                            is MainViewModel.SessionState.Loading -> {
+                                connectionSummary.text = "Connecting..."
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun renderSummary(state: MainViewModel.DashboardState) {
+        val summary = state.summary
+        if (summary == null) {
+            lastUpdated.text = "Waiting for data..."
+            overviewGatewaysValue.text = "-"
+            overviewGatewaysLabel.text = "Gateways"
+            overviewBackboneValue.text = "-"
+            overviewBackboneLabel.text = "Backbone"
+            overviewCpesValue.text = "-"
+            overviewCpesLabel.text = "Subscribers"
+            updateDeviceList(
+                listOfflineGateways,
+                emptyList(),
+                "No gateway data yet."
+            )
+            updateDeviceList(
+                listOfflineBackbone,
+                emptyList(),
+                "No backbone data yet."
+            )
+            updateDeviceList(
+                listOfflineCpes,
+                emptyList(),
+                "No subscriber data yet."
+            )
+            updateDeviceList(
+                listLatency,
+                emptyList(),
+                "No latency data yet."
+            )
+        } else {
+            val formatter = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+            lastUpdated.text = "Last updated ${formatter.format(Date(summary.lastUpdatedEpochMillis))}"
+
+            overviewGatewaysValue.text = summary.offlineGateways.size.takeIf { it > 0 }
+                ?.let { "$it / ${summary.totalGateways}" }
+                ?: summary.totalGateways.toString()
+            overviewGatewaysLabel.text =
+                if (summary.offlineGateways.isEmpty()) "Gateways online" else "Gateways offline"
+
+            overviewBackboneValue.text = summary.offlineBackbone.size.takeIf { it > 0 }
+                ?.let { "$it / ${summary.totalBackbone}" }
+                ?: summary.totalBackbone.toString()
+            overviewBackboneLabel.text =
+                if (summary.offlineBackbone.isEmpty()) "Backbone online" else "Backbone offline"
+
+            overviewCpesValue.text = summary.offlineCpes.size.takeIf { it > 0 }
+                ?.let { "$it / ${summary.totalCpes}" }
+                ?: summary.totalCpes.toString()
+            overviewCpesLabel.text =
+                if (summary.offlineCpes.isEmpty()) "Subscribers online" else "Subscribers offline"
+
+            updateDeviceList(
+                listOfflineGateways,
+                summary.offlineGateways,
+                "All gateways online."
+            )
+            updateDeviceList(
+                listOfflineBackbone,
+                summary.offlineBackbone,
+                "All backbone devices online."
+            )
+            updateDeviceList(
+                listOfflineCpes,
+                summary.offlineCpes,
+                "All subscribers online."
+            )
+            updateDeviceList(
+                listLatency,
+                summary.highLatencyGateways,
+                "No high latency gateways detected.",
+                showLatency = true
+            )
+        }
+
+        errorCard.isVisible = state.errorMessage != null
+        errorText.text = state.errorMessage ?: ""
+    }
+
+    private fun updateDeviceList(
+        container: LinearLayout,
+        items: List<DeviceStatus>,
+        emptyMessage: String,
+        showLatency: Boolean = false
+    ) {
+        container.removeAllViews()
+        if (items.isEmpty()) {
+            val tv = TextView(container.context).apply {
+                text = emptyMessage
+                setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
+            }
+            container.addView(tv)
+            return
+        }
+
+        val inflater = layoutInflaterRef ?: LayoutInflater.from(container.context)
+        items.forEach { device ->
+            val row = inflater.inflate(R.layout.item_device_status, container, false)
+            val nameView = row.findViewById<TextView>(R.id.text_name)
+            val detailsView = row.findViewById<TextView>(R.id.text_details)
+
+            nameView.text = device.name
+            val roleLabel = device.role.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+            val detailsText = buildString {
+                append(roleLabel)
+                if (showLatency) {
+                    val latency = device.latencyMs
+                    if (latency != null) {
+                        append(" â€¢ ")
+                        append(latency.roundToInt())
+                        append(" ms")
+                    }
+                } else {
+                    append(" â€¢ offline")
+                }
+            }
+            detailsView.text = detailsText
+
+            container.addView(row)
+        }
+    }
+}
+
+

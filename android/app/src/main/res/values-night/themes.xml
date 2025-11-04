@@ -2,14 +2,8 @@
     <style name="Theme.UISPNOC" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="android:statusBarColor">?attr/colorSurface</item>
         <item name="android:navigationBarColor">?attr/colorSurface</item>
-        <item name="android:windowLightStatusBar">true</item>
-        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
         <item name="materialToolbarStyle">@style/Widget.MaterialComponents.Toolbar.Primary</item>
-    </style>
-<!-- CORRECT -->
-    <style name="Theme.MyApp" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <!-- Customize your theme here. -->
-        <item name="colorPrimary">@color/my_light_primary</item>
-
     </style>
 </resources>
