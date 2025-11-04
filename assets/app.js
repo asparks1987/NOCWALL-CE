@@ -59,6 +59,7 @@ let fetchRequestId=0;
 let mutationVersion=0;
 const pendingSimOverrides=new Map();
 const SIM_OVERRIDE_TTL_MS = 60000;
+let pollTimer=null;
 
 function touchMutation(){
   mutationVersion++;
@@ -308,7 +309,13 @@ function renderDevices(meta, opts){
   sirenShouldAlertPrev = shouldAlert;
 }
 
+function schedulePoll(delay=5000){
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(()=>{ fetchDevices(); }, delay);
+}
+
 function fetchDevices(){
+  clearTimeout(pollTimer);
   const requestId = ++fetchRequestId;
   const versionAtStart = mutationVersion;
   fetch('?ajax=devices').then(r=>{
@@ -332,6 +339,8 @@ function fetchDevices(){
       api_latency:'--',
       updated:new Date().toLocaleTimeString()
     });
+  }).finally(()=>{
+    schedulePoll(5000);
   });
 }
 function toggleAckMenu(id){
@@ -456,8 +465,7 @@ function showHistory(id,name){
    modal.style.display='block';
  });
 }
-setInterval(fetchDevices,5000);
-fetchDevices();
+schedulePoll(0);
 
 // Close history modal when clicking the overlay or pressing Escape
 (function(){
