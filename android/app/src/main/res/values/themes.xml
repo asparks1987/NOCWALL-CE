@@ -1,15 +1,18 @@
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme. -->
     <style name="Theme.UISPNOC" parent="Theme.Material3.DayNight.NoActionBar">
-        <item name="android:statusBarColor">?attr/colorSurface</item>
-        <item name="android:navigationBarColor">?attr/colorSurface</item>
-        <item name="android:windowLightStatusBar">true</item>
-        <item name="android:windowLightNavigationBar">true</item>
-        <item name="materialToolbarStyle">@style/Widget.MaterialComponents.Toolbar.Primary</item>
-    </style>
-<!-- CORRECT -->
-    <style name="Theme.MyApp" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <!-- Customize your theme here. -->
-        <item name="colorPrimary">@color/my_light_primary</item>
 
+        <!-- Status bar color. -->
+        <item name="android:statusBarColor">?attr/colorSurface</item>
+        <!-- Navigation bar color. -->
+        <item name="android:navigationBarColor">?attr/colorSurface</item>
+        <!-- Light status bar icons for dark backgrounds. -->
+        <item name="android:windowLightStatusBar">true</item>
+        <!-- Light navigation bar icons for dark backgrounds. -->
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">true</item>
+
+        <!-- Use Material 3 Toolbar Style -->
+        <item name="toolbarStyle">@style/Widget.Material3.Toolbar.Surface</item>
     </style>
 </resources>

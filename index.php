@@ -592,6 +592,90 @@ if(!isset($_GET['ajax'])){
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
     header('Pragma: no-cache');
 }
+
+if(isset($_GET['view']) && $_GET['view']==='device'){
+    if(!isset($_SESSION['auth_ok'])){
+        header('Location: ./?login=1');
+        exit;
+    }
+    $deviceId = trim((string)($_GET['id'] ?? ''));
+    if($deviceId === ''){
+        header('Location: ./');
+        exit;
+    }
+    $nameHint = trim((string)($_GET['name'] ?? ''));
+    $pageTitle = $nameHint !== '' ? $nameHint : $deviceId;
+    $ackOptions = ['30m','1h','6h','8h','12h'];
+    ?>
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Device Detail - <?=htmlspecialchars($pageTitle, ENT_QUOTES)?> | UISP NOC</title>
+  <link rel="stylesheet" href="assets/style.css?v=<?=$ASSET_VERSION?>">
+</head>
+<body class="detail-page">
+  <header class="detail-header">
+    <button class="btn-outline" onclick="window.location.href='./';">&larr; Dashboard</button>
+    <div class="detail-title">
+      <h1 id="deviceTitle"><?=htmlspecialchars($pageTitle, ENT_QUOTES)?></h1>
+      <div id="deviceSubtitle" class="detail-subtitle"></div>
+    </div>
+    <div class="detail-header-right">
+      <span id="detailUpdated" class="detail-updated">Last update: --</span>
+    </div>
+  </header>
+
+  <main class="detail-main">
+    <section class="detail-summary">
+      <div class="detail-status-row">
+        <span id="detailStatusBadge" class="status-pill status-pill--loading">Loading</span>
+        <span id="detailAckBadge" class="status-pill status-pill--ack" style="display:none;"></span>
+        <span id="detailOutageBadge" class="status-pill status-pill--outage" style="display:none;"></span>
+      </div>
+      <div id="detailBadges" class="detail-badges"></div>
+      <div id="detailMessage" class="detail-message"></div>
+    </section>
+
+    <section class="detail-actions">
+      <div class="detail-ack-controls">
+        <span class="detail-actions-label">Acknowledge outage:</span>
+        <div class="detail-ack-buttons" id="ackButtons">
+          <?php foreach($ackOptions as $opt): ?>
+            <button class="btn" data-ack="<?=$opt?>">Ack <?=$opt?></button>
+          <?php endforeach; ?>
+        </div>
+        <button class="btn-outline" id="clearAckBtn" style="display:none;">Clear Ack</button>
+      </div>
+    </section>
+
+    <section class="detail-history">
+      <h2>Performance History</h2>
+      <div class="chart-grid">
+        <canvas id="cpuChart"></canvas>
+        <canvas id="ramChart"></canvas>
+        <canvas id="tempChart"></canvas>
+        <canvas id="latChart"></canvas>
+      </div>
+      <div id="historyMessage" class="detail-message" style="margin-top:16px;"></div>
+    </section>
+  </main>
+
+  <script>
+    window.DEVICE_DETAIL = {
+      id: <?=json_encode($deviceId)?>,
+      nameHint: <?=json_encode($pageTitle)?>,
+      ackOptions: <?=json_encode($ackOptions)?>,
+      assetVersion: <?=json_encode($ASSET_VERSION)?>
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="assets/device-detail.js?v=<?=$ASSET_VERSION?>"></script>
+</body>
+</html>
+<?php
+    exit;
+}
 ?>
 <?php if(!isset($_SESSION['auth_ok'])): ?>
 <!doctype html>
@@ -658,18 +742,6 @@ if(!isset($_GET['ajax'])){
 <div id="backbone" class="tabcontent" style="display:none"><div id="routerGrid" class="grid"></div></div>
 <footer id="footer"></footer>
 
-<div id="historyModal" class="modal">
-  <div class="modal-content">
-    <h3 id="histTitle"></h3>
-    <button class="modal-close" onclick="closeModal()" aria-label="Close">&times;</button>
-    <canvas id="cpuChart"></canvas>
-    <canvas id="ramChart"></canvas>
-    <canvas id="tempChart"></canvas>
-    <canvas id="latChart"></canvas>
-    <button onclick="closeModal()">Close</button>
-  </div>
-</div>
-
 <div id="tlsModal" class="modal">
   <div class="modal-content">
     <h3>TLS / Certificates</h3>
@@ -694,7 +766,6 @@ if(!isset($_GET['ajax'])){
 
 <audio id="siren" src="buz.mp3?v=<?=$ASSET_VERSION?>" preload="auto"></audio>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="assets/app.js?v=<?=$ASSET_VERSION?>"></script>
 </body>
 </html>

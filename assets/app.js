@@ -424,7 +424,6 @@ function clearAll(){
   }
   fetch(`?ajax=clearall&t=${Date.now()}`).then(()=>fetchDevices());
 }
-function closeModal(){document.getElementById('historyModal').style.display='none';}
 function openTLS(){
   const m=document.getElementById('tlsModal'); if(!m)return; m.style.display='block';
   const s=document.getElementById('tlsStatus'); if(s){ s.textContent='Fetching current Caddy config...'; }
@@ -449,32 +448,11 @@ function submitTLS(){
   return false;
 }
 function showHistory(id,name){
- fetch(`?ajax=history&id=${id}`).then(r=>r.json()).then(rows=>{
-   document.getElementById('histTitle').innerText=`History for ${name}`;
-   const labels=rows.map(r=>r.timestamp);
-   const cpu=rows.map(r=>r.cpu);
-   const ram=rows.map(r=>r.ram);
-   const temp=rows.map(r=>r.temp);
-   const lat=rows.map(r=>r.latency);
-
-   new Chart(document.getElementById('cpuChart'),{type:'line',data:{labels,datasets:[{label:'CPU %',data:cpu,borderColor:'lime'}]}});
-   new Chart(document.getElementById('ramChart'),{type:'line',data:{labels,datasets:[{label:'RAM %',data:ram,borderColor:'yellow'}]}});
-   new Chart(document.getElementById('tempChart'),{type:'line',data:{labels,datasets:[{label:'Temp °C',data:temp,borderColor:'red'}]}});
-   new Chart(document.getElementById('latChart'),{type:'line',data:{labels,datasets:[{label:'Latency ms',data:lat,borderColor:'cyan'}]}});
-   const modal=document.getElementById('historyModal');
-   modal.style.display='block';
- });
+  const params=new URLSearchParams({view:'device',id});
+  if(name){ params.set('name',name); }
+  window.location.href='?'+params.toString();
 }
 schedulePoll(0);
-
-// Close history modal when clicking the overlay or pressing Escape
-(function(){
-  const modal=document.getElementById('historyModal');
-  if(modal){
-    modal.addEventListener('click',(e)=>{ if(e.target===modal) closeModal(); });
-  }
-  window.addEventListener('keydown',(e)=>{ if(e.key==='Escape') closeModal(); });
-})();
 
 // Live counters (update once per second)
 function fmtDurationFull(sec){

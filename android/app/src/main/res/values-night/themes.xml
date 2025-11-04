@@ -1,9 +1,18 @@
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme for night mode. -->
     <style name="Theme.UISPNOC" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- Customize your theme here. -->
+
+        <!-- Status bar color. -->
         <item name="android:statusBarColor">?attr/colorSurface</item>
+        <!-- Navigation bar color. -->
         <item name="android:navigationBarColor">?attr/colorSurface</item>
+        <!-- Dark status bar icons for light backgrounds. -->
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowLightNavigationBar">false</item>
-        <item name="materialToolbarStyle">@style/Widget.MaterialComponents.Toolbar.Primary</item>
+        <!-- Dark navigation bar icons for light backgrounds. -->
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">false</item>
+
+        <!-- Use Material 3 Toolbar Style -->
+        <item name="toolbarStyle">@style/Widget.Material3.Toolbar.Surface</item>
     </style>
 </resources>
