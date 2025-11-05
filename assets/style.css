@@ -293,8 +293,9 @@ footer {
 .status-pill--outage { background: #311; color: #f77; }
 .detail-badges {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 8px;
+  align-items: center;
 }
 .detail-message {
   margin-top: 12px;
@@ -323,15 +324,20 @@ footer {
   justify-content: center;
 }
 .chart-grid {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 24px;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  align-items: center;
+  width: 100%;
 }
 .chart-grid canvas {
   background: #151515;
   border-radius: 8px;
   padding: 12px;
-  min-height: 220px;
+  min-height: 260px;
+  width: 100% !important;
+  max-width: 100%;
+  display: block;
 }
 .detail-history h2 {
   margin-top: 0;
@@ -343,6 +349,17 @@ footer {
   background: rgba(176,108,255,0.15);
   padding: 4px 10px;
   border-radius: 999px;
+}
+.detail-footer {
+  width: min(100%, 1100px);
+  margin: 0 auto 32px;
+  padding: 14px 24px;
+  background: #1b1b1b;
+  border-radius: 0 0 12px 12px;
+  box-shadow: 0 0 0 1px #2a2a2a;
+  text-align: center;
+  font-size: 13px;
+  color: #bbb;
 }
 
 /* Responsive spacing and typography tweaks */

@@ -2,17 +2,19 @@
   const detail = window.DEVICE_DETAIL || {};
   const deviceId = detail.id;
   const ackOptions = Array.isArray(detail.ackOptions) ? detail.ackOptions : [];
+
   const ackButtonsWrap = document.getElementById('ackButtons');
-  const clearAckBtn = document.getElementById('clearAckBtn');
-  const statusBadge = document.getElementById('detailStatusBadge');
-  const ackBadge = document.getElementById('detailAckBadge');
-  const outageBadge = document.getElementById('detailOutageBadge');
-  const badgesEl = document.getElementById('detailBadges');
-  const updatedEl = document.getElementById('detailUpdated');
-  const subtitleEl = document.getElementById('deviceSubtitle');
-  const messageEl = document.getElementById('detailMessage');
-  const historyMsgEl = document.getElementById('historyMessage');
-  const titleEl = document.getElementById('deviceTitle');
+  const clearAckBtn     = document.getElementById('clearAckBtn');
+  const statusBadge     = document.getElementById('detailStatusBadge');
+  const ackBadge        = document.getElementById('detailAckBadge');
+  const outageBadge     = document.getElementById('detailOutageBadge');
+  const badgesEl        = document.getElementById('detailBadges');
+  const updatedEl       = document.getElementById('detailUpdated');
+  const subtitleEl      = document.getElementById('deviceSubtitle');
+  const messageEl       = document.getElementById('detailMessage');
+  const historyMsgEl    = document.getElementById('historyMessage');
+  const titleEl         = document.getElementById('deviceTitle');
+  const footerEl        = document.getElementById('detailFooter');
 
   if(!deviceId){
     if(messageEl) messageEl.textContent = 'Missing device identifier in request.';
@@ -20,24 +22,45 @@
     return;
   }
 
-  const POLL_MS = 1024;
-  const HISTORY_MS = 60000;
-  let deviceReqId = 0;
-  let deviceTimer = null;
+  const POLL_MS    = 1024;
+  const HISTORY_MS = 1024;
+
+  let deviceTimer  = null;
   let historyTimer = null;
+  let deviceReqId  = 0;
+  let historyReqId = 0;
   let currentDevice = null;
   let charts = null;
   let actionPending = false;
   let pendingNote = '';
+  let detailMeta = { http: '--', api_latency: '--', updated: '--' };
+
+  function updateFooter(){
+    if(!footerEl) return;
+    const httpTxt = detailMeta.http ?? '--';
+    const latTxt  = detailMeta.api_latency ?? '--';
+    const updTxt  = detailMeta.updated ?? '--';
+    footerEl.textContent = `HTTP ${httpTxt}, API latency ${latTxt}, Updated ${updTxt}`;
+  }
+  function applyMeta(meta){
+    if(!meta) return;
+    detailMeta = {
+      http: meta.http ?? detailMeta.http ?? '--',
+      api_latency: meta.api_latency ?? detailMeta.api_latency ?? '--',
+      updated: meta.updated ?? detailMeta.updated ?? '--'
+    };
+    updateFooter();
+  }
+  updateFooter();
 
   if(ackButtonsWrap){
     ackButtonsWrap.innerHTML = '';
     ackOptions.forEach(opt=>{
-      const btn=document.createElement('button');
-      btn.className='btn';
-      btn.dataset.ack=opt;
-      btn.textContent=`Ack ${opt}`;
-      btn.addEventListener('click',()=>handleAck(opt));
+      const btn = document.createElement('button');
+      btn.className = 'btn';
+      btn.dataset.ack = opt;
+      btn.textContent = `Ack ${opt}`;
+      btn.addEventListener('click', ()=>handleAck(opt));
       ackButtonsWrap.appendChild(btn);
     });
   }
@@ -46,14 +69,12 @@
   }
 
   function scheduleDevicePoll(delay=POLL_MS){
-    if(delay < 0) delay = POLL_MS;
     clearTimeout(deviceTimer);
-    deviceTimer = setTimeout(()=>{ loadDevice(); }, delay);
+    deviceTimer = setTimeout(loadDevice, Math.max(delay, 0));
   }
   function scheduleHistoryPoll(delay=HISTORY_MS){
-    if(delay < 0) delay = HISTORY_MS;
     clearTimeout(historyTimer);
-    historyTimer = setTimeout(()=>{ loadHistory(); }, delay);
+    historyTimer = setTimeout(loadHistory, Math.max(delay, 0));
   }
 
   function badgeVal(v,label,suf){
@@ -72,52 +93,68 @@
   }
   function fmtRemain(sec){
     if(typeof sec!=='number' || !isFinite(sec) || sec<=0) return null;
-    let s=Math.floor(sec);
-    const d=Math.floor(s/86400); s%=86400;
-    const h=Math.floor(s/3600); s%=3600;
-    const m=Math.floor(s/60);   s%=60;
+    let s = Math.floor(sec);
+    const d = Math.floor(s/86400); s%=86400;
+    const h = Math.floor(s/3600); s%=3600;
+    const m = Math.floor(s/60);   s%=60;
     const parts=[];
-    if(d) parts.push(d+'d');
-    if(h) parts.push(h+'h');
-    if(m) parts.push(m+'m');
-    parts.push(s+'s');
+    if(d) parts.push(`${d}d`);
+    if(h) parts.push(`${h}h`);
+    if(m) parts.push(`${m}m`);
+    parts.push(`${s}s`);
     return parts.join(' ');
   }
   function fmtDurationFull(sec){
     if(typeof sec!=='number' || !isFinite(sec) || sec<0) return null;
-    let s=Math.floor(sec);
-    const d=Math.floor(s/86400); s%=86400;
-    const h=Math.floor(s/3600); s%=3600;
-    const m=Math.floor(s/60);   s%=60;
+    let s = Math.floor(sec);
+    const d = Math.floor(s/86400); s%=86400;
+    const h = Math.floor(s/3600); s%=3600;
+    const m = Math.floor(s/60);   s%=60;
     const parts=[];
-    if(d) parts.push(d+'d');
-    if(h||d) parts.push(h+'h');
-    if(m||h||d) parts.push(m+'m');
-    parts.push(s+'s');
+    if(d) parts.push(`${d}d`);
+    if(h||d) parts.push(`${h}h`);
+    if(m||h||d) parts.push(`${m}m`);
+    parts.push(`${s}s`);
     return parts.join(' ');
   }
 
   function setActionPending(flag, note=''){
     actionPending = !!flag;
     pendingNote = note || '';
-    if(currentDevice){
-      renderDevice(currentDevice);
-    } else {
-      updateAckControls(false,false);
-      if(messageEl){
-        messageEl.textContent = pendingNote || (actionPending ? 'Applying action...' : '');
-      }
+    updateAckControls(currentDevice ? !currentDevice.online : false, !!(currentDevice && currentDevice.ack_until));
+    if(messageEl && actionPending){
+      messageEl.textContent = pendingNote;
     }
   }
 
-  function renderDevice(dev){
+  function renderDevice(dev, meta){
+    if(meta) applyMeta(meta);
     currentDevice = dev;
-    if(!dev) return;
+
+    if(!dev){
+      if(statusBadge){
+        statusBadge.className = 'status-pill status-pill--loading';
+        statusBadge.textContent = 'UNKNOWN';
+      }
+      if(ackBadge) ackBadge.style.display = 'none';
+      if(outageBadge) outageBadge.style.display = 'none';
+      if(badgesEl) badgesEl.innerHTML = '<span class="badge">No recent metrics</span>';
+      if(updatedEl){
+        const updatedLabel = detailMeta.updated ?? new Date().toLocaleTimeString();
+        updatedEl.textContent = 'Last update: ' + updatedLabel;
+      }
+      updateAckControls(false,false);
+      if(messageEl && !actionPending){
+        messageEl.textContent = 'Device is not present in the latest poll.';
+      }
+      return;
+    }
+
     const nowSec = Math.floor(Date.now()/1000);
     const offlineSince = dev.offline_since ? parseInt(dev.offline_since,10) : null;
-    const ackUntil = dev.ack_until ? parseInt(dev.ack_until,10) : null;
-    const ackActive = ackUntil && ackUntil > nowSec;
-    const isOffline = !dev.online;
+    const ackUntil     = dev.ack_until ? parseInt(dev.ack_until,10) : null;
+    const ackActive    = ackUntil && ackUntil > nowSec;
+    const isOffline    = !dev.online;
 
     if(titleEl && dev.name && titleEl.dataset.locked!=='1'){
       titleEl.textContent = dev.name;
@@ -130,9 +167,9 @@
       else if(dev.gateway) bits.push('Gateway');
       else if(dev.router) bits.push('Router');
       else if(dev.switch) bits.push('Switch');
-      if(dev.id && dev.id!==dev.name) bits.push('ID: '+dev.id);
-      if(typeof dev.latency === 'number') bits.push('Latency: '+dev.latency+' ms');
-      subtitleEl.textContent = bits.join(' • ');
+      if(dev.id && dev.id!==dev.name) bits.push(`ID: ${dev.id}`);
+      if(typeof dev.latency === 'number') bits.push(`Latency: ${dev.latency} ms`);
+      subtitleEl.textContent = bits.join(' \u2022 ');
     }
 
     if(statusBadge){
@@ -162,22 +199,21 @@
       const badges=[
         badgeVal(dev.cpu,'CPU','%'),
         badgeVal(dev.ram,'RAM','%'),
-        badgeVal(dev.temp,'Temp','°C'),
+        badgeVal(dev.temp,'Temp','\u00B0C'),
         badgeLatency(dev.latency)
       ].filter(Boolean);
       badgesEl.innerHTML = badges.length ? badges.join(' ') : '<span class="badge">No recent metrics</span>';
     }
 
     if(updatedEl){
-      updatedEl.textContent = 'Last update: ' + new Date().toLocaleTimeString();
+      const updatedLabel = detailMeta.updated ?? new Date().toLocaleTimeString();
+      updatedEl.textContent = 'Last update: ' + updatedLabel;
     }
 
     updateAckControls(isOffline, ackActive);
 
-    if(messageEl){
-      if(actionPending){
-        messageEl.textContent = pendingNote || 'Applying action...';
-      } else if(ackActive && ackUntil){
+    if(messageEl && !actionPending){
+      if(ackActive && ackUntil){
         const until = new Date(ackUntil*1000).toLocaleTimeString();
         messageEl.textContent = `Ack active until ${until}.`;
       } else if(isOffline){
@@ -215,24 +251,23 @@
       })
       .then(data=>{
         if(reqId !== deviceReqId) return;
+        const meta = {
+          http: data && data.http != null ? data.http : '--',
+          api_latency: data && data.api_latency != null ? `${data.api_latency} ms` : '--',
+          updated: new Date().toLocaleTimeString()
+        };
         const devices = Array.isArray(data.devices) ? data.devices : [];
         const dev = devices.find(d=>d.id === deviceId);
         if(!dev){
-          if(messageEl && !actionPending){
-            messageEl.textContent = 'Device is not present in the latest poll.';
-          }
-          if(statusBadge){
-            statusBadge.className = 'status-pill status-pill--loading';
-            statusBadge.textContent = 'UNKNOWN';
-          }
-          updateAckControls(false,false);
+          renderDevice(null, meta);
           return;
         }
-        renderDevice(dev);
+        renderDevice(dev, meta);
       })
       .catch(err=>{
         if(reqId !== deviceReqId) return;
         console.error('Device detail fetch failed', err);
+        applyMeta({http:'ERR', api_latency:'--', updated:new Date().toLocaleTimeString()});
         if(messageEl) messageEl.textContent = 'Unable to refresh device data.';
       })
       .finally(()=>{
@@ -273,7 +308,7 @@
       }),
       temp: new Chart(document.getElementById('tempChart'),{
         type:'line',
-        data:{ labels:[], datasets:[{label:'Temp °C', data:[], borderColor:'#ff7a7a', backgroundColor:'rgba(255,122,122,0.1)', tension:0.25, spanGaps:true}]},
+        data:{ labels:[], datasets:[{label:'Temp \u00B0C', data:[], borderColor:'#ff7a7a', backgroundColor:'rgba(255,122,122,0.1)', tension:0.25, spanGaps:true}]},
         options: baseOpts
       }),
       lat: new Chart(document.getElementById('latChart'),{
@@ -287,50 +322,44 @@
 
   function loadHistory(){
     clearTimeout(historyTimer);
+    const reqId = ++historyReqId;
     return fetch(`?ajax=history&id=${encodeURIComponent(deviceId)}&t=${Date.now()}`)
       .then(r=>{
         if(!r.ok) throw new Error('HTTP '+r.status);
         return r.json();
       })
       .then(rows=>{
+        if(reqId !== historyReqId) return;
         const chartSet = ensureCharts();
         const labels = Array.isArray(rows) ? rows.map(r=>r.timestamp) : [];
-        chartSet.cpu.data.labels = labels;
-        chartSet.ram.data.labels = labels;
+        chartSet.cpu.data.labels  = labels;
+        chartSet.ram.data.labels  = labels;
         chartSet.temp.data.labels = labels;
-        chartSet.lat.data.labels = labels;
-        chartSet.cpu.data.datasets[0].data = labels.map((_,i)=>{
-          const v = rows[i]?.cpu;
-          return v==null ? null : Number(v);
-        });
-        chartSet.ram.data.datasets[0].data = labels.map((_,i)=>{
-          const v = rows[i]?.ram;
-          return v==null ? null : Number(v);
-        });
-        chartSet.temp.data.datasets[0].data = labels.map((_,i)=>{
-          const v = rows[i]?.temp;
-          return v==null ? null : Number(v);
-        });
-        chartSet.lat.data.datasets[0].data = labels.map((_,i)=>{
-          const v = rows[i]?.latency;
-          return v==null ? null : Number(v);
-        });
+        chartSet.lat.data.labels  = labels;
+
+        chartSet.cpu.data.datasets[0].data  = labels.map((_,i)=>rows[i]?.cpu ?? null);
+        chartSet.ram.data.datasets[0].data  = labels.map((_,i)=>rows[i]?.ram ?? null);
+        chartSet.temp.data.datasets[0].data = labels.map((_,i)=>rows[i]?.temp ?? null);
+        chartSet.lat.data.datasets[0].data  = labels.map((_,i)=>rows[i]?.latency ?? null);
+
         chartSet.cpu.update('none');
         chartSet.ram.update('none');
         chartSet.temp.update('none');
         chartSet.lat.update('none');
+
         if(historyMsgEl){
           historyMsgEl.textContent = labels.length ? '' : 'No historical metrics recorded yet for this device.';
         }
       })
       .catch(err=>{
+        if(reqId !== historyReqId) return;
         console.error('History fetch failed', err);
-        if(historyMsgEl){
-          historyMsgEl.textContent = 'Unable to load history data.';
-        }
+        if(historyMsgEl) historyMsgEl.textContent = 'Unable to load history data.';
       })
       .finally(()=>{
-        scheduleHistoryPoll(HISTORY_MS);
+        if(reqId === historyReqId){
+          scheduleHistoryPoll(HISTORY_MS);
+        }
       });
   }
 
@@ -343,9 +372,7 @@
         console.error('Ack failed', err);
         if(messageEl) messageEl.textContent = 'Failed to acknowledge outage.';
       })
-      .finally(()=>{
-        setActionPending(false);
-      });
+      .finally(()=>{ setActionPending(false); });
   }
 
   function handleClearAck(){
@@ -357,14 +384,7 @@
         console.error('Clear ack failed', err);
         if(messageEl) messageEl.textContent = 'Failed to clear acknowledgement.';
       })
-      .finally(()=>{
-        setActionPending(false);
-      });
-  }
-
-  if(titleEl && detail.nameHint){
-    titleEl.textContent = detail.nameHint;
-    titleEl.dataset.locked = detail.nameHint ? '0' : '1';
+      .finally(()=>{ setActionPending(false); });
   }
 
   loadDevice();

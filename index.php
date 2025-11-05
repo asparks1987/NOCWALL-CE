@@ -661,6 +661,10 @@ if(isset($_GET['view']) && $_GET['view']==='device'){
     </section>
   </main>
 
+  <footer class="detail-footer" id="detailFooter">
+    HTTP --, API latency --, Updated --
+  </footer>
+
   <script>
     window.DEVICE_DETAIL = {
       id: <?=json_encode($deviceId)?>,
