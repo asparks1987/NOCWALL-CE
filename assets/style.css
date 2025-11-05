@@ -292,10 +292,10 @@ footer {
 .status-pill--ack { background: #33260a; color: #ffda7a; }
 .status-pill--outage { background: #311; color: #f77; }
 .detail-badges {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 8px;
-  align-items: center;
+  justify-items: center;
 }
 .detail-message {
   margin-top: 12px;
@@ -324,20 +324,19 @@ footer {
   justify-content: center;
 }
 .chart-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  align-items: center;
+  display: grid;
+  grid-template-columns: 1fr;
   width: 100%;
+  gap: 24px;
 }
 .chart-grid canvas {
-  background: #151515;
-  border-radius: 8px;
-  padding: 12px;
-  min-height: 260px;
-  width: 100% !important;
-  max-width: 100%;
   display: block;
+  width: 100% !important;
+  height: 260px !important;
+  background: #151515;
+  border-radius: 10px;
+  padding: 12px;
+  box-shadow: inset 0 0 0 1px #202020;
 }
 .detail-history h2 {
   margin-top: 0;
