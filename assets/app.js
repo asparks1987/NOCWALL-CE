@@ -60,9 +60,6 @@ let mutationVersion=0;
 const pendingSimOverrides=new Map();
 const SIM_OVERRIDE_TTL_MS = 60000;
 let pollTimer=null;
-let renderQueue=[];
-let renderQueueActive=false;
-let renderQueueGen=0;
 
 function touchMutation(){
   mutationVersion++;
@@ -102,35 +99,6 @@ function handleAutoUnlock(){
   }
 }
 autoUnlockEvents.forEach(evt=>window.addEventListener(evt, handleAutoUnlock, false));
-
-function resetRenderQueue(){
-  renderQueueGen++;
-  renderQueue.length=0;
-  renderQueueActive=false;
-}
-function scheduleSectionRender(fn){
-  const gen = renderQueueGen;
-  renderQueue.push({fn, gen});
-  if(!renderQueueActive){
-    renderQueueActive=true;
-    requestAnimationFrame(processRenderQueue);
-  }
-}
-function processRenderQueue(){
-  if(!renderQueue.length){
-    renderQueueActive=false;
-    return;
-  }
-  const task = renderQueue.shift();
-  if(task && task.gen === renderQueueGen){
-    try{ task.fn(); }catch(err){ console.error('Render section failed', err); }
-  }
-  if(renderQueue.length){
-    requestAnimationFrame(processRenderQueue);
-  } else {
-    renderQueueActive=false;
-  }
-}
 
 function renderDevices(meta, opts){
   const fromServer = !!(opts && opts.fromServer);
@@ -184,17 +152,18 @@ function renderDevices(meta, opts){
     .filter(d=> (d.router || d.switch) && !d.gateway )
     .sort((a,b)=> (a.online - b.online) || a.name.localeCompare(b.name));
 
-  resetRenderQueue();
-  scheduleSectionRender(()=>renderGatewayGrid(gws, nowSec));
-  scheduleSectionRender(()=>renderBackboneGrid(backbones, nowSec));
-  scheduleSectionRender(()=>renderCpeGrid(cps));
+  renderGatewayGrid(gws, nowSec);
+  requestAnimationFrame(()=> {
+    renderBackboneGrid(backbones, nowSec);
+    requestAnimationFrame(()=>{ renderCpeGrid(cps); });
+  });
 
   const footer=document.getElementById('footer');
   if(footer){
     const httpTxt = renderMeta.http ?? '--';
     const latTxt = renderMeta.api_latency ?? '--';
     const updatedTxt = renderMeta.updated ?? new Date().toLocaleTimeString();
-    footer.innerText=HTTP , API latency , Updated ;
+    footer.innerText=`HTTP ${httpTxt}, API latency ${latTxt}, Updated ${updatedTxt}`;
   }
 
   const total=devices.length;
@@ -222,15 +191,15 @@ function renderDevices(meta, opts){
   const rbTotal = backbones.length;
 
   const summaryHTML = [
-    <span class="badge good">Gateways: /</span>,
-    <span class="badge good">Routers/Switches: /</span>,
-    <span class="badge good">CPEs: /</span>,
-    <span class="badge ">Health: </span>,
-    <span class="badge ">GW Offline: </span>,
-    <span class="badge ">Unacked: </span>,
-    <span class="badge ">Avg Latency: </span>,
-    <span class="badge ">High CPU: </span>,
-    <span class="badge ">High RAM: </span>
+    `<span class="badge good">Gateways: ${gwOnline}/${gwTotal}</span>`,
+    `<span class="badge good">Routers/Switches: ${rbOnline}/${rbTotal}</span>`,
+    `<span class="badge good">CPEs: ${cpeOnline}/${cpeTotal}</span>`,
+    `<span class="badge ${healthClass}">Health: ${health==null?'--':health+'%'}</span>`,
+    `<span class="badge ${offlineClass}">GW Offline: ${offlineGw}</span>`,
+    `<span class="badge ${unackedClass}">Unacked: ${unacked}</span>`,
+    `<span class="badge ${latClass}">Avg Latency: ${avgLat==null?'--':avgLat+' ms'}</span>`,
+    `<span class="badge ${cpuClass}">High CPU: ${highCpu}</span>`,
+    `<span class="badge ${ramClass}">High RAM: ${highRam}</span>`
   ].join(' ');
   const overallEl=document.getElementById('overallSummary');
   if(overallEl) overallEl.innerHTML=summaryHTML;
