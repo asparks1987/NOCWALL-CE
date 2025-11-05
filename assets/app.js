@@ -61,6 +61,73 @@ const pendingSimOverrides=new Map();
 const SIM_OVERRIDE_TTL_MS = 60000;
 let pollTimer=null;
 
+const POLL_INTERVAL_NORMAL_MS = 5000;
+const POLL_INTERVAL_FAST_MS = 2000;
+const POLL_INTERVAL_ERROR_MS = 15000;
+
+function schedulePoll(delayMs){
+  if(pollTimer){
+    clearTimeout(pollTimer);
+  }
+  const ms = (typeof delayMs === 'number' && isFinite(delayMs)) ? Math.max(0, delayMs) : POLL_INTERVAL_NORMAL_MS;
+  pollTimer = setTimeout(()=>{ fetchDevices({ reason:'scheduled' }); }, ms);
+}
+
+async function fetchDevices(opts={}){
+  const requestId = ++fetchRequestId;
+  const startMutation = mutationVersion;
+  const startedAt = Date.now();
+  const metaBase = { updated: new Date().toLocaleTimeString() };
+  const nextDelaySuccess = opts.nextDelaySuccess ?? POLL_INTERVAL_NORMAL_MS;
+  const nextDelayError = opts.nextDelayError ?? POLL_INTERVAL_ERROR_MS;
+
+  try{
+    const resp = await fetch(`?ajax=devices&t=${Date.now()}`, { cache:'no-store' });
+    if(requestId !== fetchRequestId) return;
+    if(resp.status===401){ location.reload(); return; }
+
+    let payload=null;
+    let parseFailed=false;
+    try{ payload = await resp.json(); }
+    catch(_){ parseFailed=true; }
+
+    const meta={
+      http: resp.status,
+      api_latency: (payload && typeof payload.api_latency==='number') ? `${payload.api_latency} ms` : `${Math.round(Date.now()-startedAt)} ms`,
+      updated: metaBase.updated
+    };
+
+    if(parseFailed || !payload || !Array.isArray(payload.devices)){
+      const metaErr = Object.assign({}, meta, {
+        http: parseFailed ? 'ERR' : meta.http,
+        api_latency: parseFailed ? '--' : meta.api_latency
+      });
+      renderDevices(metaErr);
+      schedulePoll(nextDelayError);
+      return;
+    }
+
+    if(!opts.force && startMutation !== mutationVersion){
+      renderDevices(meta);
+      schedulePoll(POLL_INTERVAL_FAST_MS);
+      return;
+    }
+
+    devicesCache = payload.devices;
+    renderDevices(meta, {fromServer:true});
+    schedulePoll(nextDelaySuccess);
+  }catch(_){
+    if(requestId !== fetchRequestId) return;
+    const meta={
+      http:'ERR',
+      api_latency:'--',
+      updated: metaBase.updated
+    };
+    renderDevices(meta);
+    schedulePoll(nextDelayError);
+  }
+}
+
 function touchMutation(){
   mutationVersion++;
   if(mutationVersion > 1e9){
