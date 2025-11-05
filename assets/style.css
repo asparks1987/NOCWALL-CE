@@ -332,11 +332,11 @@ footer {
 .chart-grid canvas {
   display: block;
   width: 100% !important;
-  height: 260px !important;
+  height: 520px !important;
   background: #151515;
-  border-radius: 10px;
-  padding: 12px;
-  box-shadow: inset 0 0 0 1px #202020;
+  border-radius: 12px;
+  padding: 18px;
+  box-shadow: inset 0 0 0 2px rgba(32,32,60,0.45);
 }
 .detail-history h2 {
   margin-top: 0;

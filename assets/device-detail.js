@@ -287,12 +287,40 @@
       maintainAspectRatio: false,
       animation: false,
       scales: {
-        x: { ticks: { color: '#aaa' }, grid: { color: '#222' } },
-        y: { ticks: { color: '#ccc' }, grid: { color: '#222' } }
+        x: {
+          ticks: {
+            color: '#e9e9ff',
+            font: { size: 13, family: 'Segoe UI, sans-serif', weight: '600' }
+          },
+          grid: { color: 'rgba(255,255,255,0.08)' }
+        },
+        y: {
+          ticks: {
+            color: '#e9e9ff',
+            font: { size: 13, family: 'Segoe UI, sans-serif', weight: '600' }
+          },
+          grid: { color: 'rgba(255,255,255,0.06)' }
+        }
       },
       plugins: {
-        legend: { labels: { color: '#eee' } },
-        tooltip: { mode: 'index', intersect: false }
+        legend: {
+          labels: {
+            color: '#fafaff',
+            font: { size: 14, family: 'Segoe UI, sans-serif', weight: '600' }
+          }
+        },
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          padding: 12,
+          backgroundColor: 'rgba(20,20,30,0.95)',
+          titleColor: '#fafaff',
+          bodyColor: '#d4d4ff',
+          borderColor: 'rgba(120,120,220,0.6)',
+          borderWidth: 1,
+          titleFont: { size: 13, family: 'Segoe UI, sans-serif', weight: '600' },
+          bodyFont: { size: 12, family: 'Segoe UI, sans-serif' }
+        }
       }
     };
     charts = {
