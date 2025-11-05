@@ -332,7 +332,7 @@ footer {
 .chart-grid canvas {
   display: block;
   width: 100% !important;
-  height: 520px !important;
+  height: 640px !important;
   background: #151515;
   border-radius: 12px;
   padding: 18px;

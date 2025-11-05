@@ -60,6 +60,9 @@ let mutationVersion=0;
 const pendingSimOverrides=new Map();
 const SIM_OVERRIDE_TTL_MS = 60000;
 let pollTimer=null;
+let renderQueue=[];
+let renderQueueActive=false;
+let renderQueueGen=0;
 
 function touchMutation(){
   mutationVersion++;
@@ -100,6 +103,35 @@ function handleAutoUnlock(){
 }
 autoUnlockEvents.forEach(evt=>window.addEventListener(evt, handleAutoUnlock, false));
 
+function resetRenderQueue(){
+  renderQueueGen++;
+  renderQueue.length=0;
+  renderQueueActive=false;
+}
+function scheduleSectionRender(fn){
+  const gen = renderQueueGen;
+  renderQueue.push({fn, gen});
+  if(!renderQueueActive){
+    renderQueueActive=true;
+    requestAnimationFrame(processRenderQueue);
+  }
+}
+function processRenderQueue(){
+  if(!renderQueue.length){
+    renderQueueActive=false;
+    return;
+  }
+  const task = renderQueue.shift();
+  if(task && task.gen === renderQueueGen){
+    try{ task.fn(); }catch(err){ console.error('Render section failed', err); }
+  }
+  if(renderQueue.length){
+    requestAnimationFrame(processRenderQueue);
+  } else {
+    renderQueueActive=false;
+  }
+}
+
 function renderDevices(meta, opts){
   const fromServer = !!(opts && opts.fromServer);
   if(meta){
@@ -107,7 +139,7 @@ function renderDevices(meta, opts){
   }
   const devices = Array.isArray(devicesCache) ? devicesCache : [];
   const nowMs = Date.now();
-  const nowSec=Math.floor(nowMs/1000);
+  const nowSec = Math.floor(nowMs/1000);
 
   devices.forEach(dev=>{
     if(!dev || !dev.id) return;
@@ -152,90 +184,17 @@ function renderDevices(meta, opts){
     .filter(d=> (d.router || d.switch) && !d.gateway )
     .sort((a,b)=> (a.online - b.online) || a.name.localeCompare(b.name));
 
-  const gwHTML=gws.map(d=>{
-    const badges=[badgeVal(d.cpu,'CPU','%'),badgeVal(d.ram,'RAM','%'),badgeVal(d.temp,'Temp','&deg;C'),badgeLatency(d.latency)].join(' ');
-    const ackActive = d.ack_until && d.ack_until > nowSec;
-    return `<div class="card ${d.online?'':'offline'} ${ackActive?'acked':''}">
-      <div class="ack-badge">${badgeAck(d.ack_until)}
-        <span class="badge good live-uptime" data-uptime="${d.uptime??''}"></span>
-        <span class="badge bad live-outage" data-offline-since="${d.offline_since??''}"></span>
-      </div>
-      <h2>${d.name}</h2>
-      <div class="status" style="color:${d.online?'#b06cff':'#f55'}">${d.online?'ONLINE':'OFFLINE'}</div>
-      <div>${badges}</div>
-      <div class="actions">
-        ${!d.online ? `
-          <div class="dropdown" style="${ackActive ? 'display:none' : ''}">
-            <button onclick="toggleAckMenu('${d.id}')">Ack</button>
-            <div id="ack-${d.id}" class="dropdown-content" style="display:none;background:#333;position:absolute;">
-              <a href="#" onclick="ack('${d.id}','30m')">30m</a>
-              <a href="#" onclick="ack('${d.id}','1h')">1h</a>
-              <a href="#" onclick="ack('${d.id}','6h')">6h</a>
-              <a href="#" onclick="ack('${d.id}','8h')">8h</a>
-              <a href="#" onclick="ack('${d.id}','12h')">12h</a>
-            </div>
-          </div>
-          ${ackActive ? `<button onclick="clearAck('${d.id}')">Clear Ack</button>`:''}
-        `:``}
-        ${d.simulate ? `<button onclick="clearSim('${d.id}')">End Test</button>` : (d.online ? `<button onclick="simulate('${d.id}')">Test Outage</button>` : '')}
-        
-        <button onclick="showHistory('${d.id}','${d.name}')">History</button>
-      </div>
-    </div>`;
-  }).join('');
-  const gateGrid=document.getElementById('gateGrid');
-  if(gateGrid) gateGrid.innerHTML=gwHTML;
-
-  const cpeHTML=cps.map(d=>{
-    const latBadge = (typeof d.cpe_latency==='number') ? badgeLatency(d.cpe_latency) : '';
-    return `<div class="card ${d.online?'':'offline'}">
-      <div class="cpe-badge">${latBadge}</div>
-      <h2>${d.name}</h2>
-      <div style="color:${d.online?'#b06cff':'#f55'}">${d.online?'ONLINE':'OFFLINE'}</div>
-    </div>`;
-  }).join('');
-  const cpeGrid=document.getElementById('cpeGrid');
-  if(cpeGrid) cpeGrid.innerHTML=cpeHTML;
-
-  const rbHTML = backbones.map(d=>{
-    const badges=[badgeVal(d.cpu,'CPU','%'),badgeVal(d.ram,'RAM','%'),badgeVal(d.temp,'Temp','&deg;C'),badgeLatency(d.latency)].join(' ');
-    const ackActive = d.ack_until && d.ack_until > nowSec;
-    return `<div class="card ${d.online?'':'offline'} ${ackActive?'acked':''}">
-      <div class="ack-badge">${badgeAck(d.ack_until)}
-        <span class="badge good live-uptime" data-uptime="${d.uptime??''}"></span>
-        <span class="badge bad live-outage" data-offline-since="${d.offline_since??''}"></span>
-      </div>
-      <h2>${d.name}</h2>
-      <div class="status" style="color:${d.online?'#b06cff':'#f55'}">${d.online?'ONLINE':'OFFLINE'}</div>
-      <div>${badges}</div>
-      <div class="actions">
-        ${!d.online ? `
-          <div class="dropdown" style="${ackActive ? 'display:none' : ''}">
-            <button onclick="toggleAckMenu('${d.id}')">Ack</button>
-            <div id="ack-${d.id}" class="dropdown-content" style="display:none;background:#333;position:absolute;">
-              <a href="#" onclick="ack('${d.id}','30m')">30m</a>
-              <a href="#" onclick="ack('${d.id}','1h')">1h</a>
-              <a href="#" onclick="ack('${d.id}','6h')">6h</a>
-              <a href="#" onclick="ack('${d.id}','8h')">8h</a>
-              <a href="#" onclick="ack('${d.id}','12h')">12h</a>
-            </div>
-          </div>
-          ${ackActive ? `<button onclick="clearAck('${d.id}')">Clear Ack</button>`:''}
-        `:``}
-        ${d.simulate ? `<button onclick="clearSim('${d.id}')">End Test</button>` : (d.online ? `<button onclick="simulate('${d.id}')">Test Outage</button>` : '')}
-        <button onclick="showHistory('${d.id}','${d.name}')">History</button>
-      </div>
-    </div>`;
-  }).join('');
-  const routerGrid = document.getElementById('routerGrid');
-  if(routerGrid) routerGrid.innerHTML = rbHTML;
+  resetRenderQueue();
+  scheduleSectionRender(()=>renderGatewayGrid(gws, nowSec));
+  scheduleSectionRender(()=>renderBackboneGrid(backbones, nowSec));
+  scheduleSectionRender(()=>renderCpeGrid(cps));
 
   const footer=document.getElementById('footer');
   if(footer){
     const httpTxt = renderMeta.http ?? '--';
     const latTxt = renderMeta.api_latency ?? '--';
     const updatedTxt = renderMeta.updated ?? new Date().toLocaleTimeString();
-    footer.innerText=`HTTP ${httpTxt}, API latency ${latTxt}, Updated ${updatedTxt}`;
+    footer.innerText=HTTP , API latency , Updated ;
   }
 
   const total=devices.length;
@@ -263,15 +222,15 @@ function renderDevices(meta, opts){
   const rbTotal = backbones.length;
 
   const summaryHTML = [
-    `<span class="badge good">Gateways: ${gwOnline}/${gwTotal}</span>`,
-    `<span class="badge good">Routers/Switches: ${rbOnline}/${rbTotal}</span>`,
-    `<span class="badge good">CPEs: ${cpeOnline}/${cpeTotal}</span>`,
-    `<span class="badge ${healthClass}">Health: ${health==null?'--':health+'%'}</span>`,
-    `<span class="badge ${offlineClass}">GW Offline: ${offlineGw}</span>`,
-    `<span class="badge ${unackedClass}">Unacked: ${unacked}</span>`,
-    `<span class="badge ${latClass}">Avg Latency: ${avgLat==null?'--':avgLat+' ms'}</span>`,
-    `<span class="badge ${cpuClass}">High CPU: ${highCpu}</span>`,
-    `<span class="badge ${ramClass}">High RAM: ${highRam}</span>`
+    <span class="badge good">Gateways: /</span>,
+    <span class="badge good">Routers/Switches: /</span>,
+    <span class="badge good">CPEs: /</span>,
+    <span class="badge ">Health: </span>,
+    <span class="badge ">GW Offline: </span>,
+    <span class="badge ">Unacked: </span>,
+    <span class="badge ">Avg Latency: </span>,
+    <span class="badge ">High CPU: </span>,
+    <span class="badge ">High RAM: </span>
   ].join(' ');
   const overallEl=document.getElementById('overallSummary');
   if(overallEl) overallEl.innerHTML=summaryHTML;
@@ -307,41 +266,6 @@ function renderDevices(meta, opts){
     if(a){ a.pause(); a.currentTime=0; }
   }
   sirenShouldAlertPrev = shouldAlert;
-}
-
-function schedulePoll(delay=5000){
-  clearTimeout(pollTimer);
-  pollTimer = setTimeout(()=>{ fetchDevices(); }, delay);
-}
-
-function fetchDevices(){
-  clearTimeout(pollTimer);
-  const requestId = ++fetchRequestId;
-  const versionAtStart = mutationVersion;
-  fetch('?ajax=devices').then(r=>{
-    if(r.status===401){
-      location.reload();
-      throw new Error('unauthorized');
-    }
-    return r.json();
-  }).then(j=>{
-    if(requestId !== fetchRequestId || versionAtStart !== mutationVersion) return;
-    devicesCache = Array.isArray(j.devices) ? j.devices : [];
-    renderDevices({
-      http: j.http ?? '--',
-      api_latency: (j.api_latency==null?'--':j.api_latency+' ms'),
-      updated: new Date().toLocaleTimeString()
-    }, {fromServer:true});
-  }).catch(()=>{
-    if(requestId !== fetchRequestId || versionAtStart !== mutationVersion) return;
-    renderDevices({
-      http:'ERR',
-      api_latency:'--',
-      updated:new Date().toLocaleTimeString()
-    });
-  }).finally(()=>{
-    schedulePoll(5000);
-  });
 }
 function toggleAckMenu(id){
   const el=document.getElementById('ack-'+id);
@@ -505,4 +429,90 @@ function changePassword(){
 }
 function logout(){
   window.location.href='?action=logout';
+}
+
+function renderGatewayGrid(gws, nowSec){
+  const gateGrid=document.getElementById('gateGrid');
+  if(!gateGrid) return;
+  const html=gws.map(d=>{
+    const badges=[badgeVal(d.cpu,'CPU','%'),badgeVal(d.ram,'RAM','%'),badgeVal(d.temp,'Temp','&deg;C'),badgeLatency(d.latency)].join(' ');
+    const ackActive = d.ack_until && d.ack_until > nowSec;
+    return `<div class="card ${d.online?'':'offline'} ${ackActive?'acked':''}">
+      <div class="ack-badge">${badgeAck(d.ack_until)}
+        <span class="badge good live-uptime" data-uptime="${d.uptime??''}"></span>
+        <span class="badge bad live-outage" data-offline-since="${d.offline_since??''}"></span>
+      </div>
+      <h2>${d.name}</h2>
+      <div class="status" style="color:${d.online?'#b06cff':'#f55'}">${d.online?'ONLINE':'OFFLINE'}</div>
+      <div>${badges}</div>
+      <div class="actions">
+        ${!d.online ? `
+          <div class="dropdown" style="${ackActive ? 'display:none' : ''}">
+            <button onclick="toggleAckMenu('${d.id}')">Ack</button>
+            <div id="ack-${d.id}" class="dropdown-content" style="display:none;background:#333;position:absolute;">
+              <a href="#" onclick="ack('${d.id}','30m')">30m</a>
+              <a href="#" onclick="ack('${d.id}','1h')">1h</a>
+              <a href="#" onclick="ack('${d.id}','6h')">6h</a>
+              <a href="#" onclick="ack('${d.id}','8h')">8h</a>
+              <a href="#" onclick="ack('${d.id}','12h')">12h</a>
+            </div>
+          </div>
+          ${ackActive ? `<button onclick="clearAck('${d.id}')">Clear Ack</button>`:''}
+        `:``}
+        ${d.simulate ? `<button onclick="clearSim('${d.id}')">End Test</button>` : (d.online ? `<button onclick="simulate('${d.id}')">Test Outage</button>` : '')}
+        <button onclick="showHistory('${d.id}','${d.name}')">History</button>
+      </div>
+    </div>`;
+  }).join('');
+  gateGrid.innerHTML = html;
+}
+
+function renderBackboneGrid(backbones, nowSec){
+  const routerGrid=document.getElementById('routerGrid');
+  if(!routerGrid) return;
+  const html=backbones.map(d=>{
+    const badges=[badgeVal(d.cpu,'CPU','%'),badgeVal(d.ram,'RAM','%'),badgeVal(d.temp,'Temp','&deg;C'),badgeLatency(d.latency)].join(' ');
+    const ackActive = d.ack_until && d.ack_until > nowSec;
+    return `<div class="card ${d.online?'':'offline'} ${ackActive?'acked':''}">
+      <div class="ack-badge">${badgeAck(d.ack_until)}
+        <span class="badge good live-uptime" data-uptime="${d.uptime??''}"></span>
+        <span class="badge bad live-outage" data-offline-since="${d.offline_since??''}"></span>
+      </div>
+      <h2>${d.name}</h2>
+      <div class="status" style="color:${d.online?'#b06cff':'#f55'}">${d.online?'ONLINE':'OFFLINE'}</div>
+      <div>${badges}</div>
+      <div class="actions">
+        ${!d.online ? `
+          <div class="dropdown" style="${ackActive ? 'display:none' : ''}">
+            <button onclick="toggleAckMenu('${d.id}')">Ack</button>
+            <div id="ack-${d.id}" class="dropdown-content" style="display:none;background:#333;position:absolute;">
+              <a href="#" onclick="ack('${d.id}','30m')">30m</a>
+              <a href="#" onclick="ack('${d.id}','1h')">1h</a>
+              <a href="#" onclick="ack('${d.id}','6h')">6h</a>
+              <a href="#" onclick="ack('${d.id}','8h')">8h</a>
+              <a href="#" onclick="ack('${d.id}','12h')">12h</a>
+            </div>
+          </div>
+          ${ackActive ? `<button onclick="clearAck('${d.id}')">Clear Ack</button>`:''}
+        `:``}
+        ${d.simulate ? `<button onclick="clearSim('${d.id}')">End Test</button>` : (d.online ? `<button onclick="simulate('${d.id}')">Test Outage</button>` : '')}
+        <button onclick="showHistory('${d.id}','${d.name}')">History</button>
+      </div>
+    </div>`;
+  }).join('');
+  routerGrid.innerHTML = html;
+}
+
+function renderCpeGrid(cps){
+  const cpeGrid=document.getElementById('cpeGrid');
+  if(!cpeGrid) return;
+  const html=cps.map(d=>{
+    const latBadge = (typeof d.cpe_latency==='number') ? badgeLatency(d.cpe_latency) : '';
+    return `<div class="card ${d.online?'':'offline'}">
+      <div class="cpe-badge">${latBadge}</div>
+      <h2>${d.name}</h2>
+      <div style="color:${d.online?'#b06cff':'#f55'}">${d.online?'ONLINE':'OFFLINE'}</div>
+    </div>`;
+  }).join('');
+  cpeGrid.innerHTML = html;
 }
