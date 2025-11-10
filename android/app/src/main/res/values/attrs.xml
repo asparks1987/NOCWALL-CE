@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!--
+    This file is a workaround for a build issue where the resource linker
+    incorrectly fails to find the 'colorBackground' attribute. Declaring it
+    here satisfies the linker without affecting the runtime behavior, as the
+    actual value is provided by the Material theme in themes.xml.
+    -->
     <attr name="colorBackground" format="color" />
 </resources>

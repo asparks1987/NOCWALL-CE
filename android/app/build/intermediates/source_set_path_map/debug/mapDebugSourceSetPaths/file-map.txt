@@ -47,12 +47,12 @@ com.uisp.noc.app-lifecycle-viewmodel-ktx-2.7.0-45 C:\Users\Aryns\.gradle\caches\
 com.uisp.noc.app-firebase-messaging-24.0.0-46 C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\e8730e3d07b68a65a3fcf10fc5733d1a\transformed\firebase-messaging-24.0.0\res
 com.uisp.noc.app-lifecycle-runtime-2.7.0-47 C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\eefbf4fd27c497506b37284e55853ea6\transformed\lifecycle-runtime-2.7.0\res
 com.uisp.noc.app-lifecycle-viewmodel-savedstate-2.7.0-48 C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\f15c2d8c7d4d5f49cdf0cebfbb178804\transformed\lifecycle-viewmodel-savedstate-2.7.0\res
-com.uisp.noc.app-pngs-49 C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\build\generated\res\pngs\debug
-com.uisp.noc.app-res-50 C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\build\generated\res\processDebugGoogleServices
-com.uisp.noc.app-resValues-51 C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\build\generated\res\resValues\debug
-com.uisp.noc.app-updated_navigation_xml-52 C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\build\generated\updated_navigation_xml\debug
-com.uisp.noc.app-packageDebugResources-53 C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\build\intermediates\incremental\debug\packageDebugResources\merged.dir
-com.uisp.noc.app-packageDebugResources-54 C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\build\intermediates\incremental\debug\packageDebugResources\stripped.dir
-com.uisp.noc.app-debug-55 C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\build\intermediates\merged_res\debug\mergeDebugResources
-com.uisp.noc.app-debug-56 C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\debug\res
-com.uisp.noc.app-main-57 C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\res
+com.uisp.noc.app-pngs-49 C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\build\generated\res\pngs\debug
+com.uisp.noc.app-res-50 C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\build\generated\res\processDebugGoogleServices
+com.uisp.noc.app-resValues-51 C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\build\generated\res\resValues\debug
+com.uisp.noc.app-updated_navigation_xml-52 C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\build\generated\updated_navigation_xml\debug
+com.uisp.noc.app-packageDebugResources-53 C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\build\intermediates\incremental\debug\packageDebugResources\merged.dir
+com.uisp.noc.app-packageDebugResources-54 C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\build\intermediates\incremental\debug\packageDebugResources\stripped.dir
+com.uisp.noc.app-debug-55 C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\build\intermediates\merged_res\debug\mergeDebugResources
+com.uisp.noc.app-debug-56 C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\debug\res
+com.uisp.noc.app-main-57 C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\res

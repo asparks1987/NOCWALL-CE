@@ -1,19 +1,19 @@
 [
     {
-        "merged": "com.uisp.noc.app-debug-54:/layout_view_overview_stat.xml.flat",
-        "source": "com.uisp.noc.app-main-56:/layout/view_overview_stat.xml"
+        "merged": "com.uisp.noc.app-debug-54:/drawable_bg_overview_stat.xml.flat",
+        "source": "com.uisp.noc.app-main-56:/drawable/bg_overview_stat.xml"
     },
     {
-        "merged": "com.uisp.noc.app-debug-54:/layout_activity_main.xml.flat",
-        "source": "com.uisp.noc.app-main-56:/layout/activity_main.xml"
-    },
-    {
-        "merged": "com.uisp.noc.app-debug-54:/layout_fragment_dashboard.xml.flat",
-        "source": "com.uisp.noc.app-main-56:/layout/fragment_dashboard.xml"
+        "merged": "com.uisp.noc.app-debug-54:/drawable_bg_status_chip_bad.xml.flat",
+        "source": "com.uisp.noc.app-main-56:/drawable/bg_status_chip_bad.xml"
     },
     {
         "merged": "com.uisp.noc.app-debug-54:/layout_item_device_status.xml.flat",
         "source": "com.uisp.noc.app-main-56:/layout/item_device_status.xml"
+    },
+    {
+        "merged": "com.uisp.noc.app-debug-54:/drawable_bg_status_chip_good.xml.flat",
+        "source": "com.uisp.noc.app-main-56:/drawable/bg_status_chip_good.xml"
     },
     {
         "merged": "com.uisp.noc.app-debug-54:/layout_fragment_login.xml.flat",
@@ -22,6 +22,30 @@
     {
         "merged": "com.uisp.noc.app-debug-54:/drawable_ic_launcher.xml.flat",
         "source": "com.uisp.noc.app-main-56:/drawable/ic_launcher.xml"
+    },
+    {
+        "merged": "com.uisp.noc.app-debug-54:/drawable_bg_status_chip_warn.xml.flat",
+        "source": "com.uisp.noc.app-main-56:/drawable/bg_status_chip_warn.xml"
+    },
+    {
+        "merged": "com.uisp.noc.app-debug-54:/layout_view_overview_stat.xml.flat",
+        "source": "com.uisp.noc.app-main-56:/layout/view_overview_stat.xml"
+    },
+    {
+        "merged": "com.uisp.noc.app-debug-54:/layout_activity_main.xml.flat",
+        "source": "com.uisp.noc.app-main-56:/layout/activity_main.xml"
+    },
+    {
+        "merged": "com.uisp.noc.app-debug-54:/drawable_divider_card.xml.flat",
+        "source": "com.uisp.noc.app-main-56:/drawable/divider_card.xml"
+    },
+    {
+        "merged": "com.uisp.noc.app-debug-54:/layout_fragment_dashboard.xml.flat",
+        "source": "com.uisp.noc.app-main-56:/layout/fragment_dashboard.xml"
+    },
+    {
+        "merged": "com.uisp.noc.app-debug-54:/drawable_bg_button_accent.xml.flat",
+        "source": "com.uisp.noc.app-main-56:/drawable/bg_button_accent.xml"
     },
     {
         "merged": "com.uisp.noc.app-debug-54:/xml_network_security_config.xml.flat",

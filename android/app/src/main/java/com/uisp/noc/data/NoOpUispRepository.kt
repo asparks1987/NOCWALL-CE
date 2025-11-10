@@ -21,13 +21,13 @@ class NoOpUispRepository : UispRepository() {
         // Do nothing, return empty summary
         return DevicesSummary(
             lastUpdatedEpochMillis = 0,
-            totalGateways = 0,
-            offlineGateways = emptyList<DeviceStatus>(),
-            totalBackbone = 0,
-            offlineBackbone = emptyList<DeviceStatus>(),
-            totalCpes = 0,
-            offlineCpes = emptyList<DeviceStatus>(),
-            highLatencyGateways = emptyList<DeviceStatus>()
+            gateways = emptyList(),
+            switches = emptyList(),
+            routers = emptyList(),
+            offlineGateways = emptyList(),
+            offlineBackbone = emptyList(),
+            offlineCpes = emptyList(),
+            highLatencyGateways = emptyList()
         )
     }
 }

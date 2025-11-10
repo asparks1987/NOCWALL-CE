@@ -136,6 +136,48 @@ footer {
 }
 .modal-close:hover { color: #fff; border-color: #666; box-shadow: 0 0 10px rgba(176,108,255,0.5); }
 
+.modal-subtitle {
+  margin: 0 0 12px 0;
+  color: #aaa;
+  font-size: 14px;
+}
+.history-status {
+  font-size: 14px;
+  color: #9ecbff;
+  margin-bottom: 10px;
+}
+.history-chart-wrap {
+  background: #111;
+  border: 1px solid #2c2c2c;
+  border-radius: 10px;
+  padding: 12px;
+  min-height: 280px;
+}
+.history-chart-wrap canvas {
+  width: 100% !important;
+  height: 320px !important;
+}
+.history-empty {
+  margin-top: 14px;
+  text-align: center;
+  font-style: italic;
+  color: #888;
+}
+.history-stats {
+  margin-top: 14px;
+  font-size: 14px;
+  color: #eee;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.history-stats span {
+  background: #1b1b1f;
+  border: 1px solid #2e2e38;
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
 /* Dropdown (Ack menu) */
 .dropdown { position: relative; display: inline-block; }
 .dropdown-content {

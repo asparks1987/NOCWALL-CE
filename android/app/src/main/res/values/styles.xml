@@ -63,7 +63,7 @@
     </style>
 
     <style name="Widget.Uisp.TextInputLayout" parent="@style/Widget.Material3.TextInputLayout.OutlinedBox">
-        <item name="boxBackgroundMode">outlined</item>
+        <item name="boxBackgroundMode">outline</item>
         <item name="boxStrokeColor">@color/uisp_card_border</item>
         <item name="boxStrokeWidth">1dp</item>
         <item name="boxStrokeWidthFocused">2dp</item>

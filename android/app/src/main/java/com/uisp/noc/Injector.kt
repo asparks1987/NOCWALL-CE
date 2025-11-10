@@ -31,10 +31,12 @@ object Injector {
      * Returns the singleton instance of the [UispRepository], creating it on a
      * background thread if it doesn't exist yet.
      */
-    private fun getRepository(): UispRepository {
-        return repository ?: runBlocking(Dispatchers.IO) {
-            UispRepository().also {
-                repository = it
+    fun getRepository(): UispRepository {
+        return repository ?: synchronized(this) {
+            repository ?: runBlocking(Dispatchers.IO) {
+                UispRepository().also {
+                    repository = it
+                }
             }
         }
     }

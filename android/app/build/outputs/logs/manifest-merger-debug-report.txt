@@ -1,9 +1,9 @@
 -- Merging decision tree log ---
 manifest
-ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:2:1-52:12
-INJECTED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:2:1-52:12
-INJECTED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:2:1-52:12
-INJECTED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:2:1-52:12
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:2:1-60:12
+INJECTED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:2:1-60:12
+INJECTED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:2:1-60:12
+INJECTED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:2:1-60:12
 MERGED from [com.google.android.material:material:1.11.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\1b1d0c24674fdfb3e5feb944ba3084aa\transformed\material-1.11.0\AndroidManifest.xml:17:1-24:12
 MERGED from [androidx.constraintlayout:constraintlayout:2.1.4] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\8aab230cb7bf91f47edc135585443662\transformed\constraintlayout-2.1.4\AndroidManifest.xml:2:1-11:12
 MERGED from [androidx.appcompat:appcompat-resources:1.6.1] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\8637ce254c1dda2e36308dffa800ca69\transformed\appcompat-resources-1.6.1\AndroidManifest.xml:17:1-22:12
@@ -91,15 +91,15 @@ MERGED from [androidx.documentfile:documentfile:1.0.0] C:\Users\Aryns\.gradle\ca
 MERGED from [androidx.localbroadcastmanager:localbroadcastmanager:1.0.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\6b0a078d681b66c59d18884415ca0a33\transformed\localbroadcastmanager-1.0.0\AndroidManifest.xml:17:1-22:12
 MERGED from [androidx.print:print:1.0.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\401cf130de53255f3fc449f272fd2c60\transformed\print-1.0.0\AndroidManifest.xml:17:1-22:12
 	package
-		INJECTED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml
+		INJECTED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml
 	android:versionName
-		INJECTED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml
+		INJECTED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml
 	android:versionCode
-		INJECTED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml
+		INJECTED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml
 	xmlns:android
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:2:11-69
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:2:11-69
 uses-permission#android.permission.INTERNET
-ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:4:5-67
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:4:5-67
 MERGED from [com.google.android.gms:play-services-measurement-api:22.0.2] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\0b1239cf449c0b09ef329b10f3727ab4\transformed\play-services-measurement-api-22.0.2\AndroidManifest.xml:22:5-67
 MERGED from [com.google.android.gms:play-services-measurement-api:22.0.2] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\0b1239cf449c0b09ef329b10f3727ab4\transformed\play-services-measurement-api-22.0.2\AndroidManifest.xml:22:5-67
 MERGED from [com.google.firebase:firebase-installations:18.0.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\123cd82138a4cfcfb5de1b460ed199d1\transformed\firebase-installations-18.0.0\AndroidManifest.xml:8:5-67
@@ -115,22 +115,36 @@ MERGED from [com.google.android.gms:play-services-measurement-sdk-api:22.0.2] C:
 MERGED from [com.google.android.datatransport:transport-backend-cct:3.1.9] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\e01162e0041edefcab68b1bb5c60e04f\transformed\transport-backend-cct-3.1.9\AndroidManifest.xml:25:5-67
 MERGED from [com.google.android.datatransport:transport-backend-cct:3.1.9] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\e01162e0041edefcab68b1bb5c60e04f\transformed\transport-backend-cct-3.1.9\AndroidManifest.xml:25:5-67
 	android:name
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:4:22-64
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:4:22-64
 uses-permission#android.permission.RECEIVE_BOOT_COMPLETED
-ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:5:5-81
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:5:5-81
 MERGED from [androidx.work:work-runtime:2.11.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\a0b9e715afacf41c3934d484619e38ee\transformed\work-runtime-2.11.0\AndroidManifest.xml:25:5-81
 MERGED from [androidx.work:work-runtime:2.11.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\a0b9e715afacf41c3934d484619e38ee\transformed\work-runtime-2.11.0\AndroidManifest.xml:25:5-81
 	android:name
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:5:22-78
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:5:22-78
 uses-permission#android.permission.POST_NOTIFICATIONS
-ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:6:5-77
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:6:5-77
 MERGED from [com.google.firebase:firebase-messaging:24.0.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\e8730e3d07b68a65a3fcf10fc5733d1a\transformed\firebase-messaging-24.0.0\AndroidManifest.xml:23:5-77
 MERGED from [com.google.firebase:firebase-messaging:24.0.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\e8730e3d07b68a65a3fcf10fc5733d1a\transformed\firebase-messaging-24.0.0\AndroidManifest.xml:23:5-77
 	android:name
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:6:22-74
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:6:22-74
+uses-permission#android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:7:5-95
+	android:name
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:7:22-92
+uses-permission#android.permission.FOREGROUND_SERVICE
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:8:5-77
+MERGED from [androidx.work:work-runtime:2.11.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\a0b9e715afacf41c3934d484619e38ee\transformed\work-runtime-2.11.0\AndroidManifest.xml:26:5-77
+MERGED from [androidx.work:work-runtime:2.11.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\a0b9e715afacf41c3934d484619e38ee\transformed\work-runtime-2.11.0\AndroidManifest.xml:26:5-77
+	android:name
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:8:22-74
+uses-permission#android.permission.FOREGROUND_SERVICE_DATA_SYNC
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:9:5-86
+	android:name
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:9:22-84
 application
-ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:8:5-50:19
-INJECTED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:8:5-50:19
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:11:5-58:19
+INJECTED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:11:5-58:19
 MERGED from [com.google.android.material:material:1.11.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\1b1d0c24674fdfb3e5feb944ba3084aa\transformed\material-1.11.0\AndroidManifest.xml:22:5-20
 MERGED from [com.google.android.material:material:1.11.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\1b1d0c24674fdfb3e5feb944ba3084aa\transformed\material-1.11.0\AndroidManifest.xml:22:5-20
 MERGED from [androidx.constraintlayout:constraintlayout:2.1.4] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\8aab230cb7bf91f47edc135585443662\transformed\constraintlayout-2.1.4\AndroidManifest.xml:9:5-20
@@ -200,87 +214,95 @@ MERGED from [com.google.android.datatransport:transport-backend-cct:3.1.9] C:\Us
 MERGED from [com.google.android.datatransport:transport-runtime:3.1.9] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\58ff15461a1b0458dfecc2524f39a354\transformed\transport-runtime-3.1.9\AndroidManifest.xml:25:5-39:19
 MERGED from [com.google.android.datatransport:transport-runtime:3.1.9] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\58ff15461a1b0458dfecc2524f39a354\transformed\transport-runtime-3.1.9\AndroidManifest.xml:25:5-39:19
 	android:extractNativeLibs
-		INJECTED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml
+		INJECTED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml
 	android:appComponentFactory
 		ADDED from [androidx.core:core:1.12.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\687ff97c96b2fb634c3f49ee22a0df56\transformed\core-1.12.0\AndroidManifest.xml:28:18-86
 	android:label
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:10:9-33
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:13:9-33
 	android:icon
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:11:9-45
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:14:9-45
 	android:theme
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:12:9-45
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:15:9-45
 	android:networkSecurityConfig
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:13:9-69
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:16:9-69
 	android:name
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:9:9-43
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:12:9-43
 activity#com.uisp.noc.MainActivity
-ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:14:9-21:20
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:17:9-24:20
 	android:exported
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:16:13-36
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:19:13-36
 	android:name
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:15:13-41
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:18:13-41
 intent-filter#action:name:android.intent.action.MAIN+category:name:android.intent.category.LAUNCHER
-ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:17:13-20:29
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:20:13-23:29
 action#android.intent.action.MAIN
-ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:18:17-69
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:21:17-69
 	android:name
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:18:25-66
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:21:25-66
 category#android.intent.category.LAUNCHER
-ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:19:17-77
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:22:17-77
 	android:name
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:19:27-74
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:22:27-74
 service#com.uisp.noc.MyFirebaseMessagingService
-ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:23:9-29:19
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:26:9-32:19
 	android:exported
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:25:13-37
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:28:13-37
 	android:name
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:24:13-55
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:27:13-55
 intent-filter#action:name:com.google.firebase.MESSAGING_EVENT
-ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:26:13-28:29
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:29:13-31:29
 action#com.google.firebase.MESSAGING_EVENT
-ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:27:17-78
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:30:17-78
 	android:name
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:27:25-75
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:30:25-75
+service#com.uisp.noc.GatewayStatusService
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:34:9-37:56
+	android:exported
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:36:13-37
+	android:foregroundServiceType
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:37:13-53
+	android:name
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:35:13-49
 service#com.uisp.noc.WearConfigListenerService
-ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:31:9-37:19
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:39:9-45:19
 	android:exported
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:33:13-36
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:41:13-36
 	android:name
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:32:13-54
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:40:13-54
 intent-filter#action:name:com.google.android.gms.wearable.BIND_LISTENER
-ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:34:13-36:29
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:42:13-44:29
 action#com.google.android.gms.wearable.BIND_LISTENER
-ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:35:17-88
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:43:17-88
 	android:name
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:35:25-85
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:43:25-85
 receiver#com.uisp.noc.WearConfigSyncReceiver
-ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:39:9-48:20
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:47:9-56:20
 	android:exported
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:41:13-37
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:49:13-37
 	android:name
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:40:13-51
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:48:13-51
 intent-filter#action:name:android.intent.action.BOOT_COMPLETED+action:name:android.intent.action.MY_PACKAGE_REPLACED+action:name:android.intent.action.TIMEZONE_CHANGED+action:name:android.intent.action.TIME_CHANGED
-ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:42:13-47:29
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:50:13-55:29
 action#android.intent.action.BOOT_COMPLETED
-ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:43:17-79
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:51:17-79
 	android:name
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:43:25-76
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:51:25-76
 action#android.intent.action.MY_PACKAGE_REPLACED
-ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:44:17-84
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:52:17-84
 	android:name
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:44:25-81
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:52:25-81
 action#android.intent.action.TIME_CHANGED
-ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:45:17-77
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:53:17-77
 	android:name
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:45:25-74
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:53:25-74
 action#android.intent.action.TIMEZONE_CHANGED
-ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:46:17-81
+ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:54:17-81
 	android:name
-		ADDED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:46:25-78
+		ADDED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml:54:25-78
 uses-sdk
-INJECTED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml reason: use-sdk injection requested
-INJECTED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml
-INJECTED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml
+INJECTED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml reason: use-sdk injection requested
+INJECTED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml
+INJECTED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml
 MERGED from [com.google.android.material:material:1.11.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\1b1d0c24674fdfb3e5feb944ba3084aa\transformed\material-1.11.0\AndroidManifest.xml:20:5-44
 MERGED from [com.google.android.material:material:1.11.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\1b1d0c24674fdfb3e5feb944ba3084aa\transformed\material-1.11.0\AndroidManifest.xml:20:5-44
 MERGED from [androidx.constraintlayout:constraintlayout:2.1.4] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\8aab230cb7bf91f47edc135585443662\transformed\constraintlayout-2.1.4\AndroidManifest.xml:5:5-7:41
@@ -454,9 +476,9 @@ MERGED from [androidx.localbroadcastmanager:localbroadcastmanager:1.0.0] C:\User
 MERGED from [androidx.print:print:1.0.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\401cf130de53255f3fc449f272fd2c60\transformed\print-1.0.0\AndroidManifest.xml:20:5-44
 MERGED from [androidx.print:print:1.0.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\401cf130de53255f3fc449f272fd2c60\transformed\print-1.0.0\AndroidManifest.xml:20:5-44
 	android:targetSdkVersion
-		INJECTED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml
+		INJECTED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml
 	android:minSdkVersion
-		INJECTED from C:\Users\Aryns\My Drive\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml
+		INJECTED from C:\Users\Aryns\Desktop\dev\UISP-NOC\android\app\src\main\AndroidManifest.xml
 service#com.google.firebase.components.ComponentDiscoveryService
 ADDED from [com.google.firebase:firebase-messaging-ktx:24.0.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\efd7511531b7387271810ed5e1ff56da\transformed\firebase-messaging-ktx-24.0.0\AndroidManifest.xml:23:9-29:19
 MERGED from [com.google.firebase:firebase-messaging:24.0.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\e8730e3d07b68a65a3fcf10fc5733d1a\transformed\firebase-messaging-24.0.0\AndroidManifest.xml:54:9-63:19
@@ -679,10 +701,6 @@ ADDED from [androidx.emoji2:emoji2:1.2.0] C:\Users\Aryns\.gradle\caches\9.0-mile
 		ADDED from [androidx.emoji2:emoji2:1.2.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\670e6579d53b2845fbfa28a173f78eb6\transformed\emoji2-1.2.0\AndroidManifest.xml:31:17-49
 	android:name
 		ADDED from [androidx.emoji2:emoji2:1.2.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\670e6579d53b2845fbfa28a173f78eb6\transformed\emoji2-1.2.0\AndroidManifest.xml:30:17-75
-uses-permission#android.permission.FOREGROUND_SERVICE
-ADDED from [androidx.work:work-runtime:2.11.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\a0b9e715afacf41c3934d484619e38ee\transformed\work-runtime-2.11.0\AndroidManifest.xml:26:5-77
-	android:name
-		ADDED from [androidx.work:work-runtime:2.11.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\a0b9e715afacf41c3934d484619e38ee\transformed\work-runtime-2.11.0\AndroidManifest.xml:26:22-74
 meta-data#androidx.work.WorkManagerInitializer
 ADDED from [androidx.work:work-runtime:2.11.0] C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\a0b9e715afacf41c3934d484619e38ee\transformed\work-runtime-2.11.0\AndroidManifest.xml:34:13-36:52
 	android:value

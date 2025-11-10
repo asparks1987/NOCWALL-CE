@@ -1,10 +1,13 @@
 package com.uisp.noc
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
@@ -47,9 +50,12 @@ class MainActivity : AppCompatActivity() {
         loadingOverlay = findViewById(R.id.loading_overlay)
         setSupportActionBar(toolbar)
 
+        // Create the notification channel
+        NotificationHelper.createNotificationChannel(this)
+
         // Synchronously create the ViewModel.
         val factory = Injector.provideViewModelFactory(applicationContext)
-        viewModel = ViewModelProvider(this, factory)[MainViewModel::class.java]
+        viewModel = ViewModelProvider(this, factory).get(MainViewModel::class.java)
         collectFlows(viewModel)
 
         if (savedInstanceState == null) {
@@ -59,6 +65,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         askNotificationPermission()
+        askForBatteryOptimizations()
     }
 
     private fun askNotificationPermission() {
@@ -68,6 +75,17 @@ class MainActivity : AppCompatActivity() {
             ) {
                 requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
+        }
+    }
+
+    private fun askForBatteryOptimizations() {
+        val packageName = packageName
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+            val intent = Intent()
+            intent.action = Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+            intent.data = Uri.parse("package:$packageName")
+            startActivity(intent)
         }
     }
 
@@ -98,11 +116,16 @@ class MainActivity : AppCompatActivity() {
                 showLoading(false)
                 showLogin()
                 toolbar.subtitle = null
+                // Stop the service when the user logs out
+                stopService(Intent(this, GatewayStatusService::class.java))
             }
             is MainViewModel.SessionState.Authenticated -> {
                 showLoading(false)
                 showDashboard()
                 toolbar.subtitle = state.session.uispBaseUrl.toHostLabel()
+                // Start the service when the user is authenticated
+                val intent = Intent(this, GatewayStatusService::class.java)
+                ContextCompat.startForegroundService(this, intent)
             }
         }
     }

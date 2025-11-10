@@ -143,14 +143,13 @@ open class UispRepository(private val httpClient: OkHttpClient = defaultClient()
      */
     private fun parseDevices(payload: String): DevicesSummary {
         val root = JSONArray(payload)
+        val gateways = mutableListOf<DeviceStatus>()
+        val switches = mutableListOf<DeviceStatus>()
+        val routers = mutableListOf<DeviceStatus>()
         val offlineGateways = mutableListOf<DeviceStatus>()
         val offlineBackbone = mutableListOf<DeviceStatus>()
         val offlineCpes = mutableListOf<DeviceStatus>()
         val highLatency = mutableListOf<DeviceStatus>()
-
-        var totalGateways = 0
-        var totalBackbone = 0
-        var totalCpes = 0
 
         for (i in 0 until root.length()) {
             val device = root.optJSONObject(i) ?: continue
@@ -174,21 +173,21 @@ open class UispRepository(private val httpClient: OkHttpClient = defaultClient()
                 isGateway = isGateway,
                 isBackbone = isBackbone,
                 online = online,
-                latencyMs = latencyMs
+                latencyMs = latencyMs,
+                status = overview?.optString("status") ?: "unknown"
             )
 
-            when {
-                isGateway -> {
-                    totalGateways += 1
-                    if (!online) offlineGateways += status
-                }
-                isBackbone -> {
-                    totalBackbone += 1
-                    if (!online) offlineBackbone += status
-                }
-                else -> {
-                    totalCpes += 1
-                    if (!online) offlineCpes += status
+            when (role) {
+                "gateway" -> gateways.add(status)
+                "switch" -> switches.add(status)
+                "router" -> routers.add(status)
+            }
+
+            if (!online) {
+                when {
+                    isGateway -> offlineGateways.add(status)
+                    isBackbone -> offlineBackbone.add(status)
+                    else -> offlineCpes.add(status)
                 }
             }
 
@@ -199,11 +198,11 @@ open class UispRepository(private val httpClient: OkHttpClient = defaultClient()
 
         return DevicesSummary(
             lastUpdatedEpochMillis = System.currentTimeMillis(),
-            totalGateways = totalGateways,
+            gateways = gateways,
+            switches = switches,
+            routers = routers,
             offlineGateways = offlineGateways,
-            totalBackbone = totalBackbone,
             offlineBackbone = offlineBackbone,
-            totalCpes = totalCpes,
             offlineCpes = offlineCpes,
             highLatencyGateways = highLatency
         )

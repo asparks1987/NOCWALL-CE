@@ -60,6 +60,9 @@ let mutationVersion=0;
 const pendingSimOverrides=new Map();
 const SIM_OVERRIDE_TTL_MS = 60000;
 let pollTimer=null;
+let chartJsLoader=null;
+let cpeHistoryChart=null;
+let cpeHistoryReqId=0;
 
 const POLL_INTERVAL_NORMAL_MS = 5000;
 const POLL_INTERVAL_FAST_MS = 2000;
@@ -548,7 +551,234 @@ function renderCpeGrid(cps){
       <div class="cpe-badge">${latBadge}</div>
       <h2>${d.name}</h2>
       <div style="color:${d.online?'#b06cff':'#f55'}">${d.online?'ONLINE':'OFFLINE'}</div>
+      <div class="actions">
+        <button onclick="openCpeHistory('${d.id}','${d.name}')">History</button>
+      </div>
     </div>`;
   }).join('');
   cpeGrid.innerHTML = html;
 }
+
+function ensureChartJs(){
+  if(window.Chart) return Promise.resolve();
+  if(chartJsLoader) return chartJsLoader;
+  chartJsLoader = new Promise((resolve,reject)=>{
+    const script=document.createElement('script');
+    script.src='https://cdn.jsdelivr.net/npm/chart.js';
+    script.async=true;
+    script.onload=()=>resolve();
+    script.onerror=()=>reject(new Error('chartjs-load-failed'));
+    document.head.appendChild(script);
+  });
+  return chartJsLoader;
+}
+
+function getCpeHistoryChart(){
+  if(cpeHistoryChart) return cpeHistoryChart;
+  if(typeof Chart==='undefined') return null;
+  const canvas=document.getElementById('cpeHistoryChart');
+  if(!canvas) return null;
+  cpeHistoryChart=new Chart(canvas,{
+    type:'line',
+    data:{
+      labels:[],
+      datasets:[{
+        label:'Latency (ms)',
+        data:[],
+        borderColor:'#7acbff',
+        backgroundColor:'rgba(122,203,255,0.15)',
+        tension:0.25,
+        spanGaps:true,
+        fill:true,
+        pointRadius:0
+      }]
+    },
+    options:{
+      responsive:true,
+      maintainAspectRatio:false,
+      animation:false,
+      plugins:{
+        legend:{ display:false },
+        tooltip:{
+          mode:'index',
+          intersect:false,
+          callbacks:{
+            label(ctx){
+              const latency = typeof ctx.parsed.y === 'number' ? ctx.parsed.y : null;
+              return latency!=null ? `${ctx.label}: ${latency} ms` : `${ctx.label}: no response`;
+            }
+          }
+        }
+      },
+      scales:{
+        x:{
+          ticks:{ color:'#bbb' },
+          grid:{ color:'rgba(255,255,255,0.04)' }
+        },
+        y:{
+          ticks:{ color:'#bbb' },
+          grid:{ color:'rgba(255,255,255,0.04)' }
+        }
+      }
+    }
+  });
+  return cpeHistoryChart;
+}
+
+function setCpeHistoryStatus(text){
+  const el=document.getElementById('cpeHistoryStatus');
+  if(!el) return;
+  if(text){
+    el.textContent=text;
+    el.style.display='';
+  } else {
+    el.textContent='';
+    el.style.display='none';
+  }
+}
+
+function setCpeHistoryEmpty(show,message){
+  const el=document.getElementById('cpeHistoryEmpty');
+  if(!el) return;
+  if(show){
+    el.textContent=message||'';
+    el.style.display='';
+  } else {
+    el.textContent='';
+    el.style.display='none';
+  }
+}
+
+function setCpeHistoryStats(stats){
+  const el=document.getElementById('cpeHistoryStats');
+  if(!el) return;
+  if(!stats){
+    el.innerHTML='';
+    el.style.display='none';
+    return;
+  }
+  const parts=[];
+  if(typeof stats.count==='number'){
+    parts.push(`<span>${stats.count} sample${stats.count===1?'':'s'}</span>`);
+  }
+  if(typeof stats.avg==='number'){
+    parts.push(`<span>Avg ${stats.avg} ms</span>`);
+  }
+  if(typeof stats.min==='number'){
+    parts.push(`<span>Min ${stats.min} ms</span>`);
+  }
+  if(typeof stats.max==='number'){
+    parts.push(`<span>Max ${stats.max} ms</span>`);
+  }
+  el.innerHTML = parts.join('');
+  el.style.display = parts.length ? 'flex' : 'none';
+}
+
+function formatCpeHistoryLabel(tsMs){
+  if(typeof tsMs!=='number' || !isFinite(tsMs) || tsMs<=0) return 'Unknown';
+  const d=new Date(tsMs);
+  try{
+    return d.toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+  }catch(_){
+    return d.toISOString().replace('T',' ').slice(0,16);
+  }
+}
+
+function openCpeHistory(id,name){
+  if(!id) return;
+  const modal=document.getElementById('cpeHistoryModal');
+  if(!modal) return;
+  const title=document.getElementById('cpeHistoryTitle');
+  if(title) title.textContent = name || id;
+  const subtitle=document.getElementById('cpeHistorySubtitle');
+  if(subtitle) subtitle.textContent = 'Last 7 days of recorded ping latency';
+  modal.style.display='block';
+  setCpeHistoryStatus('Loading ping history…');
+  setCpeHistoryEmpty(false,'');
+  setCpeHistoryStats(null);
+  const loadId=++cpeHistoryReqId;
+  Promise.all([ensureChartJs(), fetchCpeHistoryData(id)])
+    .then(([,payload])=>{
+      if(loadId !== cpeHistoryReqId) return;
+      applyCpeHistoryPayload(payload);
+    })
+    .catch(()=>{
+      if(loadId !== cpeHistoryReqId) return;
+      setCpeHistoryStatus('Unable to load ping history.');
+      setCpeHistoryEmpty(false,'');
+      setCpeHistoryStats(null);
+    });
+}
+
+function fetchCpeHistoryData(id){
+  return fetch(`?ajax=cpe_history&id=${encodeURIComponent(id)}&t=${Date.now()}`, { cache:'no-store' })
+    .then(resp=>{
+      if(resp.status===401){ location.reload(); throw new Error('unauthorized'); }
+      if(!resp.ok) throw new Error('http_'+resp.status);
+      return resp.json();
+    });
+}
+
+function applyCpeHistoryPayload(payload){
+  const points = (payload && Array.isArray(payload.points)) ? payload.points : [];
+  const labels=[];
+  const values=[];
+  const goodVals=[];
+  points.forEach(pt=>{
+    const tsMs = typeof pt.ts_ms === 'number' ? pt.ts_ms : null;
+    labels.push(formatCpeHistoryLabel(tsMs));
+    if(typeof pt.latency === 'number' && isFinite(pt.latency)){
+      const val = Math.round(pt.latency*10)/10;
+      values.push(val);
+      goodVals.push(val);
+    } else {
+      values.push(null);
+    }
+  });
+  const chart=getCpeHistoryChart();
+  if(chart){
+    chart.data.labels = labels;
+    chart.data.datasets[0].data = values;
+    chart.update('none');
+  }
+  if(points.length===0){
+    setCpeHistoryStatus('');
+    setCpeHistoryEmpty(true,'No ping samples recorded for this CPE in the last 7 days.');
+    setCpeHistoryStats(null);
+  } else {
+    setCpeHistoryStatus(`Loaded ${points.length} sample${points.length===1?'':'s'}.`);
+    setCpeHistoryEmpty(false,'');
+    if(goodVals.length){
+      const min = Math.min(...goodVals);
+      const max = Math.max(...goodVals);
+      const avg = goodVals.reduce((sum,val)=>sum+val,0)/goodVals.length;
+      setCpeHistoryStats({
+        count: points.length,
+        avg: Math.round(avg*10)/10,
+        min: Math.round(min*10)/10,
+        max: Math.round(max*10)/10
+      });
+    } else {
+      setCpeHistoryStats({
+        count: points.length
+      });
+    }
+  }
+}
+
+function closeCpeHistory(){
+  const modal=document.getElementById('cpeHistoryModal');
+  if(modal){
+    modal.style.display='none';
+  }
+  cpeHistoryReqId++;
+}
+
+document.addEventListener('keydown',ev=>{
+  if(ev.key==='Escape'){
+    const modal=document.getElementById('cpeHistoryModal');
+    if(modal && modal.style.display==='block'){
+      closeCpeHistory();
+    }
+  }
+});

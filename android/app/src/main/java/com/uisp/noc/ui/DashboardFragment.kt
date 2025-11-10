@@ -169,24 +169,26 @@ class DashboardFragment : Fragment() {
             lastUpdated.text = "Last updated ${formatter.format(Date(summary.lastUpdatedEpochMillis))}"
 
             overviewGatewaysValue.text = summary.offlineGateways.size.takeIf { it > 0 }
-                ?.let { "$it / ${summary.totalGateways}" }
-                ?: summary.totalGateways.toString()
+                ?.let { "$it / ${summary.gateways.size}" }
+                ?: summary.gateways.size.toString()
             overviewGatewaysLabel.text =
                 if (summary.offlineGateways.isEmpty()) "Gateways online" else "Gateways offline"
             val gatewaysIssue = summary.offlineGateways.isNotEmpty()
             setOverviewState(overviewGatewaysValue, overviewGatewaysLabel, gatewaysIssue)
 
-            overviewBackboneValue.text = summary.offlineBackbone.size.takeIf { it > 0 }
-                ?.let { "$it / ${summary.totalBackbone}" }
-                ?: summary.totalBackbone.toString()
+            val backboneDevices = summary.routers + summary.switches
+            val offlineBackbone = summary.offlineBackbone
+            overviewBackboneValue.text = offlineBackbone.size.takeIf { it > 0 }
+                ?.let { "$it / ${backboneDevices.size}" }
+                ?: backboneDevices.size.toString()
             overviewBackboneLabel.text =
-                if (summary.offlineBackbone.isEmpty()) "Backbone online" else "Backbone offline"
-            val backboneIssue = summary.offlineBackbone.isNotEmpty()
+                if (offlineBackbone.isEmpty()) "Backbone online" else "Backbone offline"
+            val backboneIssue = offlineBackbone.isNotEmpty()
             setOverviewState(overviewBackboneValue, overviewBackboneLabel, backboneIssue)
 
             overviewCpesValue.text = summary.offlineCpes.size.takeIf { it > 0 }
-                ?.let { "$it / ${summary.totalCpes}" }
-                ?: summary.totalCpes.toString()
+                ?.let { "$it / ${summary.offlineCpes.size + summary.offlineGateways.size + summary.offlineBackbone.size}" }
+                ?: (summary.offlineCpes.size + summary.offlineGateways.size + summary.offlineBackbone.size).toString()
             overviewCpesLabel.text =
                 if (summary.offlineCpes.isEmpty()) "Subscribers online" else "Subscribers offline"
             val subscribersIssue = summary.offlineCpes.isNotEmpty()

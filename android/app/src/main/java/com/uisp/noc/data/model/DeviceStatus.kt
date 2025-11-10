@@ -10,5 +10,6 @@ data class DeviceStatus(
     val isGateway: Boolean,
     val isBackbone: Boolean,
     val online: Boolean,
-    val latencyMs: Double?
+    val latencyMs: Double?,
+    val status: String
 )

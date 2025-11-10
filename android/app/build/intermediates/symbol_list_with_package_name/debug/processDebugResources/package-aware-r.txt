@@ -323,6 +323,7 @@ attr collapsingToolbarLayoutMediumStyle
 attr collapsingToolbarLayoutStyle
 attr color
 attr colorAccent
+attr colorBackground
 attr colorBackgroundFloating
 attr colorButtonNormal
 attr colorContainer
@@ -2100,9 +2101,6 @@ color primary_text_default_material_dark
 color primary_text_default_material_light
 color primary_text_disabled_material_dark
 color primary_text_disabled_material_light
-color purple_200
-color purple_500
-color purple_700
 color ripple_material_dark
 color ripple_material_light
 color secondary_text_default_material_dark
@@ -2115,10 +2113,30 @@ color switch_thumb_material_dark
 color switch_thumb_material_light
 color switch_thumb_normal_material_dark
 color switch_thumb_normal_material_light
-color teal_200
-color teal_700
 color tooltip_background_dark
 color tooltip_background_light
+color uisp_accent_end
+color uisp_accent_primary
+color uisp_accent_secondary
+color uisp_accent_start
+color uisp_background
+color uisp_card
+color uisp_card_border
+color uisp_outline
+color uisp_shadow
+color uisp_status_bad_bg
+color uisp_status_bad_fg
+color uisp_status_good_bg
+color uisp_status_good_fg
+color uisp_status_warn_bg
+color uisp_status_warn_fg
+color uisp_surface
+color uisp_surface_variant
+color uisp_text_muted
+color uisp_text_primary
+color uisp_text_secondary
+color uisp_toolbar
+color uisp_toolbar_border
 color white
 dimen abc_action_bar_content_inset_material
 dimen abc_action_bar_content_inset_with_nav
@@ -2997,6 +3015,11 @@ drawable abc_textfield_search_material
 drawable abc_vector_test
 drawable avd_hide_password
 drawable avd_show_password
+drawable bg_button_accent
+drawable bg_overview_stat
+drawable bg_status_chip_bad
+drawable bg_status_chip_good
+drawable bg_status_chip_warn
 drawable btn_checkbox_checked_mtrl
 drawable btn_checkbox_checked_to_unchecked_mtrl_animation
 drawable btn_checkbox_unchecked_mtrl
@@ -3029,6 +3052,7 @@ drawable design_ic_visibility
 drawable design_ic_visibility_off
 drawable design_password_eye
 drawable design_snackbar_background
+drawable divider_card
 drawable googleg_disabled_color_18
 drawable googleg_standard_color_18
 drawable ic_arrow_back_black_24
@@ -3232,6 +3256,7 @@ id button_login
 id cache_measures
 id callMeasure
 id cancel_button
+id card_connection
 id card_error
 id card_latency
 id card_offline_backbone
@@ -3615,6 +3640,8 @@ id text_input_start_icon
 id text_label
 id text_last_updated
 id text_name
+id text_status_chip
+id text_subtitle
 id text_title
 id text_value
 id textinput_counter
@@ -3947,6 +3974,13 @@ string hide_bottom_view_on_scroll_behavior
 string icon_content_description
 string item_view_role_description
 string loading_indicator_description
+string login_backend_helper
+string login_backend_hint
+string login_button
+string login_password_hint
+string login_subtitle
+string login_title
+string login_username_hint
 string m3_exceed_max_badge_text_suffix
 string m3_ref_typeface_brand_medium
 string m3_ref_typeface_brand_regular
@@ -4580,6 +4614,10 @@ style TextAppearance_MaterialComponents_Subtitle1
 style TextAppearance_MaterialComponents_Subtitle2
 style TextAppearance_MaterialComponents_TimePicker_Title
 style TextAppearance_MaterialComponents_Tooltip
+style TextAppearance_Uisp_Muted
+style TextAppearance_Uisp_SectionLabel
+style TextAppearance_Uisp_ToolbarSubtitle
+style TextAppearance_Uisp_ToolbarTitle
 style TextAppearance_Widget_AppCompat_ExpandedMenu_Item
 style TextAppearance_Widget_AppCompat_Toolbar_Subtitle
 style TextAppearance_Widget_AppCompat_Toolbar_Title
@@ -5177,6 +5215,12 @@ style Widget_MaterialComponents_Toolbar_PrimarySurface
 style Widget_MaterialComponents_Toolbar_Surface
 style Widget_MaterialComponents_Tooltip
 style Widget_Support_CoordinatorLayout
+style Widget_Uisp_ButtonAccent
+style Widget_Uisp_Card
+style Widget_Uisp_DeviceCard
+style Widget_Uisp_TextInputEditText
+style Widget_Uisp_TextInputLayout
+style Widget_Uisp_Toolbar
 styleable ActionBar background backgroundSplit backgroundStacked contentInsetEnd contentInsetEndWithActions contentInsetLeft contentInsetRight contentInsetStart contentInsetStartWithNavigation customNavigationLayout displayOptions divider elevation height hideOnContentScroll homeAsUpIndicator homeLayout icon indeterminateProgressStyle itemPadding logo navigationMode popupTheme progressBarPadding progressBarStyle subtitle subtitleTextStyle title titleTextStyle
 styleable ActionBarLayout android_layout_gravity
 styleable ActionMenuItemView android_minWidth

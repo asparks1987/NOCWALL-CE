@@ -131,6 +131,14 @@ $db->exec("CREATE TABLE IF NOT EXISTS metrics (
     latency REAL,
     online INTEGER
 )");
+$db->exec("CREATE TABLE IF NOT EXISTS cpe_pings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT,
+    name TEXT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    latency REAL
+)");
+$db->exec("CREATE INDEX IF NOT EXISTS idx_cpe_pings_device_ts ON cpe_pings(device_id, timestamp)");
 
 // Asset/version cache-busting
 // Calculate a version based on the latest mtime of key files
@@ -304,6 +312,20 @@ if(isset($_GET['ajax'])){
                     $cpe_lat = ping_host($d['ipAddress']??null);
                     $cache[$id]['last_cpe_ping_at'] = $now;
                     $cache[$id]['last_cpe_ping_ms'] = $cpe_lat;
+                    $stmt = $db->prepare("INSERT INTO cpe_pings (device_id,name,latency) VALUES (?,?,?)");
+                    $stmt->bindValue(1,$id,SQLITE3_TEXT);
+                    $stmt->bindValue(2,$name,SQLITE3_TEXT);
+                    if($cpe_lat === null){
+                        $stmt->bindValue(3,null,SQLITE3_NULL);
+                    } else {
+                        $stmt->bindValue(3,$cpe_lat,SQLITE3_FLOAT);
+                    }
+                    @$stmt->execute();
+                    if(($cache['_cpe_last_prune'] ?? 0) <= ($now - 3600)){
+                        $cache['_cpe_last_prune'] = $now;
+                        @$db->exec("DELETE FROM cpe_pings WHERE timestamp < datetime('now','-30 days')");
+                        $cache_changed = true;
+                    }
                     $cache_changed = true;
                 } else {
                     $cpe_lat = $cache[$id]['last_cpe_ping_ms'] ?? null;
@@ -450,6 +472,29 @@ if(isset($_GET['ajax'])){
         $rows=[];
         while($r=$res->fetchArray(SQLITE3_ASSOC)) $rows[]=$r;
         echo json_encode(array_reverse($rows)); exit;
+    }
+    if($_GET['ajax']==='cpe_history' && !empty($_GET['id'])){
+        $id=trim((string)$_GET['id']);
+        $stmt=$db->prepare("SELECT strftime('%s', timestamp) AS ts, latency FROM cpe_pings WHERE device_id=? AND timestamp >= datetime('now','-7 days') ORDER BY timestamp ASC");
+        $stmt->bindValue(1,$id,SQLITE3_TEXT);
+        $res=$stmt->execute();
+        $points=[];
+        if($res){
+            while($row=$res->fetchArray(SQLITE3_ASSOC)){
+                $ts = isset($row['ts']) ? (int)$row['ts'] : null;
+                $latVal = array_key_exists('latency',$row) ? $row['latency'] : null;
+                $points[]=[
+                    'ts_ms'=>$ts!==null ? $ts*1000 : null,
+                    'latency'=>$latVal===null ? null : (float)$latVal
+                ];
+            }
+        }
+        echo json_encode([
+            'device_id'=>$id,
+            'range_days'=>7,
+            'points'=>$points
+        ]);
+        exit;
     }
 
     if($_GET['ajax']==='gotifytest'){
@@ -765,6 +810,20 @@ if(isset($_GET['view']) && $_GET['view']==='device'){
       <button class="btn-accent" type="submit">Provision / Reload Caddy</button>
     </form>
     <pre id="tlsStatus" style="background:#111;border:1px solid #333;border-radius:8px;padding:10px;color:#8ad;overflow:auto;max-height:260px"></pre>
+  </div>
+ </div>
+
+<div id="cpeHistoryModal" class="modal" onclick="if(event.target===this) closeCpeHistory();">
+  <div class="modal-content">
+    <button class="modal-close" onclick="closeCpeHistory()" aria-label="Close">&times;</button>
+    <h3 id="cpeHistoryTitle">CPE Ping History</h3>
+    <p id="cpeHistorySubtitle" class="modal-subtitle">Last 7 days of recorded ping latency</p>
+    <div id="cpeHistoryStatus" class="history-status">Select a CPE to load its history.</div>
+    <div class="history-chart-wrap">
+      <canvas id="cpeHistoryChart" width="900" height="320"></canvas>
+    </div>
+    <div id="cpeHistoryEmpty" class="history-empty" style="display:none;">No ping samples recorded for this period.</div>
+    <div id="cpeHistoryStats" class="history-stats"></div>
   </div>
  </div>
 
