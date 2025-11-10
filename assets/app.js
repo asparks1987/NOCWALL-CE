@@ -551,9 +551,6 @@ function renderCpeGrid(cps){
       <div class="cpe-badge">${latBadge}</div>
       <h2>${d.name}</h2>
       <div style="color:${d.online?'#b06cff':'#f55'}">${d.online?'ONLINE':'OFFLINE'}</div>
-      <div class="actions">
-        <button onclick="openCpeHistory('${d.id}','${d.name}')">History</button>
-      </div>
     </div>`;
   }).join('');
   cpeGrid.innerHTML = html;
@@ -670,6 +667,9 @@ function setCpeHistoryStats(stats){
   if(typeof stats.max==='number'){
     parts.push(`<span>Max ${stats.max} ms</span>`);
   }
+  if(typeof stats.devices==='number' && stats.devices>0){
+    parts.push(`<span>${stats.devices} unique CPE${stats.devices===1?'':'s'}</span>`);
+  }
   el.innerHTML = parts.join('');
   el.style.display = parts.length ? 'flex' : 'none';
 }
@@ -685,15 +685,22 @@ function formatCpeHistoryLabel(tsMs){
 }
 
 function openCpeHistory(id,name){
-  if(!id) return;
   const modal=document.getElementById('cpeHistoryModal');
   if(!modal) return;
   const title=document.getElementById('cpeHistoryTitle');
-  if(title) title.textContent = name || id;
+  if(title){
+    if(id){
+      title.textContent = name || id;
+    } else {
+      title.textContent = 'All CPE Ping History';
+    }
+  }
   const subtitle=document.getElementById('cpeHistorySubtitle');
-  if(subtitle) subtitle.textContent = 'Last 7 days of recorded ping latency';
+  if(subtitle){
+    subtitle.textContent = id ? 'Last 7 days of recorded ping latency' : 'All sampled CPE pings for the last 7 days';
+  }
   modal.style.display='block';
-  setCpeHistoryStatus('Loading ping history…');
+  setCpeHistoryStatus(id ? 'Loading ping history…' : 'Loading all CPE pings…');
   setCpeHistoryEmpty(false,'');
   setCpeHistoryStats(null);
   const loadId=++cpeHistoryReqId;
@@ -711,7 +718,9 @@ function openCpeHistory(id,name){
 }
 
 function fetchCpeHistoryData(id){
-  return fetch(`?ajax=cpe_history&id=${encodeURIComponent(id)}&t=${Date.now()}`, { cache:'no-store' })
+  const params=new URLSearchParams({ ajax:'cpe_history', t:Date.now() });
+  if(id){ params.set('id', id); }
+  return fetch(`?${params.toString()}`, { cache:'no-store' })
     .then(resp=>{
       if(resp.status===401){ location.reload(); throw new Error('unauthorized'); }
       if(!resp.ok) throw new Error('http_'+resp.status);
@@ -720,12 +729,17 @@ function fetchCpeHistoryData(id){
 }
 
 function applyCpeHistoryPayload(payload){
+  const isSingleDevice = !!(payload && payload.device_id);
   const points = (payload && Array.isArray(payload.points)) ? payload.points : [];
   const labels=[];
   const values=[];
   const goodVals=[];
+  const deviceSet=new Set();
   points.forEach(pt=>{
     const tsMs = typeof pt.ts_ms === 'number' ? pt.ts_ms : null;
+    if(pt.device_id){
+      deviceSet.add(pt.device_id);
+    }
     labels.push(formatCpeHistoryLabel(tsMs));
     if(typeof pt.latency === 'number' && isFinite(pt.latency)){
       const val = Math.round(pt.latency*10)/10;
@@ -741,13 +755,16 @@ function applyCpeHistoryPayload(payload){
     chart.data.datasets[0].data = values;
     chart.update('none');
   }
+  const uniqueDeviceCount = deviceSet.size;
   if(points.length===0){
     setCpeHistoryStatus('');
-    setCpeHistoryEmpty(true,'No ping samples recorded for this CPE in the last 7 days.');
+    setCpeHistoryEmpty(true, isSingleDevice ? 'No ping samples recorded for this CPE in the last 7 days.' : 'No ping samples recorded for any CPE in the last 7 days.');
     setCpeHistoryStats(null);
   } else {
-    setCpeHistoryStatus(`Loaded ${points.length} sample${points.length===1?'':'s'}.`);
+    const deviceSuffix = (!isSingleDevice && uniqueDeviceCount > 0) ? ` across ${uniqueDeviceCount} CPE${uniqueDeviceCount===1?'':'s'}` : '';
+    setCpeHistoryStatus(`Loaded ${points.length} sample${points.length===1?'':'s'}${deviceSuffix}.`);
     setCpeHistoryEmpty(false,'');
+    const includeDevicesStat = !isSingleDevice && uniqueDeviceCount>0;
     if(goodVals.length){
       const min = Math.min(...goodVals);
       const max = Math.max(...goodVals);
@@ -756,11 +773,13 @@ function applyCpeHistoryPayload(payload){
         count: points.length,
         avg: Math.round(avg*10)/10,
         min: Math.round(min*10)/10,
-        max: Math.round(max*10)/10
+        max: Math.round(max*10)/10,
+        devices: includeDevicesStat ? uniqueDeviceCount : undefined
       });
     } else {
       setCpeHistoryStats({
-        count: points.length
+        count: points.length,
+        devices: includeDevicesStat ? uniqueDeviceCount : undefined
       });
     }
   }

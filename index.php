@@ -473,24 +473,30 @@ if(isset($_GET['ajax'])){
         while($r=$res->fetchArray(SQLITE3_ASSOC)) $rows[]=$r;
         echo json_encode(array_reverse($rows)); exit;
     }
-    if($_GET['ajax']==='cpe_history' && !empty($_GET['id'])){
-        $id=trim((string)$_GET['id']);
-        $stmt=$db->prepare("SELECT strftime('%s', timestamp) AS ts, latency FROM cpe_pings WHERE device_id=? AND timestamp >= datetime('now','-7 days') ORDER BY timestamp ASC");
-        $stmt->bindValue(1,$id,SQLITE3_TEXT);
-        $res=$stmt->execute();
+    if($_GET['ajax']==='cpe_history'){
+        $id=trim((string)($_GET['id'] ?? ''));
         $points=[];
+        if($id!==''){
+            $stmt=$db->prepare("SELECT strftime('%s', timestamp) AS ts, latency, device_id, name FROM cpe_pings WHERE device_id=? AND timestamp >= datetime('now','-7 days') ORDER BY timestamp ASC");
+            $stmt->bindValue(1,$id,SQLITE3_TEXT);
+        } else {
+            $stmt=$db->prepare("SELECT strftime('%s', timestamp) AS ts, latency, device_id, name FROM cpe_pings WHERE timestamp >= datetime('now','-7 days') ORDER BY timestamp ASC");
+        }
+        $res=$stmt->execute();
         if($res){
             while($row=$res->fetchArray(SQLITE3_ASSOC)){
                 $ts = isset($row['ts']) ? (int)$row['ts'] : null;
                 $latVal = array_key_exists('latency',$row) ? $row['latency'] : null;
                 $points[]=[
+                    'device_id'=>$row['device_id'] ?? null,
+                    'name'=>$row['name'] ?? null,
                     'ts_ms'=>$ts!==null ? $ts*1000 : null,
                     'latency'=>$latVal===null ? null : (float)$latVal
                 ];
             }
         }
         echo json_encode([
-            'device_id'=>$id,
+            'device_id'=>$id ?: null,
             'range_days'=>7,
             'points'=>$points
         ]);
@@ -787,7 +793,12 @@ if(isset($_GET['view']) && $_GET['view']==='device'){
     <button class="tablink" onclick="openTab('backbone', event)">Routers & Switches</button>
 </div>
 <div id="gateways" class="tabcontent" style="display:block"><div id="gateGrid" class="grid"></div></div>
-<div id="cpes" class="tabcontent" style="display:none"><div id="cpeGrid" class="grid"></div></div>
+<div id="cpes" class="tabcontent" style="display:none">
+  <div class="grid-actions">
+    <button class="btn-outline" onclick="openCpeHistory()">View All CPE Ping History</button>
+  </div>
+  <div id="cpeGrid" class="grid"></div>
+</div>
 <div id="backbone" class="tabcontent" style="display:none"><div id="routerGrid" class="grid"></div></div>
 <footer id="footer"></footer>
 
@@ -817,8 +828,8 @@ if(isset($_GET['view']) && $_GET['view']==='device'){
   <div class="modal-content">
     <button class="modal-close" onclick="closeCpeHistory()" aria-label="Close">&times;</button>
     <h3 id="cpeHistoryTitle">CPE Ping History</h3>
-    <p id="cpeHistorySubtitle" class="modal-subtitle">Last 7 days of recorded ping latency</p>
-    <div id="cpeHistoryStatus" class="history-status">Select a CPE to load its history.</div>
+    <p id="cpeHistorySubtitle" class="modal-subtitle">All recorded pings for the last 7 days.</p>
+    <div id="cpeHistoryStatus" class="history-status">Click "View All CPE Ping History" to load samples.</div>
     <div class="history-chart-wrap">
       <canvas id="cpeHistoryChart" width="900" height="320"></canvas>
     </div>
