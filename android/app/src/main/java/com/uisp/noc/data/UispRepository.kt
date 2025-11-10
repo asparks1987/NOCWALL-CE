@@ -2,96 +2,136 @@ package com.uisp.noc.data
 
 import com.uisp.noc.data.model.DeviceStatus
 import com.uisp.noc.data.model.DevicesSummary
-import io.ktor.client.*
-import io.ktor.client.call.*
-import io.ktor.client.engine.cio.*
-import io.ktor.client.plugins.*
-import io.ktor.client.plugins.contentnegotiation.*
-import io.ktor.client.plugins.cookies.*
-import io.ktor.client.plugins.logging.*
-import io.ktor.client.request.*
-import io.ktor.client.request.forms.*
-import io.ktor.client.statement.*
-import io.ktor.http.*
-import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
+import okhttp3.FormBody
+import okhttp3.JavaNetCookieJar
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.logging.HttpLoggingInterceptor
+import org.json.JSONArray
+import org.json.JSONException
+import org.json.JSONObject
 import java.io.IOException
+import java.net.CookieManager
+import java.net.CookiePolicy
+import java.util.concurrent.TimeUnit
 
 /**
  * Manages data operations for the UISP NOC application, handling authentication and
- * data fetching from a UISP backend.
+ * data fetching from a UISP backend using OkHttp.
  *
- * This repository abstracts the underlying network calls and data parsing, providing a
- * clean interface for the application to interact with the UISP API.
- *
- * @property httpClient The Ktor HttpClient used for all network requests.
+ * @property httpClient The OkHttpClient used for all network requests.
  */
-class UispRepository(private val httpClient: HttpClient = defaultClient()) {
+open class UispRepository(private val httpClient: OkHttpClient = defaultClient()) {
 
     //region Public API
 
     /**
      * Authenticates with the UISP backend using the provided credentials.
-     *
-     * This method performs a multi-step authentication process:
-     * 1. It sends a login request to the backend's form-based login endpoint.
-     * 2. On success, it fetches a mobile-specific configuration which contains the final API token.
-     *
-     * @param backendUrl The base URL of the UISP instance (e.g., "https://uisp.example.com").
-     * @param username The username for authentication.
-     * @param password The password for authentication.
-     * @return A [Session] object containing the necessary base URL and token for subsequent API calls.
-     * @throws AuthException if the credentials are invalid or authentication fails.
-     * @throws IOException for network errors or if the server response is malformed.
      */
-    suspend fun authenticate(
+    open suspend fun authenticate(
         backendUrl: String,
         username: String,
         password: String
     ): Session = withContext(Dispatchers.IO) {
         val normalizedBackend = normalizeBackendUrl(backendUrl)
 
+        // Create a dedicated client with a cookie jar to handle the session
+        val cookieManager = CookieManager().apply {
+            setCookiePolicy(CookiePolicy.ACCEPT_ALL)
+        }
+        val authClient = httpClient.newBuilder()
+            .cookieJar(JavaNetCookieJar(cookieManager))
+            .build()
+
         // Step 1: Perform form-based login to establish a session cookie.
-        // We set expectSuccess = false because a successful login results in a 302 redirect,
-        // which Ktor would otherwise treat as an error.
-        httpClient.submitForm(
-            url = "$normalizedBackend/?action=login",
-            formParameters = parameters {
-                append("username", username)
-                append("password", password)
+        val loginBody = FormBody.Builder()
+            .add("username", username)
+            .add("password", password)
+            .build()
+
+        val loginRequest = Request.Builder()
+            .url("$normalizedBackend/?action=login")
+            .post(loginBody)
+            .header("User-Agent", USER_AGENT)
+            .build()
+
+        authClient.newCall(loginRequest).execute().use { response ->
+            // A successful login redirects (302), so we treat that as success.
+            if (!response.isSuccessful && !response.isRedirect) {
+                val message = response.body?.string().orEmpty()
+                throw AuthException("Unable to authenticate with backend (HTTP ${response.code}). $message")
             }
-        ) { expectSuccess = false }
+        }
 
-        // Step 2: Fetch the mobile config to get the API token. This call uses the default validator.
-        val config = httpClient.get("$normalizedBackend/?ajax=mobile_config").body<MobileConfigResponse>()
+        // Step 2: Fetch the mobile config to get the API token. The cookie is sent automatically.
+        val configRequest = Request.Builder()
+            .url("$normalizedBackend/?ajax=mobile_config")
+            .get()
+            .header("Accept", "application/json")
+            .header("User-Agent", USER_AGENT)
+            .build()
 
-        Session(
-            backendUrl = normalizedBackend,
-            username = username,
-            uispBaseUrl = sanitizeBaseUrl(config.uispBaseUrl),
-            uispToken = config.uispToken
-        )
+        authClient.newCall(configRequest).execute().use { response ->
+            val body = response.body?.string()
+                ?: throw IOException("Empty response from mobile_config endpoint")
+
+            if (response.code == 401) {
+                throw AuthException("Invalid username or password. The session may have expired.")
+            }
+
+            if (!response.isSuccessful) {
+                val message = extractErrorMessage(body)
+                throw IOException("Failed to obtain UISP token: HTTP ${response.code} ${message ?: ""}")
+            }
+
+            val payload = try {
+                JSONObject(body)
+            } catch (ex: JSONException) {
+                throw IOException("Unexpected response from mobile_config endpoint", ex)
+            }
+
+            val baseUrl = payload.optString("uisp_base_url").takeIf { it.isNotBlank() }
+                ?: throw IOException("UISP base URL missing from backend response")
+            val token = payload.optString("uisp_token").takeIf { it.isNotBlank() }
+                ?: throw IOException("UISP token missing from backend response")
+
+            Session(
+                backendUrl = normalizedBackend,
+                username = username,
+                uispBaseUrl = sanitizeBaseUrl(baseUrl),
+                uispToken = token
+            )
+        }
     }
 
     /**
      * Fetches a summary of all network devices from the UISP API.
-     *
-     * @param session The active, authenticated [Session].
-     * @return A [DevicesSummary] object containing aggregated data about the network status.
-     * @throws AuthException if the session token is expired or invalid.
-     * @throws IOException for other network-related failures.
      */
-    suspend fun fetchSummary(session: Session): DevicesSummary = withContext(Dispatchers.IO) {
-        val devices = httpClient.get(session.uispBaseUrl.trimEnd('/') + "/nms/api/v2.1/devices") {
-            header("x-auth-token", session.uispToken.trim())
-        }.body<List<ApiDevice>>()
+    open suspend fun fetchSummary(session: Session): DevicesSummary = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url(session.uispBaseUrl.trimEnd('/') + "/nms/api/v2.1/devices")
+            .get()
+            .header("Accept", "application/json")
+            .header("x-auth-token", session.uispToken.trim())
+            .header("User-Agent", USER_AGENT)
+            .build()
 
-        parseDevices(devices)
+        httpClient.newCall(request).execute().use { response ->
+            val body = response.body?.string()
+                ?: throw IOException("Empty response from UISP devices endpoint")
+
+            if (response.code == 401) {
+                throw AuthException("UISP token has expired or is invalid")
+            }
+
+            if (!response.isSuccessful) {
+                throw IOException("Failed to download UISP devices: HTTP ${response.code}")
+            }
+
+            parseDevices(body)
+        }
     }
 
     //endregion
@@ -99,50 +139,95 @@ class UispRepository(private val httpClient: HttpClient = defaultClient()) {
     //region Data Parsing and Transformation
 
     /**
-     * Parses the raw list of devices from the API into a structured [DevicesSummary].
-     *
-     * @param apiDevices The list of [ApiDevice] objects returned from the UISP API.
-     * @return A [DevicesSummary] object.
+     * Parses the raw JSON string of devices into a structured [DevicesSummary].
      */
-    private fun parseDevices(apiDevices: List<ApiDevice>): DevicesSummary {
-        val deviceStatuses = apiDevices.mapNotNull { device ->
-            val id = device.identification.id ?: device.identification.mac ?: return@mapNotNull null
-            val role = device.identification.role?.lowercase()?.trim() ?: "device"
-            val isGateway = role == "gateway"
-            val isBackbone = role in setOf("router", "switch") || isGateway
+    private fun parseDevices(payload: String): DevicesSummary {
+        val root = JSONArray(payload)
+        val offlineGateways = mutableListOf<DeviceStatus>()
+        val offlineBackbone = mutableListOf<DeviceStatus>()
+        val offlineCpes = mutableListOf<DeviceStatus>()
+        val highLatency = mutableListOf<DeviceStatus>()
 
-            DeviceStatus(
+        var totalGateways = 0
+        var totalBackbone = 0
+        var totalCpes = 0
+
+        for (i in 0 until root.length()) {
+            val device = root.optJSONObject(i) ?: continue
+            val identification = device.optJSONObject("identification")
+            val overview = device.optJSONObject("overview")
+
+            val id = identification?.optString("id")
+                ?: identification?.optString("mac")
+                ?: device.optString("id", "unknown")
+            val name = identification?.optString("name")?.takeIf { it.isNotBlank() } ?: id
+            val role = identification?.optString("role")?.lowercase()?.trim() ?: "device"
+            val online = isOnline(overview?.optString("status"))
+            val latencyMs = extractLatency(overview)
+
+            val isGateway = role == "gateway"
+            val isBackbone = role == "router" || role == "switch" || isGateway
+            val status = DeviceStatus(
                 id = id,
-                name = device.identification.name ?: id,
+                name = name,
                 role = role,
                 isGateway = isGateway,
                 isBackbone = isBackbone,
-                online = device.overview.status?.lowercase() in ONLINE_STATUSES,
-                latencyMs = device.overview.latency
+                online = online,
+                latencyMs = latencyMs
             )
-        }
 
-        val gateways = deviceStatuses.filter { it.isGateway }
-        val backbones = deviceStatuses.filter { it.isBackbone && !it.isGateway }
-        val cpes = deviceStatuses.filter { !it.isBackbone && !it.isGateway }
+            when {
+                isGateway -> {
+                    totalGateways += 1
+                    if (!online) offlineGateways += status
+                }
+                isBackbone -> {
+                    totalBackbone += 1
+                    if (!online) offlineBackbone += status
+                }
+                else -> {
+                    totalCpes += 1
+                    if (!online) offlineCpes += status
+                }
+            }
+
+            if (latencyMs != null && latencyMs > LATENCY_ALERT_THRESHOLD_MS) {
+                highLatency += status
+            }
+        }
 
         return DevicesSummary(
             lastUpdatedEpochMillis = System.currentTimeMillis(),
-            totalGateways = gateways.size,
-            offlineGateways = gateways.filter { !it.online },
-            totalBackbone = backbones.size,
-            offlineBackbone = backbones.filter { !it.online },
-            totalCpes = cpes.size,
-            offlineCpes = cpes.filter { !it.online },
-            highLatencyGateways = deviceStatuses.filter { (it.latencyMs ?: 0.0) > LATENCY_ALERT_THRESHOLD_MS }
+            totalGateways = totalGateways,
+            offlineGateways = offlineGateways,
+            totalBackbone = totalBackbone,
+            offlineBackbone = offlineBackbone,
+            totalCpes = totalCpes,
+            offlineCpes = offlineCpes,
+            highLatencyGateways = highLatency
         )
+    }
+
+    private fun extractLatency(overview: JSONObject?): Double? {
+        if (overview == null) return null
+        val keys = listOf("latency", "latencyMs", "ping", "rtt")
+        for (key in keys) {
+            val candidate = overview.optDouble(key, Double.NaN)
+            if (!candidate.isNaN()) return candidate
+        }
+        return null
+    }
+
+    private fun isOnline(status: String?): Boolean {
+        val normalized = status?.lowercase() ?: return false
+        return normalized in ONLINE_STATUSES
     }
 
     //endregion
 
     //region URL Sanitization
 
-    /** Normalizes a backend URL to ensure it has a scheme and no trailing slash. */
     private fun normalizeBackendUrl(rawUrl: String): String {
         var trimmed = rawUrl.trim()
         if (!trimmed.contains("://")) {
@@ -151,7 +236,6 @@ class UispRepository(private val httpClient: HttpClient = defaultClient()) {
         return trimmed.removeSuffix("/")
     }
 
-    /** Sanitizes the base API URL to ensure it has a scheme and no trailing slash. */
     private fun sanitizeBaseUrl(rawUrl: String): String {
         var trimmed = rawUrl.trim()
         if (!trimmed.contains("://")) {
@@ -160,113 +244,42 @@ class UispRepository(private val httpClient: HttpClient = defaultClient()) {
         return trimmed.removeSuffix("/")
     }
 
+    private fun extractErrorMessage(body: String): String? =
+        try {
+            val json = JSONObject(body)
+            json.optString("message").takeIf { it.isNotBlank() }
+                ?: json.optString("error").takeIf { it.isNotBlank() }
+        } catch (ignored: Exception) {
+            null
+        }
+
     //endregion
 
     //region Companion and Configuration
 
-    /**
-     * Represents an authentication-related error.
-     * @param message A descriptive error message.
-     */
     class AuthException(message: String) : IOException(message)
 
     companion object {
         private const val USER_AGENT = "UISP-NOC-Android/1.0"
-        private val ONLINE_STATUSES = setOf("ok", "online", "active", "connected", "reachable", "enabled")
+        private val ONLINE_STATUSES = setOf(
+            "ok", "online", "active", "connected", "reachable", "enabled"
+        )
         private const val LATENCY_ALERT_THRESHOLD_MS = 450.0
 
         /**
-         * Creates a default Ktor HttpClient with pre-configured settings for logging,
-         * error handling, and JSON serialization.
+         * Creates a default OkHttpClient with pre-configured settings.
          */
-        fun defaultClient(): HttpClient {
-            return HttpClient(CIO) {
-                // CIO is a Coroutine-based I/O engine.
-                engine {
-                    requestTimeout = 10_000 // 10 seconds
-                }
-
-                // Configure logging for requests and responses.
-                install(Logging) {
-                    logger = Logger.DEFAULT
-                    level = LogLevel.HEADERS
-                }
-
-                // Automatically handle cookies to maintain session.
-                install(HttpCookies) {
-                    storage = AcceptAllCookiesStorage()
-                }
-
-                // Configure JSON serialization.
-                install(ContentNegotiation) {
-                    json(Json { isLenient = true; ignoreUnknownKeys = true })
-                }
-
-                // Centralize response validation and error handling.
-                // Centralize response validation and error handling.
-                install(HttpResponseValidator) {
-                    handleResponseExceptionWithRequest { cause, _ ->
-                        val clientException = cause as? ResponseException ?: return@handleResponseExceptionWithRequest
-                        val response = clientException.response
-                        val errorBody = try {
-                            // No more runBlocking needed because the lambda is a suspend function
-                            response.bodyAsText()
-                        } catch (e: Exception) {
-                            "(Could not read response body)"
-                        }
-
-                        when (response.status) {
-                            HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden -> {
-                                throw AuthException("Authentication failed: ${response.status.value}. $errorBody")
-                            }
-                            else -> {
-                                throw IOException("Request failed: ${response.status.value}. $errorBody")
-                            }
-                        }
-                    }
-                }
-
-                // Apply a default User-Agent header to all requests.
-                install(DefaultRequest) {
-                    header(HttpHeaders.UserAgent, USER_AGENT)
-                }
+        fun defaultClient(): OkHttpClient {
+            val logging = HttpLoggingInterceptor().apply {
+                level = HttpLoggingInterceptor.Level.BASIC
             }
+            return OkHttpClient.Builder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(10, TimeUnit.SECONDS)
+                .writeTimeout(10, TimeUnit.SECONDS)
+                .addInterceptor(logging)
+                .build()
         }
     }
-
-    //endregion
-
-    //region API Data Models
-
-    /** Represents the JSON response from the /ajax=mobile_config endpoint. */
-    @Serializable
-    private data class MobileConfigResponse(
-        @SerialName("uisp_base_url") val uispBaseUrl: String,
-        @SerialName("uisp_token") val uispToken: String
-    )
-
-    /** Represents a single device object in the /devices API response. */
-    @Serializable
-    private data class ApiDevice(
-        val identification: ApiIdentification,
-        val overview: ApiOverview
-    )
-
-    /** Represents the "identification" block for a device. */
-    @Serializable
-    private data class ApiIdentification(
-        val id: String? = null,
-        val mac: String? = null,
-        val name: String? = null,
-        val role: String? = null
-    )
-
-    /** Represents the "overview" block for a device. */
-    @Serializable
-    private data class ApiOverview(
-        val status: String? = null,
-        val latency: Double? = null
-    )
-
     //endregion
 }

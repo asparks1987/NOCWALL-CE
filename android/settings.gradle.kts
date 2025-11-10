@@ -11,8 +11,11 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        maven("https://maven.pkg.jetbrains.space/public/p/ktor/eap")
+
     }
 }
 rootProject.name = "UISP-NOC-Android"
 include(":app")
-include(":wear")
+// settings.gradle.kts
+

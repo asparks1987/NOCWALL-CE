@@ -1,7 +1,6 @@
 # Ignore PowerShell scripts and build scripts
 *.ps1
 # Any file/dir starting with 'build' (build scripts, helpers, build folders)
-build*
 # Specific patterns for old names
 build-*.sh
 build-*.ps1

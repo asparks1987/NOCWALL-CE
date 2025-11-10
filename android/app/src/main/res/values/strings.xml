@@ -1,4 +1,11 @@
 <resources>
     <string name="app_name">UISP NOC</string>
     <string name="loading_indicator_description">Loading data</string>
+    <string name="login_title">Connect to UISP</string>
+    <string name="login_subtitle">Sign in to mirror your UISP dashboard on mobile.</string>
+    <string name="login_backend_helper">Example: https://noc.example.com</string>
+    <string name="login_backend_hint">UISP NOC address</string>
+    <string name="login_username_hint">Username</string>
+    <string name="login_password_hint">Password</string>
+    <string name="login_button">Sign in</string>
 </resources>

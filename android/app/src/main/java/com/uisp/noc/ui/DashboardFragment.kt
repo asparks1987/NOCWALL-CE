@@ -1,4 +1,4 @@
-﻿package com.uisp.noc.ui
+package com.uisp.noc.ui
 
 import android.os.Bundle
 import android.view.LayoutInflater
@@ -6,6 +6,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.annotation.ColorRes
+import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
@@ -65,6 +67,11 @@ class DashboardFragment : Fragment() {
 
     private fun bindViews(root: View) {
         swipeRefresh = root.findViewById(R.id.swipe_refresh)
+        val accentColor = ContextCompat.getColor(root.context, R.color.uisp_accent_primary)
+        val surfaceColor = ContextCompat.getColor(root.context, R.color.uisp_surface_variant)
+        swipeRefresh.setColorSchemeColors(accentColor)
+        swipeRefresh.setProgressBackgroundColorSchemeColor(surfaceColor)
+
         connectionSummary = root.findViewById(R.id.text_connection_summary)
         lastUpdated = root.findViewById(R.id.text_last_updated)
 
@@ -106,13 +113,16 @@ class DashboardFragment : Fragment() {
                                 val host = state.session.uispBaseUrl.substringAfter("://")
                                 connectionSummary.text =
                                     "Connected to $host\nSigned in as ${state.session.username}"
+                                setConnectionSummaryColor(R.color.uisp_text_primary)
                             }
                             is MainViewModel.SessionState.Unauthenticated -> {
                                 currentSession = null
                                 connectionSummary.text = "Not connected"
+                                setConnectionSummaryColor(R.color.uisp_status_warn_fg)
                             }
                             is MainViewModel.SessionState.Loading -> {
                                 connectionSummary.text = "Connecting..."
+                                setConnectionSummaryColor(R.color.uisp_text_secondary)
                             }
                         }
                     }
@@ -131,6 +141,9 @@ class DashboardFragment : Fragment() {
             overviewBackboneLabel.text = "Backbone"
             overviewCpesValue.text = "-"
             overviewCpesLabel.text = "Subscribers"
+            setOverviewState(overviewGatewaysValue, overviewGatewaysLabel, hasIssue = false)
+            setOverviewState(overviewBackboneValue, overviewBackboneLabel, hasIssue = false)
+            setOverviewState(overviewCpesValue, overviewCpesLabel, hasIssue = false)
             updateDeviceList(
                 listOfflineGateways,
                 emptyList(),
@@ -160,18 +173,24 @@ class DashboardFragment : Fragment() {
                 ?: summary.totalGateways.toString()
             overviewGatewaysLabel.text =
                 if (summary.offlineGateways.isEmpty()) "Gateways online" else "Gateways offline"
+            val gatewaysIssue = summary.offlineGateways.isNotEmpty()
+            setOverviewState(overviewGatewaysValue, overviewGatewaysLabel, gatewaysIssue)
 
             overviewBackboneValue.text = summary.offlineBackbone.size.takeIf { it > 0 }
                 ?.let { "$it / ${summary.totalBackbone}" }
                 ?: summary.totalBackbone.toString()
             overviewBackboneLabel.text =
                 if (summary.offlineBackbone.isEmpty()) "Backbone online" else "Backbone offline"
+            val backboneIssue = summary.offlineBackbone.isNotEmpty()
+            setOverviewState(overviewBackboneValue, overviewBackboneLabel, backboneIssue)
 
             overviewCpesValue.text = summary.offlineCpes.size.takeIf { it > 0 }
                 ?.let { "$it / ${summary.totalCpes}" }
                 ?: summary.totalCpes.toString()
             overviewCpesLabel.text =
                 if (summary.offlineCpes.isEmpty()) "Subscribers online" else "Subscribers offline"
+            val subscribersIssue = summary.offlineCpes.isNotEmpty()
+            setOverviewState(overviewCpesValue, overviewCpesLabel, subscribersIssue)
 
             updateDeviceList(
                 listOfflineGateways,
@@ -211,6 +230,7 @@ class DashboardFragment : Fragment() {
             val tv = TextView(container.context).apply {
                 text = emptyMessage
                 setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
+                setTextColor(ContextCompat.getColor(context, R.color.uisp_text_secondary))
             }
             container.addView(tv)
             return
@@ -221,27 +241,57 @@ class DashboardFragment : Fragment() {
             val row = inflater.inflate(R.layout.item_device_status, container, false)
             val nameView = row.findViewById<TextView>(R.id.text_name)
             val detailsView = row.findViewById<TextView>(R.id.text_details)
+            val statusChip = row.findViewById<TextView>(R.id.text_status_chip)
 
             nameView.text = device.name
             val roleLabel = device.role.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
             val detailsText = buildString {
                 append(roleLabel)
                 if (showLatency) {
-                    val latency = device.latencyMs
-                    if (latency != null) {
-                        append(" â€¢ ")
-                        append(latency.roundToInt())
-                        append(" ms")
-                    }
+                    val latency = device.latencyMs?.roundToInt()
+                    append(" - ")
+                    append(latency?.let { "$it ms" } ?: "latency unknown")
                 } else {
-                    append(" â€¢ offline")
+                    append(" - offline")
                 }
             }
             detailsView.text = detailsText
 
+            if (showLatency) {
+                val latencyLabel = device.latencyMs?.roundToInt()?.let { "$it ms" } ?: "Latency"
+                statusChip.text = latencyLabel
+                statusChip.setTextColorRes(R.color.uisp_status_warn_fg)
+                statusChip.setBackgroundResource(R.drawable.bg_status_chip_warn)
+            } else if (device.online) {
+                statusChip.text = "Online"
+                statusChip.setTextColorRes(R.color.uisp_status_good_fg)
+                statusChip.setBackgroundResource(R.drawable.bg_status_chip_good)
+            } else {
+                statusChip.text = "Offline"
+                statusChip.setTextColorRes(R.color.uisp_status_bad_fg)
+                statusChip.setBackgroundResource(R.drawable.bg_status_chip_bad)
+            }
+
             container.addView(row)
         }
     }
+
+    private fun setConnectionSummaryColor(@ColorRes colorRes: Int) {
+        connectionSummary.setTextColor(ContextCompat.getColor(connectionSummary.context, colorRes))
+    }
+
+    private fun setOverviewState(
+        valueView: TextView,
+        labelView: TextView,
+        hasIssue: Boolean
+    ) {
+        val valueColor = if (hasIssue) R.color.uisp_status_bad_fg else R.color.uisp_text_primary
+        val labelColor = if (hasIssue) R.color.uisp_status_bad_fg else R.color.uisp_text_secondary
+        valueView.setTextColorRes(valueColor)
+        labelView.setTextColorRes(labelColor)
+    }
+
+    private fun TextView.setTextColorRes(@ColorRes colorRes: Int) {
+        setTextColor(ContextCompat.getColor(context, colorRes))
+    }
 }
-
-

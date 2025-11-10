@@ -6,6 +6,7 @@ class UispNocApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        NotificationHelper.createNotificationChannel(this)
         OfflineGatewayMonitor.start(this)
     }
 }

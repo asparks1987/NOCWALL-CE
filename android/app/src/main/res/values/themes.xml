@@ -1,18 +1,39 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
     <style name="Theme.UISPNOC" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Customize your theme here. -->
+        <!-- Core palette -->
+        <item name="colorPrimary">@color/uisp_accent_primary</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <item name="colorPrimaryContainer">@color/uisp_accent_secondary</item>
+        <item name="colorOnPrimaryContainer">@color/white</item>
 
-        <!-- Status bar color. -->
-        <item name="android:statusBarColor">?attr/colorSurface</item>
-        <!-- Navigation bar color. -->
-        <item name="android:navigationBarColor">?attr/colorSurface</item>
-        <!-- Light status bar icons for dark backgrounds. -->
-        <item name="android:windowLightStatusBar">true</item>
-        <!-- Light navigation bar icons for dark backgrounds. -->
-        <item name="android:windowLightNavigationBar" tools:targetApi="27">true</item>
+        <item name="colorSecondary">@color/uisp_accent_secondary</item>
+        <item name="colorOnSecondary">@color/white</item>
+        <item name="colorSecondaryContainer">@color/uisp_surface_variant</item>
+        <item name="colorOnSecondaryContainer">@color/uisp_text_primary</item>
 
-        <!-- Use Material 3 Toolbar Style -->
-        <item name="toolbarStyle">@style/Widget.Material3.Toolbar.Surface</item>
+        <item name="colorTertiary">@color/uisp_accent_primary</item>
+        <item name="colorOnTertiary">@color/white</item>
+
+        <item name="colorSurface">@color/uisp_surface</item>
+        <item name="colorOnSurface">@color/uisp_text_primary</item>
+        <item name="colorSurfaceVariant">@color/uisp_surface_variant</item>
+        <item name="colorOnSurfaceVariant">@color/uisp_text_secondary</item>
+        <item name="colorBackground">@color/uisp_background</item>
+        <item name="colorOnBackground">@color/uisp_text_primary</item>
+        <item name="colorOutline">@color/uisp_outline</item>
+        <item name="android:windowBackground">@color/uisp_background</item>
+
+        <item name="colorError">@color/uisp_status_bad_fg</item>
+        <item name="colorErrorContainer">@color/uisp_status_bad_bg</item>
+        <item name="colorOnError">@color/white</item>
+        <item name="colorOnErrorContainer">@color/uisp_status_bad_fg</item>
+
+        <!-- Bars -->
+        <item name="android:statusBarColor">@color/uisp_background</item>
+        <item name="android:navigationBarColor">@color/uisp_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">false</item>
+
+        <item name="toolbarStyle">@style/Widget.Uisp.Toolbar</item>
     </style>
 </resources>

@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Widget.Uisp.Toolbar" parent="Widget.Material3.Toolbar.Surface">
+        <item name="android:background">@color/uisp_toolbar</item>
+        <item name="titleTextAppearance">@style/TextAppearance.Uisp.ToolbarTitle</item>
+        <item name="subtitleTextAppearance">@style/TextAppearance.Uisp.ToolbarSubtitle</item>
+        <item name="titleTextColor">@color/uisp_text_primary</item>
+        <item name="subtitleTextColor">@color/uisp_text_secondary</item>
+        <item name="android:elevation">0dp</item>
+    </style>
+
+    <style name="TextAppearance.Uisp.ToolbarTitle" parent="TextAppearance.Material3.TitleLarge">
+        <item name="android:textColor">@color/uisp_text_primary</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">0.02</item>
+    </style>
+
+    <style name="TextAppearance.Uisp.ToolbarSubtitle" parent="TextAppearance.Material3.BodyMedium">
+        <item name="android:textColor">@color/uisp_text_secondary</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:letterSpacing">0.04</item>
+    </style>
+
+    <style name="TextAppearance.Uisp.SectionLabel" parent="TextAppearance.Material3.TitleMedium">
+        <item name="android:textColor">@color/uisp_text_primary</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:letterSpacing">0.04</item>
+    </style>
+
+    <style name="TextAppearance.Uisp.Muted" parent="TextAppearance.Material3.BodyMedium">
+        <item name="android:textColor">@color/uisp_text_secondary</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:letterSpacing">0.02</item>
+    </style>
+
+    <style name="Widget.Uisp.Card" parent="@style/Widget.Material3.CardView.Filled">
+        <item name="cardBackgroundColor">@color/uisp_card</item>
+        <item name="strokeColor">@color/uisp_card_border</item>
+        <item name="strokeWidth">1dp</item>
+        <item name="cardCornerRadius">14dp</item>
+        <item name="android:elevation">0dp</item>
+    </style>
+
+    <style name="Widget.Uisp.DeviceCard" parent="@style/Widget.Uisp.Card">
+        <item name="cardCornerRadius">12dp</item>
+        <item name="strokeWidth">1dp</item>
+    </style>
+
+    <style name="Widget.Uisp.ButtonAccent" parent="@style/Widget.Material3.Button">
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:letterSpacing">0.05</item>
+        <item name="android:textColor">@color/white</item>
+        <item name="backgroundTint">@null</item>
+        <item name="android:background">@drawable/bg_button_accent</item>
+        <item name="rippleColor">@color/uisp_accent_primary</item>
+        <item name="android:insetLeft">0dp</item>
+        <item name="android:insetRight">0dp</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+    </style>
+
+    <style name="Widget.Uisp.TextInputLayout" parent="@style/Widget.Material3.TextInputLayout.OutlinedBox">
+        <item name="boxBackgroundMode">outlined</item>
+        <item name="boxStrokeColor">@color/uisp_card_border</item>
+        <item name="boxStrokeWidth">1dp</item>
+        <item name="boxStrokeWidthFocused">2dp</item>
+        <item name="boxCornerRadiusTopStart">12dp</item>
+        <item name="boxCornerRadiusTopEnd">12dp</item>
+        <item name="boxCornerRadiusBottomStart">12dp</item>
+        <item name="boxCornerRadiusBottomEnd">12dp</item>
+        <item name="hintTextColor">@color/uisp_text_secondary</item>
+        <item name="android:textColorHint">@color/uisp_text_secondary</item>
+        <item name="helperTextTextColor">@color/uisp_text_muted</item>
+    </style>
+
+    <style name="Widget.Uisp.TextInputEditText" parent="@style/Widget.Material3.TextInputEditText.OutlinedBox">
+        <item name="android:textColor">@color/uisp_text_primary</item>
+        <item name="android:textColorHint">@color/uisp_text_secondary</item>
+        <item name="android:fontFamily">sans-serif</item>
+    </style>
+</resources>

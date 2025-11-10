@@ -36,11 +36,19 @@ object NotificationHelper {
     }
 
     fun showOfflineNotification(context: Context, gatewayName: String) {
+        showNotification(context, gatewayName, "$gatewayName has been offline for 1 minute.")
+    }
+
+    fun showOfflineReminderNotification(context: Context, gatewayName: String) {
+        showNotification(context, gatewayName, "$gatewayName is still offline.")
+    }
+
+    private fun showNotification(context: Context, gatewayName: String, message: String) {
         val soundUri = Uri.parse("android.resource://" + context.packageName + "/" + R.raw.buz)
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle("Gateway Offline")
-            .setContentText("$gatewayName has been offline for 1 minute.")
+            .setContentText(message)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setSound(soundUri)
             .build()

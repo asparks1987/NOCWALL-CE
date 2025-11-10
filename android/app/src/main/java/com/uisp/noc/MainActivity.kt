@@ -1,21 +1,24 @@
 package com.uisp.noc
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
-import androidx.activity.viewModels
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import androidx.fragment.app.commit
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.snackbar.Snackbar
-import com.uisp.noc.data.SessionStore
-import com.uisp.noc.data.UispRepository
 import com.uisp.noc.ui.DashboardFragment
 import com.uisp.noc.ui.LoginFragment
 import com.uisp.noc.ui.MainViewModel
@@ -23,16 +26,18 @@ import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
-    private val viewModel: MainViewModel by viewModels {
-        MainViewModel.Factory(
-            repository = UispRepository(),
-            sessionStore = SessionStore(this)
-        )
-    }
+    private lateinit var viewModel: MainViewModel
 
     private lateinit var toolbar: MaterialToolbar
     private lateinit var loadingOverlay: View
     private var optionsMenu: Menu? = null
+
+    private val requestPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted: Boolean ->
+            if (!isGranted) {
+                showMessage("Notifications are disabled. You will not receive gateway alerts.")
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,24 +47,39 @@ class MainActivity : AppCompatActivity() {
         loadingOverlay = findViewById(R.id.loading_overlay)
         setSupportActionBar(toolbar)
 
+        // Synchronously create the ViewModel.
+        val factory = Injector.provideViewModelFactory(applicationContext)
+        viewModel = ViewModelProvider(this, factory)[MainViewModel::class.java]
+        collectFlows(viewModel)
+
         if (savedInstanceState == null) {
             supportFragmentManager.commit {
                 replace(R.id.content_container, LoginFragment())
             }
         }
 
-        collectFlows()
+        askNotificationPermission()
     }
 
-    private fun collectFlows() {
+    private fun askNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
+
+    private fun collectFlows(vm: MainViewModel) {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                viewModel.sessionState.collect { renderSessionState(it) }
+                vm.sessionState.collect { renderSessionState(it) }
             }
         }
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                viewModel.events.collect { event ->
+                vm.events.collect { event ->
                     when (event) {
                         is MainViewModel.UiEvent.Message -> showMessage(event.text)
                     }
@@ -132,7 +152,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showMessage(message: String) {
-        val root = findViewById<View>(R.id.content_container)
+        val root = findViewById<View>(android.R.id.content)
         Snackbar.make(root, message, Snackbar.LENGTH_LONG).show()
     }
 

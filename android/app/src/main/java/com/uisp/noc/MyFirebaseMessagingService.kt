@@ -26,7 +26,7 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
     private fun sendNotification(title: String, messageBody: String) {
         val channelId = "uisp_alerts_channel"
         // IMPORTANT: The sound file must be placed in `res/raw/alert_sound.mp3`
-        val soundUri = Uri.parse("android.resource://" + applicationContext.packageName + "/" + R.raw.alert_sound)
+        val soundUri = Uri.parse("android.resource://" + applicationContext.packageName + "/" + R.raw.buz)
 
         val notificationBuilder = NotificationCompat.Builder(this, channelId)
             .setSmallIcon(R.drawable.ic_launcher) // Make sure you have this drawable

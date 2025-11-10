@@ -4,7 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import com.uisp.noc.WearSyncManager
 
-class SessionStore(context: Context) {
+class SessionStore private constructor(context: Context) {
 
     private val prefs: SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -60,6 +60,17 @@ class SessionStore(context: Context) {
     fun lastUsername(): String? = prefs.getString(KEY_USERNAME, null)
 
     companion object {
+        @Volatile
+        private var INSTANCE: SessionStore? = null
+
+        fun getInstance(context: Context): SessionStore {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: SessionStore(context.applicationContext).also {
+                    INSTANCE = it
+                }
+            }
+        }
+
         private const val PREFS_NAME = "uisp_prefs"
         private const val KEY_BACKEND_URL = "backend_url"
         private const val KEY_USERNAME = "username"

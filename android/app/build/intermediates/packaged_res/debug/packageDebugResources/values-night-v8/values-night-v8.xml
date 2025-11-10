@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:ns1="http://schemas.android.com/tools">
+    <style name="Theme.UISPNOC" parent="Theme.Material3.DayNight.NoActionBar">
+        
+
+        
+        <item name="android:statusBarColor">?attr/colorSurface</item>
+        
+        <item name="android:navigationBarColor">?attr/colorSurface</item>
+        
+        <item name="android:windowLightStatusBar">false</item>
+        
+        <item name="android:windowLightNavigationBar" ns1:targetApi="27">false</item>
+
+        
+        <item name="toolbarStyle">@style/Widget.Material3.Toolbar.Surface</item>
+    </style>
+</resources>
