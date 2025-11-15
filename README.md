@@ -2,6 +2,8 @@
 
 A self-hosted, zero-friction Network Operations Center for Ubiquiti UISP deployments. UISP NOC polls your UISP controller every few seconds, persists short-term history in SQLite, sounds a siren for unacknowledged outages, and can push offline/online, flapping, and latency alerts through an embedded Gotify server. Caddy is bundled to front the app with HTTPS and to expose the optional Gotify UI on its own hostname.
 
+**New:** Pair the stack with the native Android companion app to keep on-call techs glued to the most critical telemetry. The wrapper ships inside this repository, caches single sign-on credentials, relays the in-browser siren through the handset, and keeps vibration/push alerts flowing even when the device screen is off. No PWA gymnastics, no custom MDM work—just a branded launcher that boots straight into your UISP NOC.
+
 ---
 
 ## Why UISP NOC?
@@ -11,7 +13,28 @@ A self-hosted, zero-friction Network Operations Center for Ubiquiti UISP deploym
 * **Integrated notifications** – Gotify is shipped in the container, auto-provisioned, and used for offline/online, flapping, and sustained latency events. Bring your own Gotify instance by pointing the app at an external endpoint.
 * **TLS automation** – A Caddy sidecar terminates TLS. Toggle the in-app provisioning modal (SHOW_TLS_UI=1) to request Let’s Encrypt certificates via the Caddy admin API.
 * **Batteries included** – PHP 8.2 + Apache, Vanilla JS UI, Chart.js history views, siren media, SQLite metrics store, start script, and Docker Compose wiring.
-* **Offline-friendly data** – Metrics and credentials live in a Docker volume; alerts, ping cache, and Gotify data are persisted across upgrades.
+* **Offline-friendly data** - Metrics and credentials live in a Docker volume; alerts, ping cache, and Gotify data are persisted across upgrades.
+* **On-call ready** - Android companion app provides a full-screen launcher, mirrored siren/vibration, and fast acknowledgements without asking techs to pin a browser tab.
+
+---
+
+## Android Companion App
+
+The included Android WebView wrapper turns UISP NOC into a purpose-built field operations tool. Ship a fully branded APK to on-call technicians, keep the siren/vibration running with the screen off, and let teams acknowledge incidents directly from the handset without juggling tabs or custom PWAs.
+
+### Key Capabilities
+
+* **Immediate awareness** - The wrapper honors Gotify-triggered sirens, vibration, and media playback so handhelds scream just like the browser UI.
+* **Zero-friction logins** - Cookies, local storage, and the `?ajax=mobile_config` bootstrap endpoint keep credentials fresh even after devices roam between Wi-Fi/LTE.
+* **Technician focused UX** - Launches straight into the dashboard, hides chrome, enables pinch/zoom, and exposes outage drills plus acknowledgements with thumb-friendly taps.
+* **Brand ready** - Swap icons, name, and splash assets to match your MSP or ISP before distributing the APK internally or via your MDM.
+
+### Getting It Running
+
+1. Open `android/` in Android Studio (or run `./gradlew assembleRelease`) to produce an APK.
+2. Set the default dashboard URL in `MainActivity.kt` or pass one via `adb shell am start ... --es url https://noc.example.com`.
+3. (Optional) Enable strict HTTPS-only hosts, add your logos, and configure Play/App Store metadata.
+4. Sideload to tech devices or push through your MDM; once logged in, the session persists and mirrors the siren/Gotify alerts from your UISP NOC stack.
 
 ---
 
@@ -166,7 +189,7 @@ To reset credentials, delete `cache/auth.json` inside `noc_cache`. To clear hist
 * **Logs** – App errors stream to container logs. Gotify delivery attempts append to `cache/gotify_log.txt`. TLS provisioning responses surface in the modal and container logs.
 * **Upgrades** – Rebuild the image (`docker compose pull` or `docker compose build`). Persistent volumes retain credentials, tokens, and history.
 * **Siren audio** – The browser loads `buz.mp3`. If autoplay is blocked, users can enable sound using the on-screen prompt.
-* **Mobile access** – Use the Android wrapper or create a standalone PWA bookmark; the UI is responsive.
+* **Mobile access** - Ship the Android companion for a kiosk-like launcher (or fall back to a standalone PWA bookmark); the UI is responsive either way.
 
 ---
 

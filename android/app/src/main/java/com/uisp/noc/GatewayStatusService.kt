@@ -62,7 +62,8 @@ class GatewayStatusService : Service() {
         val repository = Injector.getRepository()
 
         try {
-            val summary = repository.fetchSummary(session)
+            repository.fetchSummary(session, this)
+            val summary = repository.summaryFlow.value ?: return
             val notification = NotificationHelper.createForegroundNotification(
                 this,
                 summary.gateways.count { it.online },

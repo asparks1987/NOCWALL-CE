@@ -16,51 +16,55 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         super.onMessageReceived(remoteMessage)
 
         // Get notification data
-        val title = remoteMessage.notification?.title ?: "New Alert"
-        val body = remoteMessage.notification?.body ?: "You have a new alert."
+        val title: String
+        val body: String
+        val sound: String
 
-        // Show the notification
-        sendNotification(title, body)
-    }
-
-    private fun sendNotification(title: String, messageBody: String) {
-        val channelId = "uisp_alerts_channel"
-        // IMPORTANT: The sound file must be placed in `res/raw/alert_sound.mp3`
-        val soundUri = Uri.parse("android.resource://" + applicationContext.packageName + "/" + R.raw.buz)
-
-        val notificationBuilder = NotificationCompat.Builder(this, channelId)
-            .setSmallIcon(R.drawable.ic_launcher) // Make sure you have this drawable
-            .setContentTitle(title)
-            .setContentText(messageBody)
-            .setAutoCancel(true)
-            .setSound(soundUri)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-
-        // Since android Oreo notification channel is needed.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                channelId,
-                "UISP Alerts",
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = "Channel for UISP alert notifications"
-                val audioAttributes = AudioAttributes.Builder()
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .setUsage(AudioAttributes.USAGE_NOTIFICATION)
-                    .build()
-                setSound(soundUri, audioAttributes)
-            }
-            notificationManager.createNotificationChannel(channel)
+        // Check if the message contains a data payload.
+        if (remoteMessage.data.isNotEmpty()) {
+            title = remoteMessage.data["title"] ?: "New Alert"
+            body = remoteMessage.data["body"] ?: "You have a new alert."
+            sound = remoteMessage.data["sound"] ?: "buz"
+        } else {
+            // Check if the message contains a notification payload.
+            title = remoteMessage.notification?.title ?: "New Alert"
+            body = remoteMessage.notification?.body ?: "You have a new alert."
+            sound = remoteMessage.notification?.sound ?: "buz"
         }
 
-        notificationManager.notify(0 /* ID of notification */, notificationBuilder.build())
+
+        // Show the notification
+        sendNotification(this, title, body, sound)
     }
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
         // You would typically send this token to your server to be able to send messages to this device
         // Log.d("FCM_TOKEN", "Refreshed token: $token")
+    }
+
+    companion object {
+        fun sendNotification(context: Context, title: String, messageBody: String, sound: String = "buz") {
+            val channelId = "uisp_alerts_channel_$sound"
+            val soundUri =
+                Uri.parse("android.resource://" + context.packageName + "/" + when (sound) {
+                    "brrt" -> R.raw.brrt
+                    "flrp" -> R.raw.flrp
+                    else -> R.raw.buz
+                })
+
+            val notificationBuilder = NotificationCompat.Builder(context, channelId)
+                .setSmallIcon(R.drawable.ic_launcher) // Make sure you have this drawable
+                .setContentTitle(title)
+                .setContentText(messageBody)
+                .setAutoCancel(true)
+                .setSound(soundUri)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+
+            val notificationManager =
+                context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+            notificationManager.notify(System.currentTimeMillis().toInt(), notificationBuilder.build())
+        }
     }
 }

@@ -1,5 +1,6 @@
 package com.uisp.noc
 
+import android.app.Application
 import android.content.Context
 import androidx.lifecycle.ViewModelProvider
 import com.uisp.noc.data.SessionStore
@@ -22,9 +23,10 @@ object Injector {
      * thread the first time it's needed.
      */
     fun provideViewModelFactory(context: Context): ViewModelProvider.Factory {
-        val sessionStore = SessionStore.getInstance(context.applicationContext)
+        val application = context.applicationContext as Application
+        val sessionStore = SessionStore.getInstance(application)
         val repo = getRepository()
-        return MainViewModel.Factory(repo, sessionStore)
+        return MainViewModel.Factory(application, repo, sessionStore)
     }
 
     /**

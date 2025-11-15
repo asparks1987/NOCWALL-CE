@@ -1,6 +1,6 @@
-# Android Wrapper (WebView)
+# Android Companion App (WebView)
 
-This module provides a minimal Android application that wraps the UISP NOC dashboard inside a WebView. It is intended for technicians who want a dedicated launcher on handheld devices without installing a full browser bookmark or PWA.
+This module provides a minimal Android application that wraps the UISP NOC dashboard inside a WebView. It is intended for technicians who want a dedicated launcher on handheld devices without installing a full browser bookmark or PWA. Think of it as the officially blessed companion: it mirrors the siren/vibration from Gotify alerts, stores sessions between shifts, and drops techs directly into outage grids the moment they unlock their phone.
 
 ---
 
@@ -11,6 +11,8 @@ This module provides a minimal Android application that wraps the UISP NOC dashb
 * Default URL of `http://10.0.2.2/` for emulator testing (maps to the host machine running Docker).
 * Accepts an explicit URL via an Intent extra named `url` for deep linking.
 * Calls `https://<noc-host>/?ajax=mobile_config` to retrieve the UISP base URL and token when hosted alongside the server (requires the same network and configured token on the server).
+* Launches full-screen with no browser chrome so the outage grids feel like a native console.
+* Mirrors the desktop siren/vibration cues so Gotify-driven alerts stay loud even when the device is pocketed.
 
 ---
 
@@ -24,6 +26,12 @@ This module provides a minimal Android application that wraps the UISP NOC dashb
 4. Run on an emulator or physical device running Android 8.0+.
 
 The WebView caches cookies/local storage, so the UISP NOC session persists between launches. To reset, clear the app data from Android settings.
+
+## Field Workflow Ideas
+
+* Pair the APK with Gotify push notifications so tapping an alert jumps straight back into the outage dashboard.
+* Ship one build per customer/site by pre-setting `DEFAULT_URL` and branding assets, then push through your MDM.
+* Use Android's `Work Profile` to keep technician personal data separate while still letting them silence/acknowledge alerts from the home screen widget of your launcher choice.
 
 ---
 

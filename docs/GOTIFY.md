@@ -1,6 +1,6 @@
 # Embedded Gotify
 
-The UISP NOC container bundles a Gotify 2.6 server for push notifications. Gotify starts automatically alongside Apache, stores its data inside the shared `cache/` volume, and is used to deliver offline/online, flapping, and latency alerts.
+The UISP NOC container bundles a Gotify 2.6 server for push notifications. Gotify starts automatically alongside Apache, stores its data inside the shared `cache/` volume, and is used to deliver offline/online, flapping, and latency alerts. The Android companion app consumes the same stream so sirens/vibration fire on handhelds the instant an outage lands.
 
 ---
 
@@ -46,6 +46,14 @@ GOTIFY_TOKEN=<your application token>
 ```
 
 Restart the container. The embedded Gotify server will still start (for completeness) but will not be used for notifications.
+
+---
+
+## Android Companion Hooks
+
+* Bundle the auto-generated application token (from `cache/gotify_app_token.txt`) into your Android build config if you want the wrapper to preflight notifications.
+* The WebView mirrors audio/vibration from Gotify messages. Long-press the siren toggle in the dashboard if you want to keep the phone buzzing during maintenance drills.
+* When publishing the companion app via an MDM, keep Gotify reachable over HTTPS (either via the bundled Caddy host or your own proxy) so background alerts survive when the device screen is off.
 
 ---
 

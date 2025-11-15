@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.uisp.noc.data.SessionStore
-import com.uisp.noc.data.UispRepository
 import com.uisp.noc.data.model.DeviceStatus
 
 class GatewayStatusWorker(
@@ -21,7 +20,8 @@ class GatewayStatusWorker(
         val repository = Injector.getRepository()
 
         try {
-            val summary = repository.fetchSummary(session)
+            repository.fetchSummary(session, appContext)
+            val summary = repository.summaryFlow.value ?: return Result.failure()
             val now = System.currentTimeMillis()
 
             // Update the offline gateways map

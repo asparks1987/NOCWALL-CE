@@ -1,5 +1,6 @@
 package com.uisp.noc.ui
 
+import android.app.Application
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -10,23 +11,32 @@ import com.uisp.noc.data.model.DevicesSummary
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.IOException
 
 class MainViewModel(
+    private val application: Application,
     private val repository: UispRepository,
     private val sessionStore: SessionStore
 ) : ViewModel() {
 
     private val _sessionState =
         MutableStateFlow<SessionState>(SessionState.Loading)
-    val sessionState: StateFlow<SessionState> = _sessionState.asStateFlow()
+    val sessionState: StateFlow<SessionState> = _sessionState
 
-    private val _dashboardState = MutableStateFlow(DashboardState())
-    val dashboardState: StateFlow<DashboardState> = _dashboardState.asStateFlow()
+    private val _isHistoryAvailable = MutableStateFlow(false)
+    val isHistoryAvailable: StateFlow<Boolean> = _isHistoryAvailable.asStateFlow()
+
+    val dashboardState: StateFlow<DashboardState> = repository.summaryFlow
+        .map { summary -> DashboardState(summary = summary) }
+        .stateIn(viewModelScope, SharingStarted.Lazily, DashboardState())
+
 
     private val _events = MutableSharedFlow<UiEvent>(
         replay = 0,
@@ -40,6 +50,9 @@ class MainViewModel(
     init {
         viewModelScope.launch {
             loadExistingSession()
+            _sessionState.collect {
+                checkHistoryAvailability()
+            }
         }
     }
 
@@ -53,7 +66,6 @@ class MainViewModel(
 
         viewModelScope.launch {
             _sessionState.value = SessionState.Loading
-            _dashboardState.value = DashboardState(isLoading = true)
             try {
                 val session = repository.authenticate(
                     backendUrl = backendUrl,
@@ -70,7 +82,6 @@ class MainViewModel(
                     lastBackendUrl = sessionStore.lastBackendUrl(),
                     lastUsername = sessionStore.lastUsername()
                 )
-                _dashboardState.value = DashboardState()
             } catch (ex: IOException) {
                 _events.emit(
                     UiEvent.Message(
@@ -81,7 +92,6 @@ class MainViewModel(
                     lastBackendUrl = sessionStore.lastBackendUrl(),
                     lastUsername = sessionStore.lastUsername()
                 )
-                _dashboardState.value = DashboardState()
             }
         }
     }
@@ -89,22 +99,13 @@ class MainViewModel(
     fun refreshSummary() {
         val session = activeSession
         if (session == null) {
-            _dashboardState.value = DashboardState()
             return
         }
 
         viewModelScope.launch {
-            _dashboardState.value = _dashboardState.value.copy(
-                isLoading = true,
-                errorMessage = null
-            )
             try {
-                val summary = repository.fetchSummary(session)
-                _dashboardState.value = DashboardState(
-                    isLoading = false,
-                    summary = summary,
-                    errorMessage = null
-                )
+                repository.fetchSummary(session, application)
+                checkHistoryAvailability()
             } catch (authEx: UispRepository.AuthException) {
                 sessionStore.clear()
                 activeSession = null
@@ -113,18 +114,7 @@ class MainViewModel(
                     lastBackendUrl = sessionStore.lastBackendUrl(),
                     lastUsername = sessionStore.lastUsername()
                 )
-                _dashboardState.value = DashboardState(
-                    isLoading = false,
-                    summary = null,
-                    errorMessage = authEx.message
-                )
             } catch (ex: IOException) {
-                val previous = _dashboardState.value.summary
-                _dashboardState.value = DashboardState(
-                    isLoading = false,
-                    summary = previous,
-                    errorMessage = ex.message ?: "Unable to refresh data."
-                )
                 _events.emit(UiEvent.Message("Unable to refresh data."))
             }
         }
@@ -138,7 +128,26 @@ class MainViewModel(
                 lastBackendUrl = sessionStore.lastBackendUrl(),
                 lastUsername = sessionStore.lastUsername()
             )
-            _dashboardState.value = DashboardState()
+        }
+    }
+
+    fun simulateGatewayOutage() {
+        viewModelScope.launch {
+            repository.triggerSimulatedGatewayOutage(application)
+            _events.emit(UiEvent.Message("Simulated outage triggered."))
+        }
+    }
+
+    fun clearSimulatedGatewayOutage() {
+        viewModelScope.launch {
+            repository.clearSimulatedGatewayOutage()
+            _events.emit(UiEvent.Message("Simulated outage cleared."))
+        }
+    }
+
+    private fun checkHistoryAvailability() {
+        viewModelScope.launch {
+            _isHistoryAvailable.value = repository.isServerReachable(application, activeSession)
         }
     }
 
@@ -177,13 +186,14 @@ class MainViewModel(
     }
 
     class Factory(
+        private val application: Application,
         private val repository: UispRepository,
         private val sessionStore: SessionStore
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             if (modelClass.isAssignableFrom(MainViewModel::class.java)) {
-                return MainViewModel(repository, sessionStore) as T
+                return MainViewModel(application, repository, sessionStore) as T
             }
             throw IllegalArgumentException("Unknown ViewModel class: $modelClass")
         }

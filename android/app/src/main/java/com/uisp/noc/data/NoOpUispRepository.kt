@@ -1,6 +1,6 @@
 package com.uisp.noc.data
 
-import com.uisp.noc.data.model.DeviceStatus
+import android.content.Context
 import com.uisp.noc.data.model.DevicesSummary
 
 /**
@@ -17,9 +17,9 @@ class NoOpUispRepository : UispRepository() {
         return Session("", "", "", "")
     }
 
-    override suspend fun fetchSummary(session: Session): DevicesSummary {
-        // Do nothing, return empty summary
-        return DevicesSummary(
+    override suspend fun fetchSummary(session: Session, context: Context) {
+        // Do nothing, just emit an empty summary
+        _summaryFlow.value = DevicesSummary(
             lastUpdatedEpochMillis = 0,
             gateways = emptyList(),
             switches = emptyList(),
@@ -27,7 +27,8 @@ class NoOpUispRepository : UispRepository() {
             offlineGateways = emptyList(),
             offlineBackbone = emptyList(),
             offlineCpes = emptyList(),
-            highLatencyGateways = emptyList()
+            highLatencyGateways = emptyList(),
+            totalCpes = 0
         )
     }
 }

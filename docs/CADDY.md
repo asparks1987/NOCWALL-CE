@@ -1,6 +1,6 @@
 # TLS, Caddy, and Reverse Proxying
 
-Caddy ships alongside the UISP NOC container to terminate TLS, publish the dashboard on ports 80/443, and optionally expose the embedded Gotify instance on its own hostname. The application can also instruct Caddy to request Let’s Encrypt certificates via the admin API when the optional TLS UI is enabled.
+Caddy ships alongside the UISP NOC container to terminate TLS, publish the dashboard on ports 80/443, and optionally expose the embedded Gotify instance on its own hostname. The application can also instruct Caddy to request Let's Encrypt certificates via the admin API when the optional TLS UI is enabled, which keeps the Android companion app from throwing certificate warnings in its locked-down WebView.
 
 ---
 
@@ -76,6 +76,15 @@ After editing `Caddyfile`, restart the container (`docker compose restart caddy`
 
 ---
 
+## Android Companion Considerations
+
+* Use valid HTTPS names (`NOC_DOMAIN` and optional `GOTIFY_DOMAIN`) that match what you hard-code into the Android companion app to avoid WebView SSL prompts.
+* If you plan to deep-link from Gotify push notifications into the app, expose Gotify over TLS via Caddy so Android treats the endpoint as trusted while the device is asleep.
+* Ship updated certificates (or pin your public hostname) before distributing a new APK through your MDM so techs never see certificate rotation prompts during outages.
+
+---
+
 ## Bypassing Caddy
 
 For lab or air-gapped environments, expose the app directly by uncommenting the `ports` section on the `uisp-noc` service (`1200:80`, `18080:18080`) and stopping/removing the Caddy service. In this mode TLS is not provided; terminate TLS with another proxy or use HTTP.
+

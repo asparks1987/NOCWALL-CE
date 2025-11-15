@@ -1,8 +1,15 @@
 package com.uisp.noc.data
 
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import com.uisp.noc.MyFirebaseMessagingService
 import com.uisp.noc.data.model.DeviceStatus
 import com.uisp.noc.data.model.DevicesSummary
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import okhttp3.FormBody
 import okhttp3.JavaNetCookieJar
@@ -24,6 +31,13 @@ import java.util.concurrent.TimeUnit
  * @property httpClient The OkHttpClient used for all network requests.
  */
 open class UispRepository(private val httpClient: OkHttpClient = defaultClient()) {
+
+    protected val _summaryFlow = MutableStateFlow<DevicesSummary?>(null)
+    val summaryFlow: StateFlow<DevicesSummary?> = _summaryFlow.asStateFlow()
+
+    private val deviceStatusHistory = mutableMapOf<String, MutableList<Long>>()
+    private val FLAPPING_WINDOW_MS = 5 * 60 * 1000 // 5 minutes
+    private val FLAPPING_THRESHOLD = 3 // 3 or more changes in the window
 
     //region Public API
 
@@ -109,28 +123,149 @@ open class UispRepository(private val httpClient: OkHttpClient = defaultClient()
     /**
      * Fetches a summary of all network devices from the UISP API.
      */
-    open suspend fun fetchSummary(session: Session): DevicesSummary = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
-            .url(session.uispBaseUrl.trimEnd('/') + "/nms/api/v2.1/devices")
-            .get()
-            .header("Accept", "application/json")
-            .header("x-auth-token", session.uispToken.trim())
-            .header("User-Agent", USER_AGENT)
-            .build()
+    open suspend fun fetchSummary(session: Session, context: Context) {
+        withContext(Dispatchers.IO) {
+            val request = Request.Builder()
+                .url(session.uispBaseUrl.trimEnd('/') + "/nms/api/v2.1/devices")
+                .get()
+                .header("Accept", "application/json")
+                .header("x-auth-token", session.uispToken.trim())
+                .header("User-Agent", USER_AGENT)
+                .build()
 
-        httpClient.newCall(request).execute().use { response ->
-            val body = response.body?.string()
-                ?: throw IOException("Empty response from UISP devices endpoint")
+            httpClient.newCall(request).execute().use { response ->
+                val body = response.body?.string()
+                    ?: throw IOException("Empty response from UISP devices endpoint")
 
-            if (response.code == 401) {
-                throw AuthException("UISP token has expired or is invalid")
+                if (response.code == 401) {
+                    throw AuthException("UISP token has expired or is invalid")
+                }
+
+                if (!response.isSuccessful) {
+                    throw IOException("Failed to download UISP devices: HTTP ${response.code}")
+                }
+
+                val newSummary = parseDevices(body)
+                val oldSummary = _summaryFlow.value
+                _summaryFlow.value = newSummary
+
+                if (oldSummary != null) {
+                    detectAndNotifyStatusChanges(oldSummary, newSummary, context)
+                }
             }
+        }
+    }
 
-            if (!response.isSuccessful) {
-                throw IOException("Failed to download UISP devices: HTTP ${response.code}")
+    private fun detectAndNotifyStatusChanges(
+        oldSummary: DevicesSummary,
+        newSummary: DevicesSummary,
+        context: Context
+    ) {
+        val oldDevices = oldSummary.allDevices.associateBy { it.id }
+        val newDevices = newSummary.allDevices.associateBy { it.id }
+
+        for (newDevice in newDevices.values) {
+            val oldDevice = oldDevices[newDevice.id]
+            if (oldDevice != null) {
+                if (oldDevice.online != newDevice.online) {
+
+                    if (newDevice.isBackbone) {
+                        val sound = if (newDevice.isGateway) "buz" else "brrt"
+                        val status = if (newDevice.online) "Online" else "Offline"
+                        MyFirebaseMessagingService.sendNotification(
+                            context,
+                            "Device $status",
+                            "${newDevice.name} (${newDevice.role}) is now $status.",
+                            sound
+                        )
+                    }
+
+                    // Flapping detection
+                    if(newDevice.isBackbone) {
+                        val deviceId = newDevice.id
+                        val history = deviceStatusHistory.getOrPut(deviceId) { mutableListOf() }
+                        val now = System.currentTimeMillis()
+                        history.add(now)
+                        history.removeAll { it < (now - FLAPPING_WINDOW_MS) }
+
+                        if (history.size >= FLAPPING_THRESHOLD) {
+                            val flappingSound = if (newDevice.isGateway) "buz" else "flrp"
+                            MyFirebaseMessagingService.sendNotification(
+                                context,
+                                "Device Flapping",
+                                "${newDevice.name} is flapping (changing status frequently).",
+                                flappingSound
+                            )
+                            history.clear()
+                        }
+                    }
+                }
             }
+        }
+    }
 
-            parseDevices(body)
+
+    open fun triggerSimulatedGatewayOutage(context: Context) {
+        val currentSummary = _summaryFlow.value
+        if (currentSummary != null) {
+            val fakeGateway = DeviceStatus(
+                id = "fake-gateway-id",
+                name = "Fake Gateway",
+                role = "gateway",
+                isGateway = true,
+                isBackbone = true,
+                online = false,
+                latencyMs = null,
+                status = "offline"
+            )
+            val newOfflineGateways = currentSummary.offlineGateways + fakeGateway
+            val newSummary = currentSummary.copy(offlineGateways = newOfflineGateways)
+            _summaryFlow.value = newSummary
+            MyFirebaseMessagingService.sendNotification(
+                context,
+                "Gateway Offline",
+                "Fake Gateway is offline.",
+                "buz"
+            )
+        }
+    }
+
+    open fun clearSimulatedGatewayOutage() {
+        val currentSummary = _summaryFlow.value
+        if (currentSummary != null) {
+            val newOfflineGateways = currentSummary.offlineGateways.filter { it.id != "fake-gateway-id" }
+            val newSummary = currentSummary.copy(offlineGateways = newOfflineGateways)
+            _summaryFlow.value = newSummary
+        }
+    }
+    
+    suspend fun isServerReachable(context: Context, session: Session?): Boolean {
+        if (session == null) return false
+
+        val connectivityManager =
+            context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val activeNetwork = connectivityManager.activeNetwork ?: return false
+        val networkCapabilities =
+            connectivityManager.getNetworkCapabilities(activeNetwork) ?: return false
+
+        val isWifi = networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+        if (!isWifi) return false
+
+        return withContext(Dispatchers.IO) {
+            try {
+                val request = Request.Builder()
+                    .url(session.uispBaseUrl.trimEnd('/') + "/nms/api/v2.1/server/status")
+                    .get()
+                    .header("Accept", "application/json")
+                    .header("x-auth-token", session.uispToken.trim())
+                    .header("User-Agent", USER_AGENT)
+                    .build()
+                httpClient.newCall(request).execute().use { response ->
+                    response.isSuccessful
+                }
+            } catch (e: IOException) {
+                false
+            }
         }
     }
 
@@ -143,6 +278,7 @@ open class UispRepository(private val httpClient: OkHttpClient = defaultClient()
      */
     private fun parseDevices(payload: String): DevicesSummary {
         val root = JSONArray(payload)
+        val allDevices = mutableListOf<DeviceStatus>()
         val gateways = mutableListOf<DeviceStatus>()
         val switches = mutableListOf<DeviceStatus>()
         val routers = mutableListOf<DeviceStatus>()
@@ -150,6 +286,7 @@ open class UispRepository(private val httpClient: OkHttpClient = defaultClient()
         val offlineBackbone = mutableListOf<DeviceStatus>()
         val offlineCpes = mutableListOf<DeviceStatus>()
         val highLatency = mutableListOf<DeviceStatus>()
+        var totalCpes = 0
 
         for (i in 0 until root.length()) {
             val device = root.optJSONObject(i) ?: continue
@@ -166,6 +303,12 @@ open class UispRepository(private val httpClient: OkHttpClient = defaultClient()
 
             val isGateway = role == "gateway"
             val isBackbone = role == "router" || role == "switch" || isGateway
+            val isCpe = !isGateway && !isBackbone
+
+            if (isCpe) {
+                totalCpes++
+            }
+            
             val status = DeviceStatus(
                 id = id,
                 name = name,
@@ -176,6 +319,7 @@ open class UispRepository(private val httpClient: OkHttpClient = defaultClient()
                 latencyMs = latencyMs,
                 status = overview?.optString("status") ?: "unknown"
             )
+            allDevices.add(status)
 
             when (role) {
                 "gateway" -> gateways.add(status)
@@ -197,6 +341,7 @@ open class UispRepository(private val httpClient: OkHttpClient = defaultClient()
         }
 
         return DevicesSummary(
+            allDevices = allDevices,
             lastUpdatedEpochMillis = System.currentTimeMillis(),
             gateways = gateways,
             switches = switches,
@@ -204,7 +349,8 @@ open class UispRepository(private val httpClient: OkHttpClient = defaultClient()
             offlineGateways = offlineGateways,
             offlineBackbone = offlineBackbone,
             offlineCpes = offlineCpes,
-            highLatencyGateways = highLatency
+            highLatencyGateways = highLatency,
+            totalCpes = totalCpes
         )
     }
 

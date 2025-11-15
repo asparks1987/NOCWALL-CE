@@ -98,11 +98,50 @@
                     android:orientation="vertical"
                     android:padding="18dp">
 
-                    <TextView
+                    <RelativeLayout
                         android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="Offline gateways"
-                        android:textAppearance="@style/TextAppearance.Uisp.SectionLabel" />
+                        android:layout_height="wrap_content">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_alignParentStart="true"
+                            android:layout_centerVertical="true"
+                            android:text="Offline gateways"
+                            android:textAppearance="@style/TextAppearance.Uisp.SectionLabel" />
+
+                        <LinearLayout
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_alignParentEnd="true"
+                            android:layout_centerVertical="true"
+                            android:orientation="horizontal">
+
+                            <Button
+                                android:id="@+id/button_history"
+                                style="@style/Widget.Material3.Button.TextButton"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginEnd="8dp"
+                                android:text="History"
+                                android:visibility="gone" />
+
+                            <Button
+                                android:id="@+id/button_clear_outage"
+                                style="@style/Widget.Material3.Button.TextButton"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginEnd="8dp"
+                                android:text="Clear" />
+
+                            <Button
+                                android:id="@+id/button_test_outage"
+                                style="@style/Widget.Material3.Button.OutlinedButton"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Test Outage" />
+                        </LinearLayout>
+                    </RelativeLayout>
 
                     <LinearLayout
                         android:id="@+id/list_offline_gateways"
@@ -159,6 +198,8 @@
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
                     android:padding="18dp">
+
+
 
                     <TextView
                         android:layout_width="match_parent"

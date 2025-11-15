@@ -4,8 +4,10 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import androidx.annotation.ColorRes
 import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
@@ -43,6 +45,9 @@ class DashboardFragment : Fragment() {
     private lateinit var listLatency: LinearLayout
     private lateinit var errorCard: MaterialCardView
     private lateinit var errorText: TextView
+    private lateinit var testOutageButton: Button
+    private lateinit var clearOutageButton: Button
+    private lateinit var historyButton: Button
 
     private var layoutInflaterRef: LayoutInflater? = null
     private var currentSession: Session? = null
@@ -62,6 +67,15 @@ class DashboardFragment : Fragment() {
         swipeRefresh.setOnRefreshListener {
             viewModel.refreshSummary()
         }
+        testOutageButton.setOnClickListener {
+            viewModel.simulateGatewayOutage()
+        }
+        clearOutageButton.setOnClickListener {
+            viewModel.clearSimulatedGatewayOutage()
+        }
+        historyButton.setOnClickListener {
+            Toast.makeText(requireContext(), "History coming soon!", Toast.LENGTH_SHORT).show()
+        }
         collectState()
     }
 
@@ -74,6 +88,9 @@ class DashboardFragment : Fragment() {
 
         connectionSummary = root.findViewById(R.id.text_connection_summary)
         lastUpdated = root.findViewById(R.id.text_last_updated)
+        testOutageButton = root.findViewById(R.id.button_test_outage)
+        clearOutageButton = root.findViewById(R.id.button_clear_outage)
+        historyButton = root.findViewById(R.id.button_history)
 
         val gatewaysInclude = root.findViewById<View>(R.id.overview_gateways)
         overviewGatewaysValue = gatewaysInclude.findViewById(R.id.text_value)
@@ -125,6 +142,11 @@ class DashboardFragment : Fragment() {
                                 setConnectionSummaryColor(R.color.uisp_text_secondary)
                             }
                         }
+                    }
+                }
+                launch {
+                    viewModel.isHistoryAvailable.collect { isAvailable ->
+                        historyButton.isVisible = isAvailable
                     }
                 }
             }
@@ -187,8 +209,8 @@ class DashboardFragment : Fragment() {
             setOverviewState(overviewBackboneValue, overviewBackboneLabel, backboneIssue)
 
             overviewCpesValue.text = summary.offlineCpes.size.takeIf { it > 0 }
-                ?.let { "$it / ${summary.offlineCpes.size + summary.offlineGateways.size + summary.offlineBackbone.size}" }
-                ?: (summary.offlineCpes.size + summary.offlineGateways.size + summary.offlineBackbone.size).toString()
+                ?.let { "$it / ${summary.totalCpes}" }
+                ?: summary.totalCpes.toString()
             overviewCpesLabel.text =
                 if (summary.offlineCpes.isEmpty()) "Subscribers online" else "Subscribers offline"
             val subscribersIssue = summary.offlineCpes.isNotEmpty()
