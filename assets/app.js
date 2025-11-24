@@ -212,20 +212,34 @@ function renderDevices(meta, opts){
     }
   });
 
-  const gws = devices
-    .filter(d=>d.gateway)
-    .sort((a,b)=>a.online-b.online||a.name.localeCompare(b.name));
-  const cps = devices
-    .filter(d=>!d.gateway)
-    .sort((a,b)=> (a.online - b.online) || a.name.localeCompare(b.name));
-  const backbones = devices
-    .filter(d=> (d.router || d.switch) && !d.gateway )
-    .sort((a,b)=> (a.online - b.online) || a.name.localeCompare(b.name));
+  const seen=new Set();
+  const core = [];
+  const edge = [];
+  devices.forEach(dev=>{
+    if(!dev || !dev.id) return;
+    if(dev.gateway || dev.ap){
+      core.push(dev);
+      seen.add(dev.id);
+      return;
+    }
+    if(dev.station || dev.router || dev.switch){
+      edge.push(dev);
+      seen.add(dev.id);
+      return;
+    }
+  });
+  devices.forEach(dev=>{
+    if(dev && dev.id && !seen.has(dev.id)){
+      edge.push(dev);
+    }
+  });
 
-  renderGatewayGrid(gws, nowSec);
+  core.sort((a,b)=>a.online-b.online||a.name.localeCompare(b.name));
+  edge.sort((a,b)=> (a.online - b.online) || a.name.localeCompare(b.name));
+
+  renderGatewayGrid(core, nowSec);
   requestAnimationFrame(()=> {
-    renderBackboneGrid(backbones, nowSec);
-    requestAnimationFrame(()=>{ renderCpeGrid(cps); });
+    renderBackboneGrid(edge, nowSec);
   });
 
   const footer=document.getElementById('footer');
@@ -239,12 +253,16 @@ function renderDevices(meta, opts){
   const total=devices.length;
   const online=devices.filter(d=>d.online).length;
   const health = total>0 ? Math.round((online/total)*100) : null;
-  const offlineGw=gws.filter(d=>!d.online).length;
-  const unacked=gws.filter(d=>!d.online && !(d.ack_until && d.ack_until>nowSec)).length;
-  const latVals=gws.map(d=>d.latency).filter(v=>typeof v==='number' && isFinite(v));
+  const offlineGw=core.filter(d=>!d.online).length;
+  const unacked=core.filter(d=>!d.online && !(d.ack_until && d.ack_until>nowSec)).length;
+  const latVals=core.map(d=>{
+    if(typeof d.latency==='number' && isFinite(d.latency)) return d.latency;
+    if(typeof d.cpe_latency==='number' && isFinite(d.cpe_latency)) return d.cpe_latency;
+    return null;
+  }).filter(v=>v!==null);
   const avgLat = latVals.length ? Math.round(latVals.reduce((a,b)=>a+b,0)/latVals.length) : null;
-  const highCpu=gws.filter(d=>typeof d.cpu==='number' && d.cpu>90).length;
-  const highRam=gws.filter(d=>typeof d.ram==='number' && d.ram>90).length;
+  const highCpu=core.filter(d=>typeof d.cpu==='number' && d.cpu>90).length;
+  const highRam=core.filter(d=>typeof d.ram==='number' && d.ram>90).length;
 
   const healthClass = health==null ? 'good' : (health>=95?'good':(health>=80?'warn':'bad'));
   const latClass = avgLat==null ? 'good' : (avgLat>500?'bad':(avgLat>100?'warn':'good'));
@@ -253,20 +271,17 @@ function renderDevices(meta, opts){
   const cpuClass = highCpu>0 ? 'bad' : 'good';
   const ramClass = highRam>0 ? 'bad' : 'good';
 
-  const gwOnline = gws.filter(d=>d.online).length;
-  const gwTotal = gws.length;
-  const cpeOnline = cps.filter(d=>d.online).length;
-  const cpeTotal = cps.length;
-  const rbOnline = backbones.filter(d=>d.online).length;
-  const rbTotal = backbones.length;
+  const gwOnline = core.filter(d=>d.online).length;
+  const gwTotal = core.length;
+  const edgeOnline = edge.filter(d=>d.online).length;
+  const edgeTotal = edge.length;
 
   const summaryHTML = [
-    `<span class="badge good">Gateways: ${gwOnline}/${gwTotal}</span>`,
-    `<span class="badge good">Routers/Switches: ${rbOnline}/${rbTotal}</span>`,
-    `<span class="badge good">CPEs: ${cpeOnline}/${cpeTotal}</span>`,
+    `<span class="badge good">Gateways/APs: ${gwOnline}/${gwTotal}</span>`,
+    `<span class="badge good">Stations/Switches/Routers: ${edgeOnline}/${edgeTotal}</span>`,
     `<span class="badge ${healthClass}">Health: ${health==null?'--':health+'%'}</span>`,
-    `<span class="badge ${offlineClass}">GW Offline: ${offlineGw}</span>`,
-    `<span class="badge ${unackedClass}">Unacked: ${unacked}</span>`,
+    `<span class="badge ${offlineClass}">Core Offline: ${offlineGw}</span>`,
+    `<span class="badge ${unackedClass}">Unacked Core: ${unacked}</span>`,
     `<span class="badge ${latClass}">Avg Latency: ${avgLat==null?'--':avgLat+' ms'}</span>`,
     `<span class="badge ${cpuClass}">High CPU: ${highCpu}</span>`,
     `<span class="badge ${ramClass}">High RAM: ${highRam}</span>`
@@ -274,7 +289,7 @@ function renderDevices(meta, opts){
   const overallEl=document.getElementById('overallSummary');
   if(overallEl) overallEl.innerHTML=summaryHTML;
 
-  const shouldAlert = gws.some(d=>!d.online && !(d.ack_until && d.ack_until>nowSec));
+  const shouldAlert = core.some(d=>!d.online && !(d.ack_until && d.ack_until>nowSec));
 
   if(shouldAlert){
     if(!sirenShouldAlertPrev){
@@ -284,7 +299,7 @@ function renderDevices(meta, opts){
     if(!sirenTimeout){
       sirenTimeout=setTimeout(()=>{
         const stillAlert = devicesCache
-          .filter(d=>d.gateway)
+          .filter(d=>d.gateway || d.ap)
           .some(d=>!d.online && !(d.ack_until && d.ack_until>(Date.now()/1000)));
         if(stillAlert){
           const a=document.getElementById('siren');
@@ -471,17 +486,19 @@ function logout(){
 }
 
 function renderGatewayGrid(gws, nowSec){
-  const gateGrid=document.getElementById('gateGrid');
-  if(!gateGrid) return;
+  const coreGrid=document.getElementById('coreGrid');
+  if(!coreGrid) return;
   const html=gws.map(d=>{
     const badges=[badgeVal(d.cpu,'CPU','%'),badgeVal(d.ram,'RAM','%'),badgeVal(d.temp,'Temp','&deg;C'),badgeLatency(d.latency)].join(' ');
     const ackActive = d.ack_until && d.ack_until > nowSec;
+    const roleLabel = d.gateway ? 'Gateway' : 'Access Point';
     return `<div class="card ${d.online?'':'offline'} ${ackActive?'acked':''}">
       <div class="ack-badge">${badgeAck(d.ack_until)}
         <span class="badge good live-uptime" data-uptime="${d.uptime??''}"></span>
         <span class="badge bad live-outage" data-offline-since="${d.offline_since??''}"></span>
       </div>
       <h2>${d.name}</h2>
+      <div class="role-label">${roleLabel}</div>
       <div class="status" style="color:${d.online?'#b06cff':'#f55'}">${d.online?'ONLINE':'OFFLINE'}</div>
       <div>${badges}</div>
       <div class="actions">
@@ -503,57 +520,55 @@ function renderGatewayGrid(gws, nowSec){
       </div>
     </div>`;
   }).join('');
-  gateGrid.innerHTML = html;
+  coreGrid.innerHTML = html;
 }
 
 function renderBackboneGrid(backbones, nowSec){
-  const routerGrid=document.getElementById('routerGrid');
-  if(!routerGrid) return;
+  const edgeGrid=document.getElementById('edgeGrid');
+  if(!edgeGrid) return;
   const html=backbones.map(d=>{
-    const badges=[badgeVal(d.cpu,'CPU','%'),badgeVal(d.ram,'RAM','%'),badgeVal(d.temp,'Temp','&deg;C'),badgeLatency(d.latency)].join(' ');
-    const ackActive = d.ack_until && d.ack_until > nowSec;
+    const isCore = d.router || d.switch;
+    const latencyVal = (typeof d.latency==='number' && isFinite(d.latency)) ? d.latency : d.cpe_latency;
+    const badges=isCore
+      ? [badgeVal(d.cpu,'CPU','%'),badgeVal(d.ram,'RAM','%'),badgeVal(d.temp,'Temp','&deg;C'),badgeLatency(latencyVal)].join(' ')
+      : badgeLatency(latencyVal);
+    const ackActive = isCore && d.ack_until && d.ack_until > nowSec;
+    const roleLabel = d.gateway ? 'Gateway' : (d.ap ? 'Access Point' : (d.router ? 'Router' : (d.switch ? 'Switch' : (d.station ? 'Station' : (d.role || 'Device')))));
+    const actionsClass = isCore ? 'actions' : 'actions actions--compact';
+    const actions = isCore ? `
+      ${!d.online ? `
+        <div class="dropdown" style="${ackActive ? 'display:none' : ''}">
+          <button onclick="toggleAckMenu('${d.id}')">Ack</button>
+          <div id="ack-${d.id}" class="dropdown-content" style="display:none;background:#333;position:absolute;">
+            <a href="#" onclick="ack('${d.id}','30m')">30m</a>
+            <a href="#" onclick="ack('${d.id}','1h')">1h</a>
+            <a href="#" onclick="ack('${d.id}','6h')">6h</a>
+            <a href="#" onclick="ack('${d.id}','8h')">8h</a>
+            <a href="#" onclick="ack('${d.id}','12h')">12h</a>
+          </div>
+        </div>
+        ${ackActive ? `<button onclick="clearAck('${d.id}')">Clear Ack</button>`:''}
+      `:``}
+      ${d.simulate ? `<button onclick="clearSim('${d.id}')">End Test</button>` : (d.online ? `<button onclick="simulate('${d.id}')">Test Outage</button>` : '')}
+      <button onclick="showHistory('${d.id}','${d.name}')">History</button>
+    ` : `
+      <button class="btn-outline" onclick="openCpeHistory('${d.id}','${d.name}')">Ping History</button>
+    `;
     return `<div class="card ${d.online?'':'offline'} ${ackActive?'acked':''}">
-      <div class="ack-badge">${badgeAck(d.ack_until)}
+      <div class="ack-badge">${isCore ? badgeAck(d.ack_until) : ''}
         <span class="badge good live-uptime" data-uptime="${d.uptime??''}"></span>
         <span class="badge bad live-outage" data-offline-since="${d.offline_since??''}"></span>
       </div>
       <h2>${d.name}</h2>
+      <div class="role-label">${roleLabel}</div>
       <div class="status" style="color:${d.online?'#b06cff':'#f55'}">${d.online?'ONLINE':'OFFLINE'}</div>
       <div>${badges}</div>
-      <div class="actions">
-        ${!d.online ? `
-          <div class="dropdown" style="${ackActive ? 'display:none' : ''}">
-            <button onclick="toggleAckMenu('${d.id}')">Ack</button>
-            <div id="ack-${d.id}" class="dropdown-content" style="display:none;background:#333;position:absolute;">
-              <a href="#" onclick="ack('${d.id}','30m')">30m</a>
-              <a href="#" onclick="ack('${d.id}','1h')">1h</a>
-              <a href="#" onclick="ack('${d.id}','6h')">6h</a>
-              <a href="#" onclick="ack('${d.id}','8h')">8h</a>
-              <a href="#" onclick="ack('${d.id}','12h')">12h</a>
-            </div>
-          </div>
-          ${ackActive ? `<button onclick="clearAck('${d.id}')">Clear Ack</button>`:''}
-        `:``}
-        ${d.simulate ? `<button onclick="clearSim('${d.id}')">End Test</button>` : (d.online ? `<button onclick="simulate('${d.id}')">Test Outage</button>` : '')}
-        <button onclick="showHistory('${d.id}','${d.name}')">History</button>
+      <div class="${actionsClass}">
+        ${actions}
       </div>
     </div>`;
   }).join('');
-  routerGrid.innerHTML = html;
-}
-
-function renderCpeGrid(cps){
-  const cpeGrid=document.getElementById('cpeGrid');
-  if(!cpeGrid) return;
-  const html=cps.map(d=>{
-    const latBadge = (typeof d.cpe_latency==='number') ? badgeLatency(d.cpe_latency) : '';
-    return `<div class="card ${d.online?'':'offline'}">
-      <div class="cpe-badge">${latBadge}</div>
-      <h2>${d.name}</h2>
-      <div style="color:${d.online?'#b06cff':'#f55'}">${d.online?'ONLINE':'OFFLINE'}</div>
-    </div>`;
-  }).join('');
-  cpeGrid.innerHTML = html;
+  edgeGrid.innerHTML = html;
 }
 
 function ensureChartJs(){
@@ -668,7 +683,7 @@ function setCpeHistoryStats(stats){
     parts.push(`<span>Max ${stats.max} ms</span>`);
   }
   if(typeof stats.devices==='number' && stats.devices>0){
-    parts.push(`<span>${stats.devices} unique CPE${stats.devices===1?'':'s'}</span>`);
+    parts.push(`<span>${stats.devices} unique station${stats.devices===1?'':'s'}</span>`);
   }
   el.innerHTML = parts.join('');
   el.style.display = parts.length ? 'flex' : 'none';
@@ -692,15 +707,15 @@ function openCpeHistory(id,name){
     if(id){
       title.textContent = name || id;
     } else {
-      title.textContent = 'All CPE Ping History';
+      title.textContent = 'All Station Ping History';
     }
   }
   const subtitle=document.getElementById('cpeHistorySubtitle');
   if(subtitle){
-    subtitle.textContent = id ? 'Last 7 days of recorded ping latency' : 'All sampled CPE pings for the last 7 days';
+    subtitle.textContent = id ? 'Last 7 days of recorded ping latency' : 'All sampled station pings for the last 7 days';
   }
   modal.style.display='block';
-  setCpeHistoryStatus(id ? 'Loading ping history…' : 'Loading all CPE pings…');
+  setCpeHistoryStatus(id ? 'Loading ping history...' : 'Loading all station pings...');
   setCpeHistoryEmpty(false,'');
   setCpeHistoryStats(null);
   const loadId=++cpeHistoryReqId;
@@ -758,10 +773,10 @@ function applyCpeHistoryPayload(payload){
   const uniqueDeviceCount = deviceSet.size;
   if(points.length===0){
     setCpeHistoryStatus('');
-    setCpeHistoryEmpty(true, isSingleDevice ? 'No ping samples recorded for this CPE in the last 7 days.' : 'No ping samples recorded for any CPE in the last 7 days.');
+    setCpeHistoryEmpty(true, isSingleDevice ? 'No ping samples recorded for this station in the last 7 days.' : 'No ping samples recorded for any station in the last 7 days.');
     setCpeHistoryStats(null);
   } else {
-    const deviceSuffix = (!isSingleDevice && uniqueDeviceCount > 0) ? ` across ${uniqueDeviceCount} CPE${uniqueDeviceCount===1?'':'s'}` : '';
+    const deviceSuffix = (!isSingleDevice && uniqueDeviceCount > 0) ? ` across ${uniqueDeviceCount} station${uniqueDeviceCount===1?'':'s'}` : '';
     setCpeHistoryStatus(`Loaded ${points.length} sample${points.length===1?'':'s'}${deviceSuffix}.`);
     setCpeHistoryEmpty(false,'');
     const includeDevicesStat = !isSingleDevice && uniqueDeviceCount>0;

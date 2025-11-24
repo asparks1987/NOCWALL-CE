@@ -7,36 +7,61 @@ body {
 }
 header {
   background: #222;
-  padding: 12px;
-  font-size: 22px;
-  font-weight: bold;
+  padding: 12px 14px;
   color: #e6e6e6;
   border-bottom: 2px solid #b06cff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
+.brand { display: flex; flex-direction: column; gap: 6px; }
+.brand-title { font-size: 22px; font-weight: 700; letter-spacing: 0.02em; }
+#overallSummary { display: flex; flex-wrap: wrap; gap: 6px; font-size: 13px; }
+.header-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+header button { margin: 0; }
+.header-actions button {
+  background: #333;
+  color: #eee;
+  border: 1px solid #444;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px #2b2b2b;
+  transition: background 0.2s, box-shadow 0.2s, transform 0.15s;
+}
+.header-actions button:hover { background: #3a3a3a; box-shadow: 0 0 12px rgba(176,108,255,0.35); transform: translateY(-1px); }
 .tabs {
   display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
   background: #1a1a1a;
+  padding: 8px;
 }
 .tablink {
-  flex: 1;
-  padding: 10px;
+  flex: 1 1 220px;
+  padding: 12px;
   cursor: pointer;
-  background: #333;
-  border: none;
+  background: #2a2a2a;
+  border: 1px solid #333;
+  border-radius: 10px;
   color: #eee;
   font-size: 16px;
+  transition: background 0.2s, transform 0.15s;
 }
+.tablink:hover { background: #323232; transform: translateY(-1px); }
 .tablink.active {
-  background: #0a0a0a;
-  border-bottom: 3px solid #b06cff;
+  background: #0f0f0f;
+  border: 1px solid #b06cff;
+  box-shadow: 0 0 12px rgba(176,108,255,0.35);
 }
 .tabcontent {
   padding: 15px;
 }
 .grid {
   display: grid;
-  /* Exactly 5 columns that auto-fit the available width (no horizontal scroll) */
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 16px;
   margin-top: 15px;
 }
@@ -56,9 +81,23 @@ header {
   border: 1px solid #f55;
   box-shadow: 0 0 12px rgba(255, 0, 0, 0.4);
 }
+.role-label {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #9ecbff;
+  margin: -4px 0 4px;
+  display: inline-block;
+}
 .status {
   margin-top: 5px;
   font-size: 14px;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
 }
 .actions button {
   margin: 3px;
@@ -67,6 +106,9 @@ header {
   border: none;
   border-radius: 4px;
   cursor: pointer;
+}
+.actions--compact {
+  gap: 6px;
 }
 .actions button:hover {
   opacity: 0.8;
@@ -179,10 +221,11 @@ footer {
 }
 .grid-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
   margin-bottom: 10px;
   margin-top: 5px;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 /* Dropdown (Ack menu) */
@@ -411,9 +454,15 @@ footer {
 }
 
 /* Responsive spacing and typography tweaks */
+@media (max-width: 900px) {
+  header { flex-direction: column; align-items: flex-start; }
+  .header-actions { width: 100%; justify-content: flex-start; }
+  .tablink { flex: 1 1 160px; }
+  .grid { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+}
 @media (max-width: 480px) {
   .tabcontent { padding: 12px; }
-  .grid { gap: 12px; }
+  .grid { gap: 12px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
   .card { padding: 10px; }
   .detail-header {
     flex-direction: column;

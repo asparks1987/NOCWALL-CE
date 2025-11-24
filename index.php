@@ -151,12 +151,44 @@ $ASSET_VERSION = max(
 
 // Helpers
 function device_key($dev){ $id=$dev['identification']??[]; return $id['mac'] ?? $id['id'] ?? $id['name'] ?? 'unknown'; }
-function device_role($dev){ return strtolower($dev['identification']['role']??''); }
-function device_role_label($role){ $role=trim((string)$role); return $role!=='' ? ucfirst($role) : 'Device'; }
+function normalize_role($role){
+    $role=strtolower(trim((string)$role));
+    // Normalize common UISP wireless/base-station aliases
+    $role=str_replace([' ','_'], '-', $role);
+    $aliases=[
+        'access-point'=>'ap',
+        'accesspoint'=>'ap',
+        'base-station'=>'ap',
+        'basestation'=>'ap',
+        'base'=>'ap',
+        'cpe'=>'station',
+        'client'=>'station',
+        'subscriber'=>'station',
+        'endpoint'=>'station',
+    ];
+    return $aliases[$role] ?? str_replace('-','',$role);
+}
+function device_role($dev){ return normalize_role($dev['identification']['role']??''); }
+function device_role_label($role){
+    $role=normalize_role($role);
+    $labels=[
+        'ap'=>'Access Point',
+        'station'=>'Station',
+        'ptp'=>'PTP',
+        'gpon'=>'GPON',
+        'homewifi'=>'Home WiFi',
+        'wirelessdevice'=>'Wireless',
+    ];
+    if(isset($labels[$role])) return $labels[$role];
+    $role=trim((string)$role);
+    return $role!=='' ? ucfirst($role) : 'Device';
+}
 function is_gateway($d){ return device_role($d)==='gateway'; }
 function is_router($d){ return device_role($d)==='router'; }
 function is_switch($d){ return device_role($d)==='switch'; }
-function is_backbone($d){ $role=device_role($d); return in_array($role,['gateway','router','switch'],true); }
+function is_ap($d){ $role=device_role($d); return in_array($role,['ap','wireless','homewifi','wirelessdevice','ptp'],true); }
+function is_station($d){ $role=device_role($d); return in_array($role,['station'],true); }
+function is_backbone($d){ $role=device_role($d); return in_array($role,['gateway','router','switch','ap','ptp'],true); }
 function is_online($d){ $s=strtolower($d['overview']['status']??''); return in_array($s,['ok','online','active','connected','reachable','enabled']); }
 function ping_host($ip){ if(!$ip) return null; $ip=preg_replace('/\/\d+$/','',$ip); $out=@shell_exec("ping -c 1 -W 1 ".escapeshellarg($ip)." 2>&1"); if(preg_match('/time=([\d\.]+)\s*ms/',$out,$m)) return floatval($m[1]); return null; }
 
@@ -235,14 +267,14 @@ if(isset($_GET['ajax'])){
         $prev_cache = $cache; // snapshot to detect state transitions
         $out=[];
         $cache_changed=false;
-        // Prepare CPE ping batch: up to 10 random CPEs every 3 minutes, avoiding any pinged within the last hour
+        // Prepare station ping batch: up to 10 random stations every 3 minutes, avoiding any pinged within the last hour
         $batch_int = intdiv($now, 180); // 3-minute windows
         $meta = $cache['_cpe_batch'] ?? [];
         $selected_cpe_ids = $meta['ids'] ?? [];
         if (($meta['last_batch_int'] ?? null) !== $batch_int) {
             $candidates = [];
             foreach ($devices as $dx) {
-                if (!is_backbone($dx)) {
+                if (is_station($dx) || (!is_backbone($dx) && !is_ap($dx))) {
                     $cid = device_key($dx);
                     $lip = $dx['ipAddress'] ?? null;
                     if ($lip) {
@@ -268,8 +300,10 @@ if(isset($_GET['ajax'])){
             $name=$d['identification']['name']??$id;
             $role=device_role($d);
             $isGw=is_gateway($d);
+            $isAp=is_ap($d);
             $isRouter=is_router($d);
             $isSwitch=is_switch($d);
+            $isStation=is_station($d);
             $isBackbone=is_backbone($d);
             $on=is_online($d);
             $cpu=$d['overview']['cpu']??null;
@@ -284,7 +318,7 @@ if(isset($_GET['ajax'])){
             $cpe_lat=null;
 
             if($isBackbone){
-                // Ping no more than once per minute per backbone device
+                // Ping no more than once per minute per backbone device (includes APs)
                 $lastPingAt = $cache[$id]['last_ping_at'] ?? 0;
                 $cachedLat  = $cache[$id]['last_ping_ms'] ?? null;
                 if(($now - $lastPingAt) >= 60 || $cachedLat===null){
@@ -307,7 +341,7 @@ if(isset($_GET['ajax'])){
                     @$stmt->execute();
                 }
             } else {
-                // CPE: ping only if selected in this 3-minute window
+                // Station/edge: ping only if selected in this 3-minute window
                 if (isset($cpe_ping_set[$id])) {
                     $cpe_lat = ping_host($d['ipAddress']??null);
                     $cache[$id]['last_cpe_ping_at'] = $now;
@@ -447,7 +481,8 @@ if(isset($_GET['ajax'])){
 
 
             $out[]=[
-                'id'=>$id,'name'=>$name,'gateway'=>$isGw,
+                'id'=>$id,'name'=>$name,
+                'gateway'=>$isGw,'ap'=>$isAp,'station'=>$isStation,
                 'router'=>$isRouter,'switch'=>$isSwitch,'role'=>$role,'backbone'=>$isBackbone,
                 'online'=>$on,'cpu'=>$cpu,'ram'=>$ram,'temp'=>$temp,'latency'=>$lat,
                 'cpe_latency'=>$cpe_lat,
@@ -777,29 +812,31 @@ if(isset($_GET['view']) && $_GET['view']==='device'){
 </head>
 <body>
 <header>
-  UISP NOC 
-  <span id="overallSummary"></span>
-  <button id="enableSoundBtn" class="btn-accent" onclick="enableSound()" style="float:right;margin-right:10px;">Enable Sound</button>
-  <button onclick="clearAll()" style="float:right;margin-right:10px;">Clear All Acks</button>
-  <button onclick="changePassword()" style="float:right;margin-right:10px;">Change Password</button>
-  <button onclick="logout()" style="float:right;margin-right:10px;">Logout</button>
-  <?php if($SHOW_TLS_UI): ?>
-    <button onclick="openTLS()" style="float:right;margin-right:10px;">TLS/Certs</button>
-  <?php endif; ?>
+  <div class="brand">
+    <span class="brand-title">UISP NOC</span>
+    <span id="overallSummary"></span>
+  </div>
+  <div class="header-actions">
+    <?php if($SHOW_TLS_UI): ?>
+      <button onclick="openTLS()">TLS/Certs</button>
+    <?php endif; ?>
+    <button id="enableSoundBtn" class="btn-accent" onclick="enableSound()">Enable Sound</button>
+    <button onclick="clearAll()">Clear All Acks</button>
+    <button onclick="changePassword()">Change Password</button>
+    <button onclick="logout()">Logout</button>
+  </div>
 </header>
 <div class="tabs">
-    <button class="tablink active" onclick="openTab('gateways', event)">Gateways</button>
-    <button class="tablink" onclick="openTab('cpes', event)">CPEs</button>
-    <button class="tablink" onclick="openTab('backbone', event)">Routers & Switches</button>
+    <button class="tablink active" onclick="openTab('core', event)">Gateways / APs</button>
+    <button class="tablink" onclick="openTab('edge', event)">Stations / Switches & Routers</button>
 </div>
-<div id="gateways" class="tabcontent" style="display:block"><div id="gateGrid" class="grid"></div></div>
-<div id="cpes" class="tabcontent" style="display:none">
+<div id="core" class="tabcontent" style="display:block"><div id="coreGrid" class="grid"></div></div>
+<div id="edge" class="tabcontent" style="display:none">
   <div class="grid-actions">
-    <button class="btn-outline" onclick="openCpeHistory()">View All CPE Ping History</button>
+    <button class="btn-outline" onclick="openCpeHistory()">View All Station Ping History</button>
   </div>
-  <div id="cpeGrid" class="grid"></div>
+  <div id="edgeGrid" class="grid"></div>
 </div>
-<div id="backbone" class="tabcontent" style="display:none"><div id="routerGrid" class="grid"></div></div>
 <footer id="footer"></footer>
 
 <div id="tlsModal" class="modal">
@@ -827,9 +864,9 @@ if(isset($_GET['view']) && $_GET['view']==='device'){
 <div id="cpeHistoryModal" class="modal" onclick="if(event.target===this) closeCpeHistory();">
   <div class="modal-content">
     <button class="modal-close" onclick="closeCpeHistory()" aria-label="Close">&times;</button>
-    <h3 id="cpeHistoryTitle">CPE Ping History</h3>
-    <p id="cpeHistorySubtitle" class="modal-subtitle">All recorded pings for the last 7 days.</p>
-    <div id="cpeHistoryStatus" class="history-status">Click "View All CPE Ping History" to load samples.</div>
+    <h3 id="cpeHistoryTitle">Station Ping History</h3>
+    <p id="cpeHistorySubtitle" class="modal-subtitle">All recorded station pings for the last 7 days.</p>
+    <div id="cpeHistoryStatus" class="history-status">Click "View All Station Ping History" to load samples.</div>
     <div class="history-chart-wrap">
       <canvas id="cpeHistoryChart" width="900" height="320"></canvas>
     </div>
