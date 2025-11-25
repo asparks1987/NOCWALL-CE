@@ -267,34 +267,9 @@ if(isset($_GET['ajax'])){
         $prev_cache = $cache; // snapshot to detect state transitions
         $out=[];
         $cache_changed=false;
-        // Prepare station ping batch: up to 10 random stations every 3 minutes, avoiding any pinged within the last hour
-        $batch_int = intdiv($now, 180); // 3-minute windows
-        $meta = $cache['_cpe_batch'] ?? [];
-        $selected_cpe_ids = $meta['ids'] ?? [];
-        if (($meta['last_batch_int'] ?? null) !== $batch_int) {
-            $candidates = [];
-            foreach ($devices as $dx) {
-                if (is_station($dx) || (!is_backbone($dx) && !is_ap($dx))) {
-                    $cid = device_key($dx);
-                    $lip = $dx['ipAddress'] ?? null;
-                    if ($lip) {
-                        $lp = $cache[$cid]['last_cpe_ping_at'] ?? 0;
-                        if (($now - $lp) >= 3600) { // not pinged in last hour
-                            $candidates[] = $cid;
-                        }
-                    }
-                }
-            }
-            if (!empty($candidates)) {
-                shuffle($candidates);
-                $selected_cpe_ids = array_slice($candidates, 0, 10);
-            } else {
-                $selected_cpe_ids = [];
-            }
-            $cache['_cpe_batch'] = ['last_batch_int'=>$batch_int, 'ids'=>$selected_cpe_ids];
-            $cache_changed = true;
-        }
-        $cpe_ping_set = array_flip($selected_cpe_ids);
+        // Disable station/CPE ping batching to keep responses fast
+        $cpe_ping_set = [];
+        $ping_budget = 3; // ping at most 3 backbone/AP devices per poll to keep latency low
         foreach($devices as $d){
             $id=device_key($d);
             $name=$d['identification']['name']??$id;
@@ -317,15 +292,25 @@ if(isset($_GET['ajax'])){
             $lat=null;
             $cpe_lat=null;
 
+            // Skip stations/CPEs entirely to keep UI focused on gateways/APs/routers/switches
+            if(!$isGw && !$isAp && !$isRouter && !$isSwitch){
+                continue;
+            }
+
             if($isBackbone){
-                // Ping no more than once per minute per backbone device (includes APs)
+                // Ping no more than once per minute per backbone device (includes APs) and cap per-request to keep responses snappy
                 $lastPingAt = $cache[$id]['last_ping_at'] ?? 0;
                 $cachedLat  = $cache[$id]['last_ping_ms'] ?? null;
                 if(($now - $lastPingAt) >= 60 || $cachedLat===null){
-                    $lat=ping_host($d['ipAddress']??null);
-                    $cache[$id]['last_ping_at']=$now;
-                    $cache[$id]['last_ping_ms']=$lat;
-                    $cache_changed=true;
+                    if($ping_budget > 0){
+                        $lat=ping_host($d['ipAddress']??null);
+                        $cache[$id]['last_ping_at']=$now;
+                        $cache[$id]['last_ping_ms']=$lat;
+                        $cache_changed=true;
+                        $ping_budget--;
+                    } else {
+                        $lat=$cachedLat;
+                    }
                 } else {
                     $lat=$cachedLat;
                 }
@@ -341,29 +326,8 @@ if(isset($_GET['ajax'])){
                     @$stmt->execute();
                 }
             } else {
-                // Station/edge: ping only if selected in this 3-minute window
-                if (isset($cpe_ping_set[$id])) {
-                    $cpe_lat = ping_host($d['ipAddress']??null);
-                    $cache[$id]['last_cpe_ping_at'] = $now;
-                    $cache[$id]['last_cpe_ping_ms'] = $cpe_lat;
-                    $stmt = $db->prepare("INSERT INTO cpe_pings (device_id,name,latency) VALUES (?,?,?)");
-                    $stmt->bindValue(1,$id,SQLITE3_TEXT);
-                    $stmt->bindValue(2,$name,SQLITE3_TEXT);
-                    if($cpe_lat === null){
-                        $stmt->bindValue(3,null,SQLITE3_NULL);
-                    } else {
-                        $stmt->bindValue(3,$cpe_lat,SQLITE3_FLOAT);
-                    }
-                    @$stmt->execute();
-                    if(($cache['_cpe_last_prune'] ?? 0) <= ($now - 3600)){
-                        $cache['_cpe_last_prune'] = $now;
-                        @$db->exec("DELETE FROM cpe_pings WHERE timestamp < datetime('now','-30 days')");
-                        $cache_changed = true;
-                    }
-                    $cache_changed = true;
-                } else {
-                    $cpe_lat = $cache[$id]['last_cpe_ping_ms'] ?? null;
-                }
+                // Stations/CPEs are not displayed; skip ping work.
+                continue;
             }
 
             $sim=!empty($cache[$id]['simulate']);
@@ -827,16 +791,16 @@ if(isset($_GET['view']) && $_GET['view']==='device'){
   </div>
 </header>
 <div class="tabs">
-    <button class="tablink active" onclick="openTab('core', event)">Gateways / APs</button>
-    <button class="tablink" onclick="openTab('edge', event)">Stations / Switches & Routers</button>
+    <button class="tablink active" onclick="openTab('gateways', event)">Gateways</button>
+    <button class="tablink" onclick="openTab('aps', event)">APs</button>
+    <button class="tablink" onclick="openTab('routers', event)">Routers & Switches</button>
 </div>
-<div id="core" class="tabcontent" style="display:block"><div id="coreGrid" class="grid"></div></div>
-<div id="edge" class="tabcontent" style="display:none">
-  <div class="grid-actions">
-    <button class="btn-outline" onclick="openCpeHistory()">View All Station Ping History</button>
-  </div>
-  <div id="edgeGrid" class="grid"></div>
+<div id="gateways" class="tabcontent" style="display:block"><div id="gateGrid" class="grid"></div></div>
+<div id="aps" class="tabcontent" style="display:none">
+  <div class="grid-actions"></div>
+  <div id="apGrid" class="grid"></div>
 </div>
+<div id="routers" class="tabcontent" style="display:none"><div id="routerGrid" class="grid"></div></div>
 <footer id="footer"></footer>
 
 <div id="tlsModal" class="modal">
