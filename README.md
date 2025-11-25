@@ -8,7 +8,7 @@ A self-hosted, zero-friction Network Operations Center for Ubiquiti UISP deploym
 
 ## Why UISP NOC?
 
-* **Purpose-built dashboard** – Gateways, routers/switches, and CPEs have dedicated grids with status badges, uptime, latency, CPU/RAM/temperature, and outage timers.
+* **Purpose-built dashboard** – Gateways, APs, and routers/switches have dedicated grids with status badges, uptime, latency, CPU/RAM/temperature, and outage timers; stations/CPEs are intentionally omitted for speed.
 * **Actionable alerting** – Audible siren, one-click acknowledgements (30m → 12h), outage simulation for drills, and real-time health summaries.
 * **Integrated notifications** – Gotify is shipped in the container, auto-provisioned, and used for offline/online, flapping, and sustained latency events. Bring your own Gotify instance by pointing the app at an external endpoint.
 * **TLS automation** – A Caddy sidecar terminates TLS. Toggle the in-app provisioning modal (SHOW_TLS_UI=1) to request Let’s Encrypt certificates via the Caddy admin API.
@@ -79,7 +79,7 @@ The included Android WebView wrapper turns UISP NOC into a purpose-built field o
 
 ### Dashboard & UX
 
-* Gateways, routers/switches, and CPEs are rendered in separate tabs with offline-first sorting.
+* Gateways, APs, and routers/switches are rendered in separate tabs with offline-first sorting. Stations/CPEs are intentionally omitted to keep the dashboard responsive.
 * Aggregate health bar shows online counts, network health %, unacknowledged outages, average latency, and high CPU/RAM tallies.
 * Device cards expose: reachability, uptime badge, outage duration, CPU/RAM/temp, current ping latency, and alert badges (flapping/latency).
 * A history modal charts 24 hours of CPU, RAM, temperature, and ping metrics sourced from SQLite.
@@ -90,7 +90,7 @@ The included Android WebView wrapper turns UISP NOC into a purpose-built field o
 ### Polling & Metrics
 
 * UISP is polled ~every 5 seconds (fast retry on changes, exponential backoff on errors).
-* Gateways/routers/switches are pinged every minute; 10 random CPEs are spot-checked every three minutes, avoiding repeat pings within an hour.
+* Gateways/APs/routers/switches are pinged no more than once per minute with a small per-request budget so responses return quickly while fresh latencies stream in over subsequent polls. CPE/station pings are disabled.
 * Metrics are appended to SQLite once per minute for backbone devices and exposed to the browser via `/index.php?ajax=history&id=<device_id>`.
 * Automatic detection of sustained latency (`>=200 ms` for 3 consecutive samples) and flapping (>=3 transitions in 15 minutes) with Gotify alerts and badge indicators.
 
@@ -188,7 +188,7 @@ To reset credentials, delete `cache/auth.json` inside `noc_cache`. To clear hist
 * **Backups** – Snapshot the `noc_cache`, `caddy_data`, and `caddy_config` volumes. SQLite and Gotify DBs reside in `noc_cache`.
 * **Logs** – App errors stream to container logs. Gotify delivery attempts append to `cache/gotify_log.txt`. TLS provisioning responses surface in the modal and container logs.
 * **Upgrades** – Rebuild the image (`docker compose pull` or `docker compose build`). Persistent volumes retain credentials, tokens, and history.
-* **Siren audio** – The browser loads `buz.mp3`. If autoplay is blocked, users can enable sound using the on-screen prompt.
+* **Siren audio** - The browser loads `buz.mp3`. If autoplay is blocked, users can enable sound using the on-screen prompt. The siren triggers only for gateways and APs.
 * **Mobile access** - Ship the Android companion for a kiosk-like launcher (or fall back to a standalone PWA bookmark); the UI is responsive either way.
 
 ---
@@ -217,3 +217,5 @@ To reset credentials, delete `cache/auth.json` inside `noc_cache`. To clear hist
 ## License
 
 MIT License. See `LICENSE` (if present) or the project repository for details.
+
+

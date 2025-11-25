@@ -1,6 +1,6 @@
 # UISP NOC - Container Summary
 
-**UISP NOC** is a self-hosted network operations dashboard for Ubiquiti UISP. It polls UISP every few seconds, shows gateways/routers/CPEs with health badges, stores short-term history in SQLite, sounds an audible siren, and ships with an embedded Gotify server for offline/online, flapping, and latency notifications. Pair it with the native Android companion app (source + build tooling inside `android/`) to keep those alerts and charts in the hands of your field team.
+**UISP NOC** is a self-hosted network operations dashboard for Ubiquiti UISP. It polls UISP every few seconds, shows gateways/APs/routers/switches with health badges (stations/CPEs omitted for speed), stores short-term history in SQLite, sounds an audible siren, and ships with an embedded Gotify server for offline/online, flapping, and latency notifications. Pair it with the native Android companion app (source + build tooling inside `android/`) to keep those alerts and charts in the hands of your field team.
 
 ## Highlights
 
@@ -36,4 +36,5 @@ Need on-call awareness without juggling mobile browsers? Build (or download) the
 ## Need More Details?
 
 Full documentation, TLS walkthroughs, and Android wrapper instructions live at https://github.com/UISP-NOC/UISP-NOC.
+
 
