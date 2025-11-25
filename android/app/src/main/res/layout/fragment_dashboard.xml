@@ -79,7 +79,7 @@
                             layout="@layout/view_overview_stat" />
 
                         <include
-                            android:id="@+id/overview_cpes"
+                            android:id="@+id/overview_aps"
                             layout="@layout/view_overview_stat" />
                     </GridLayout>
                 </LinearLayout>
@@ -171,7 +171,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="Offline backbone"
+                        android:text="Offline routers/switches"
                         android:textAppearance="@style/TextAppearance.Uisp.SectionLabel" />
 
                     <LinearLayout
@@ -187,7 +187,7 @@
             </com.google.android.material.card.MaterialCardView>
 
             <com.google.android.material.card.MaterialCardView
-                android:id="@+id/card_offline_cpes"
+                android:id="@+id/card_offline_aps"
                 style="@style/Widget.Uisp.Card"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -204,11 +204,11 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="Offline subscribers"
+                        android:text="Offline APs"
                         android:textAppearance="@style/TextAppearance.Uisp.SectionLabel" />
 
                     <LinearLayout
-                        android:id="@+id/list_offline_cpes"
+                        android:id="@+id/list_offline_aps"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:divider="@drawable/divider_card"
@@ -235,7 +235,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="High latency gateways"
+                        android:text="High latency gateways/APs"
                         android:textAppearance="@style/TextAppearance.Uisp.SectionLabel" />
 
                     <LinearLayout

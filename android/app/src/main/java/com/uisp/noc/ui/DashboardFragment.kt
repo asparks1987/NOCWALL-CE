@@ -35,13 +35,13 @@ class DashboardFragment : Fragment() {
     private lateinit var lastUpdated: TextView
     private lateinit var overviewGatewaysValue: TextView
     private lateinit var overviewGatewaysLabel: TextView
+    private lateinit var overviewApsValue: TextView
+    private lateinit var overviewApsLabel: TextView
     private lateinit var overviewBackboneValue: TextView
     private lateinit var overviewBackboneLabel: TextView
-    private lateinit var overviewCpesValue: TextView
-    private lateinit var overviewCpesLabel: TextView
     private lateinit var listOfflineGateways: LinearLayout
+    private lateinit var listOfflineAps: LinearLayout
     private lateinit var listOfflineBackbone: LinearLayout
-    private lateinit var listOfflineCpes: LinearLayout
     private lateinit var listLatency: LinearLayout
     private lateinit var errorCard: MaterialCardView
     private lateinit var errorText: TextView
@@ -96,17 +96,17 @@ class DashboardFragment : Fragment() {
         overviewGatewaysValue = gatewaysInclude.findViewById(R.id.text_value)
         overviewGatewaysLabel = gatewaysInclude.findViewById(R.id.text_label)
 
+        val apInclude = root.findViewById<View>(R.id.overview_aps)
+        overviewApsValue = apInclude.findViewById(R.id.text_value)
+        overviewApsLabel = apInclude.findViewById(R.id.text_label)
+
         val backboneInclude = root.findViewById<View>(R.id.overview_backbone)
         overviewBackboneValue = backboneInclude.findViewById(R.id.text_value)
         overviewBackboneLabel = backboneInclude.findViewById(R.id.text_label)
 
-        val cpesInclude = root.findViewById<View>(R.id.overview_cpes)
-        overviewCpesValue = cpesInclude.findViewById(R.id.text_value)
-        overviewCpesLabel = cpesInclude.findViewById(R.id.text_label)
-
         listOfflineGateways = root.findViewById(R.id.list_offline_gateways)
+        listOfflineAps = root.findViewById(R.id.list_offline_aps)
         listOfflineBackbone = root.findViewById(R.id.list_offline_backbone)
-        listOfflineCpes = root.findViewById(R.id.list_offline_cpes)
         listLatency = root.findViewById(R.id.list_latency)
 
         errorCard = root.findViewById(R.id.card_error)
@@ -159,27 +159,27 @@ class DashboardFragment : Fragment() {
             lastUpdated.text = "Waiting for data..."
             overviewGatewaysValue.text = "-"
             overviewGatewaysLabel.text = "Gateways"
+            overviewApsValue.text = "-"
+            overviewApsLabel.text = "APs"
             overviewBackboneValue.text = "-"
-            overviewBackboneLabel.text = "Backbone"
-            overviewCpesValue.text = "-"
-            overviewCpesLabel.text = "Subscribers"
+            overviewBackboneLabel.text = "Routers/Switches"
             setOverviewState(overviewGatewaysValue, overviewGatewaysLabel, hasIssue = false)
+            setOverviewState(overviewApsValue, overviewApsLabel, hasIssue = false)
             setOverviewState(overviewBackboneValue, overviewBackboneLabel, hasIssue = false)
-            setOverviewState(overviewCpesValue, overviewCpesLabel, hasIssue = false)
             updateDeviceList(
                 listOfflineGateways,
                 emptyList(),
                 "No gateway data yet."
             )
             updateDeviceList(
+                listOfflineAps,
+                emptyList(),
+                "No AP data yet."
+            )
+            updateDeviceList(
                 listOfflineBackbone,
                 emptyList(),
                 "No backbone data yet."
-            )
-            updateDeviceList(
-                listOfflineCpes,
-                emptyList(),
-                "No subscriber data yet."
             )
             updateDeviceList(
                 listLatency,
@@ -198,23 +198,23 @@ class DashboardFragment : Fragment() {
             val gatewaysIssue = summary.offlineGateways.isNotEmpty()
             setOverviewState(overviewGatewaysValue, overviewGatewaysLabel, gatewaysIssue)
 
+            overviewApsValue.text = summary.offlineAps.size.takeIf { it > 0 }
+                ?.let { "$it / ${summary.aps.size}" }
+                ?: summary.aps.size.toString()
+            overviewApsLabel.text =
+                if (summary.offlineAps.isEmpty()) "APs online" else "APs offline"
+            val apsIssue = summary.offlineAps.isNotEmpty()
+            setOverviewState(overviewApsValue, overviewApsLabel, apsIssue)
+
             val backboneDevices = summary.routers + summary.switches
             val offlineBackbone = summary.offlineBackbone
             overviewBackboneValue.text = offlineBackbone.size.takeIf { it > 0 }
                 ?.let { "$it / ${backboneDevices.size}" }
                 ?: backboneDevices.size.toString()
             overviewBackboneLabel.text =
-                if (offlineBackbone.isEmpty()) "Backbone online" else "Backbone offline"
+                if (offlineBackbone.isEmpty()) "Routers/Switches online" else "Routers/Switches offline"
             val backboneIssue = offlineBackbone.isNotEmpty()
             setOverviewState(overviewBackboneValue, overviewBackboneLabel, backboneIssue)
-
-            overviewCpesValue.text = summary.offlineCpes.size.takeIf { it > 0 }
-                ?.let { "$it / ${summary.totalCpes}" }
-                ?: summary.totalCpes.toString()
-            overviewCpesLabel.text =
-                if (summary.offlineCpes.isEmpty()) "Subscribers online" else "Subscribers offline"
-            val subscribersIssue = summary.offlineCpes.isNotEmpty()
-            setOverviewState(overviewCpesValue, overviewCpesLabel, subscribersIssue)
 
             updateDeviceList(
                 listOfflineGateways,
@@ -222,19 +222,19 @@ class DashboardFragment : Fragment() {
                 "All gateways online."
             )
             updateDeviceList(
+                listOfflineAps,
+                summary.offlineAps,
+                "All APs online."
+            )
+            updateDeviceList(
                 listOfflineBackbone,
                 summary.offlineBackbone,
                 "All backbone devices online."
             )
             updateDeviceList(
-                listOfflineCpes,
-                summary.offlineCpes,
-                "All subscribers online."
-            )
-            updateDeviceList(
                 listLatency,
-                summary.highLatencyGateways,
-                "No high latency gateways detected.",
+                summary.highLatencyCore,
+                "No high latency core devices detected.",
                 showLatency = true
             )
         }

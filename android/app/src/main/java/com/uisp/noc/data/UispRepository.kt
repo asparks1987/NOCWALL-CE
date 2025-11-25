@@ -213,6 +213,7 @@ open class UispRepository(private val httpClient: OkHttpClient = defaultClient()
                 name = "Fake Gateway",
                 role = "gateway",
                 isGateway = true,
+                isAp = false,
                 isBackbone = true,
                 online = false,
                 latencyMs = null,
@@ -280,13 +281,13 @@ open class UispRepository(private val httpClient: OkHttpClient = defaultClient()
         val root = JSONArray(payload)
         val allDevices = mutableListOf<DeviceStatus>()
         val gateways = mutableListOf<DeviceStatus>()
+        val aps = mutableListOf<DeviceStatus>()
         val switches = mutableListOf<DeviceStatus>()
         val routers = mutableListOf<DeviceStatus>()
         val offlineGateways = mutableListOf<DeviceStatus>()
+        val offlineAps = mutableListOf<DeviceStatus>()
         val offlineBackbone = mutableListOf<DeviceStatus>()
-        val offlineCpes = mutableListOf<DeviceStatus>()
-        val highLatency = mutableListOf<DeviceStatus>()
-        var totalCpes = 0
+        val highLatencyCore = mutableListOf<DeviceStatus>()
 
         for (i in 0 until root.length()) {
             val device = root.optJSONObject(i) ?: continue
@@ -297,23 +298,21 @@ open class UispRepository(private val httpClient: OkHttpClient = defaultClient()
                 ?: identification?.optString("mac")
                 ?: device.optString("id", "unknown")
             val name = identification?.optString("name")?.takeIf { it.isNotBlank() } ?: id
-            val role = identification?.optString("role")?.lowercase()?.trim() ?: "device"
+            val roleRaw = identification?.optString("role")?.lowercase()?.trim() ?: "device"
+            val role = normalizeRole(roleRaw)
             val online = isOnline(overview?.optString("status"))
             val latencyMs = extractLatency(overview)
 
             val isGateway = role == "gateway"
-            val isBackbone = role == "router" || role == "switch" || isGateway
-            val isCpe = !isGateway && !isBackbone
+            val isAp = role == "ap"
+            val isBackbone = role == "router" || role == "switch" || isGateway || isAp
 
-            if (isCpe) {
-                totalCpes++
-            }
-            
             val status = DeviceStatus(
                 id = id,
                 name = name,
                 role = role,
                 isGateway = isGateway,
+                isAp = isAp,
                 isBackbone = isBackbone,
                 online = online,
                 latencyMs = latencyMs,
@@ -323,6 +322,7 @@ open class UispRepository(private val httpClient: OkHttpClient = defaultClient()
 
             when (role) {
                 "gateway" -> gateways.add(status)
+                "ap" -> aps.add(status)
                 "switch" -> switches.add(status)
                 "router" -> routers.add(status)
             }
@@ -330,13 +330,13 @@ open class UispRepository(private val httpClient: OkHttpClient = defaultClient()
             if (!online) {
                 when {
                     isGateway -> offlineGateways.add(status)
+                    isAp -> offlineAps.add(status)
                     isBackbone -> offlineBackbone.add(status)
-                    else -> offlineCpes.add(status)
                 }
             }
 
-            if (latencyMs != null && latencyMs > LATENCY_ALERT_THRESHOLD_MS) {
-                highLatency += status
+            if (latencyMs != null && latencyMs > LATENCY_ALERT_THRESHOLD_MS && (isGateway || isAp)) {
+                highLatencyCore += status
             }
         }
 
@@ -344,13 +344,13 @@ open class UispRepository(private val httpClient: OkHttpClient = defaultClient()
             allDevices = allDevices,
             lastUpdatedEpochMillis = System.currentTimeMillis(),
             gateways = gateways,
+            aps = aps,
             switches = switches,
             routers = routers,
             offlineGateways = offlineGateways,
+            offlineAps = offlineAps,
             offlineBackbone = offlineBackbone,
-            offlineCpes = offlineCpes,
-            highLatencyGateways = highLatency,
-            totalCpes = totalCpes
+            highLatencyCore = highLatencyCore
         )
     }
 
@@ -367,6 +367,13 @@ open class UispRepository(private val httpClient: OkHttpClient = defaultClient()
     private fun isOnline(status: String?): Boolean {
         val normalized = status?.lowercase() ?: return false
         return normalized in ONLINE_STATUSES
+    }
+
+    private fun normalizeRole(role: String): String {
+        return when (role) {
+            "access-point", "accesspoint", "base-station", "basestation", "ap" -> "ap"
+            else -> role
+        }
     }
 
     //endregion
