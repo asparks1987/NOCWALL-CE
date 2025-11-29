@@ -63,6 +63,7 @@ let pollTimer=null;
 let chartJsLoader=null;
 let cpeHistoryChart=null;
 let cpeHistoryReqId=0;
+const AP_ALERT_GRACE_SEC = 900; // 15 minutes
 
 const POLL_INTERVAL_NORMAL_MS = 5000;
 const POLL_INTERVAL_FAST_MS = 2000;
@@ -279,7 +280,14 @@ function renderDevices(meta, opts){
   const overallEl=document.getElementById('overallSummary');
   if(overallEl) overallEl.innerHTML=summaryHTML;
 
-  const alertCandidates = gateways.concat(apItems);
+  const alertCandidates = gateways.concat(
+    apItems.filter(d=>{
+      if(d.online) return false;
+      const offlineSince = typeof d.offline_since === 'number' ? d.offline_since : null;
+      if(offlineSince===null) return false;
+      return offlineSince <= (nowSec - AP_ALERT_GRACE_SEC);
+    })
+  );
   const shouldAlert = alertCandidates.some(d=>!d.online && !(d.ack_until && d.ack_until>nowSec));
 
   if(shouldAlert){
@@ -291,7 +299,16 @@ function renderDevices(meta, opts){
       sirenTimeout=setTimeout(()=>{
         const stillAlert = devicesCache
           .filter(d=>d && (d.gateway || d.ap))
-          .some(d=>!d.online && !(d.ack_until && d.ack_until>(Date.now()/1000)));
+          .some(d=>{
+            if(d.online) return false;
+            if(d.ack_until && d.ack_until > (Date.now()/1000)) return false;
+            if(d.ap){
+              const offlineSince = typeof d.offline_since === 'number' ? d.offline_since : null;
+              if(offlineSince===null) return false;
+              return offlineSince <= ((Date.now()/1000) - AP_ALERT_GRACE_SEC);
+            }
+            return true; // gateways alert immediately
+          });
         if(stillAlert){
           const a=document.getElementById('siren');
           if(a){
