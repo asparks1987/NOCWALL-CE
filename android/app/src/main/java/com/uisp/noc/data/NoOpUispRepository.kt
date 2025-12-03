@@ -9,9 +9,9 @@ import com.uisp.noc.data.model.DevicesSummary
  */
 class NoOpUispRepository : UispRepository() {
     override suspend fun authenticate(
-        backendUrl: String,
-        username: String,
-        password: String
+        uispUrl: String,
+        displayName: String,
+        apiToken: String
     ): Session {
         // Do nothing, return a dummy session
         return Session("", "", "", "")
@@ -30,5 +30,13 @@ class NoOpUispRepository : UispRepository() {
             offlineBackbone = emptyList(),
             highLatencyCore = emptyList()
         )
+    }
+
+    override fun acknowledgeDevice(deviceId: String, durationMinutes: Int) {
+        // no-op
+    }
+
+    override fun clearAcknowledgement(deviceId: String) {
+        // no-op
     }
 }

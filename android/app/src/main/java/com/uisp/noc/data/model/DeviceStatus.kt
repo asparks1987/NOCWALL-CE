@@ -12,5 +12,6 @@ data class DeviceStatus(
     val isBackbone: Boolean,
     val online: Boolean,
     val latencyMs: Double?,
-    val status: String
+    val status: String,
+    val ackUntilEpochMillis: Long? = null
 )

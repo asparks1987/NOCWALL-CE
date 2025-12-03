@@ -19,7 +19,7 @@ class GatewayStatusWorker(
     override suspend fun doWork(): Result {
         val sessionStore = SessionStore.getInstance(appContext)
         val session = sessionStore.load() ?: return Result.success()
-        val repository = Injector.getRepository()
+        val repository = Injector.getRepository(appContext)
 
         try {
             repository.fetchSummary(session, appContext)

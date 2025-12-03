@@ -3,6 +3,7 @@ package com.uisp.noc
 import android.app.Application
 import android.content.Context
 import androidx.lifecycle.ViewModelProvider
+import com.uisp.noc.data.AcknowledgementStore
 import com.uisp.noc.data.SessionStore
 import com.uisp.noc.data.UispRepository
 import com.uisp.noc.ui.MainViewModel
@@ -25,7 +26,7 @@ object Injector {
     fun provideViewModelFactory(context: Context): ViewModelProvider.Factory {
         val application = context.applicationContext as Application
         val sessionStore = SessionStore.getInstance(application)
-        val repo = getRepository()
+        val repo = getRepository(application)
         return MainViewModel.Factory(application, repo, sessionStore)
     }
 
@@ -33,10 +34,12 @@ object Injector {
      * Returns the singleton instance of the [UispRepository], creating it on a
      * background thread if it doesn't exist yet.
      */
-    fun getRepository(): UispRepository {
+    fun getRepository(context: Context): UispRepository {
         return repository ?: synchronized(this) {
             repository ?: runBlocking(Dispatchers.IO) {
-                UispRepository().also {
+                UispRepository(
+                    acknowledgementStore = AcknowledgementStore.Persistent.getInstance(context)
+                ).also {
                     repository = it
                 }
             }

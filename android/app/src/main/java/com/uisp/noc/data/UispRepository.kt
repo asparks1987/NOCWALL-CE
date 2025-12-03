@@ -11,8 +11,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
-import okhttp3.FormBody
-import okhttp3.JavaNetCookieJar
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.logging.HttpLoggingInterceptor
@@ -20,8 +18,6 @@ import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.IOException
-import java.net.CookieManager
-import java.net.CookiePolicy
 import java.util.concurrent.TimeUnit
 
 /**
@@ -30,7 +26,10 @@ import java.util.concurrent.TimeUnit
  *
  * @property httpClient The OkHttpClient used for all network requests.
  */
-open class UispRepository(private val httpClient: OkHttpClient = defaultClient()) {
+open class UispRepository(
+    private val httpClient: OkHttpClient = defaultClient(),
+    private val acknowledgementStore: AcknowledgementStore = AcknowledgementStore.InMemory()
+) {
 
     protected val _summaryFlow = MutableStateFlow<DevicesSummary?>(null)
     val summaryFlow: StateFlow<DevicesSummary?> = _summaryFlow.asStateFlow()
@@ -45,77 +44,36 @@ open class UispRepository(private val httpClient: OkHttpClient = defaultClient()
      * Authenticates with the UISP backend using the provided credentials.
      */
     open suspend fun authenticate(
-        backendUrl: String,
-        username: String,
-        password: String
+        uispUrl: String,
+        displayName: String,
+        apiToken: String
     ): Session = withContext(Dispatchers.IO) {
-        val normalizedBackend = normalizeBackendUrl(backendUrl)
+        val normalizedBackend = normalizeBackendUrl(uispUrl)
+        val sanitizedToken = apiToken.trim()
 
-        // Create a dedicated client with a cookie jar to handle the session
-        val cookieManager = CookieManager().apply {
-            setCookiePolicy(CookiePolicy.ACCEPT_ALL)
-        }
-        val authClient = httpClient.newBuilder()
-            .cookieJar(JavaNetCookieJar(cookieManager))
-            .build()
-
-        // Step 1: Perform form-based login to establish a session cookie.
-        val loginBody = FormBody.Builder()
-            .add("username", username)
-            .add("password", password)
-            .build()
-
-        val loginRequest = Request.Builder()
-            .url("$normalizedBackend/?action=login")
-            .post(loginBody)
-            .header("User-Agent", USER_AGENT)
-            .build()
-
-        authClient.newCall(loginRequest).execute().use { response ->
-            // A successful login redirects (302), so we treat that as success.
-            if (!response.isSuccessful && !response.isRedirect) {
-                val message = response.body?.string().orEmpty()
-                throw AuthException("Unable to authenticate with backend (HTTP ${response.code}). $message")
-            }
-        }
-
-        // Step 2: Fetch the mobile config to get the API token. The cookie is sent automatically.
-        val configRequest = Request.Builder()
-            .url("$normalizedBackend/?ajax=mobile_config")
+        val statusRequest = Request.Builder()
+            .url("$normalizedBackend/nms/api/v2.1/server/status")
             .get()
             .header("Accept", "application/json")
+            .header("x-auth-token", sanitizedToken)
             .header("User-Agent", USER_AGENT)
             .build()
 
-        authClient.newCall(configRequest).execute().use { response ->
-            val body = response.body?.string()
-                ?: throw IOException("Empty response from mobile_config endpoint")
-
+        httpClient.newCall(statusRequest).execute().use { response ->
             if (response.code == 401) {
-                throw AuthException("Invalid username or password. The session may have expired.")
+                throw AuthException("Invalid UISP token or insufficient permissions.")
             }
-
             if (!response.isSuccessful) {
-                val message = extractErrorMessage(body)
-                throw IOException("Failed to obtain UISP token: HTTP ${response.code} ${message ?: ""}")
+                val message = response.body?.string().orEmpty()
+                throw IOException("Unable to reach UISP server (HTTP ${response.code}). $message")
             }
 
-            val payload = try {
-                JSONObject(body)
-            } catch (ex: JSONException) {
-                throw IOException("Unexpected response from mobile_config endpoint", ex)
-            }
-
-            val baseUrl = payload.optString("uisp_base_url").takeIf { it.isNotBlank() }
-                ?: throw IOException("UISP base URL missing from backend response")
-            val token = payload.optString("uisp_token").takeIf { it.isNotBlank() }
-                ?: throw IOException("UISP token missing from backend response")
-
-            Session(
+            val technicianName = displayName.ifBlank { "UISP technician" }
+            return@withContext Session(
                 backendUrl = normalizedBackend,
-                username = username,
-                uispBaseUrl = sanitizeBaseUrl(baseUrl),
-                uispToken = token
+                username = technicianName,
+                uispBaseUrl = normalizedBackend,
+                uispToken = sanitizedToken
             )
         }
     }
@@ -145,7 +103,7 @@ open class UispRepository(private val httpClient: OkHttpClient = defaultClient()
                     throw IOException("Failed to download UISP devices: HTTP ${response.code}")
                 }
 
-                val newSummary = parseDevices(body)
+                val newSummary = applyAcknowledgements(parseDevices(body))
                 val oldSummary = _summaryFlow.value
                 _summaryFlow.value = newSummary
 
@@ -166,42 +124,76 @@ open class UispRepository(private val httpClient: OkHttpClient = defaultClient()
 
         for (newDevice in newDevices.values) {
             val oldDevice = oldDevices[newDevice.id]
-            if (oldDevice != null) {
-                if (oldDevice.online != newDevice.online) {
+            if (oldDevice != null && oldDevice.online != newDevice.online) {
+                val isAcked = acknowledgementStore.ackUntil(newDevice.id)
+                    ?.let { it > System.currentTimeMillis() } == true
+                if (isAcked) continue
 
-                    if (newDevice.isBackbone) {
-                        val sound = if (newDevice.isGateway) "buz" else "brrt"
-                        val status = if (newDevice.online) "Online" else "Offline"
+                if (newDevice.isBackbone) {
+                    val sound = if (newDevice.isGateway) "buz" else "brrt"
+                    val status = if (newDevice.online) "Online" else "Offline"
+                    MyFirebaseMessagingService.sendNotification(
+                        context,
+                        "Device $status",
+                        "${newDevice.name} (${newDevice.role}) is now $status.",
+                        sound
+                    )
+                }
+
+                if (newDevice.isBackbone) {
+                    val deviceId = newDevice.id
+                    val history = deviceStatusHistory.getOrPut(deviceId) { mutableListOf() }
+                    val now = System.currentTimeMillis()
+                    history.add(now)
+                    history.removeAll { it < (now - FLAPPING_WINDOW_MS) }
+
+                    if (history.size >= FLAPPING_THRESHOLD) {
+                        val flappingSound = if (newDevice.isGateway) "buz" else "flrp"
                         MyFirebaseMessagingService.sendNotification(
                             context,
-                            "Device $status",
-                            "${newDevice.name} (${newDevice.role}) is now $status.",
-                            sound
+                            "Device Flapping",
+                            "${newDevice.name} is flapping (changing status frequently).",
+                            flappingSound
                         )
-                    }
-
-                    // Flapping detection
-                    if(newDevice.isBackbone) {
-                        val deviceId = newDevice.id
-                        val history = deviceStatusHistory.getOrPut(deviceId) { mutableListOf() }
-                        val now = System.currentTimeMillis()
-                        history.add(now)
-                        history.removeAll { it < (now - FLAPPING_WINDOW_MS) }
-
-                        if (history.size >= FLAPPING_THRESHOLD) {
-                            val flappingSound = if (newDevice.isGateway) "buz" else "flrp"
-                            MyFirebaseMessagingService.sendNotification(
-                                context,
-                                "Device Flapping",
-                                "${newDevice.name} is flapping (changing status frequently).",
-                                flappingSound
-                            )
-                            history.clear()
-                        }
+                        history.clear()
                     }
                 }
             }
         }
+    }
+
+    open fun acknowledgeDevice(deviceId: String, durationMinutes: Int) {
+        acknowledgementStore.acknowledge(deviceId, durationMinutes)
+        _summaryFlow.value = _summaryFlow.value?.let { applyAcknowledgements(it) }
+    }
+
+    open fun clearAcknowledgement(deviceId: String) {
+        acknowledgementStore.clear(deviceId)
+        _summaryFlow.value = _summaryFlow.value?.let { applyAcknowledgements(it) }
+    }
+
+    private fun applyAcknowledgements(summary: DevicesSummary): DevicesSummary {
+        val now = System.currentTimeMillis()
+        val acknowledgements = acknowledgementStore.snapshot(now)
+
+        fun DeviceStatus.applyAck(): DeviceStatus {
+            val ackUntil = acknowledgements[id]?.takeIf { it > now }
+            return copy(ackUntilEpochMillis = ackUntil)
+        }
+
+        fun List<DeviceStatus>.withAck(): List<DeviceStatus> = map { it.applyAck() }
+
+        return summary.copy(
+            allDevices = summary.allDevices.withAck(),
+            gateways = summary.gateways.withAck(),
+            aps = summary.aps.withAck(),
+            switches = summary.switches.withAck(),
+            routers = summary.routers.withAck(),
+            offlineGateways = summary.offlineGateways.withAck(),
+            offlineAps = summary.offlineAps.withAck(),
+            offlineBackbone = summary.offlineBackbone.withAck(),
+            highLatencyCore = summary.highLatencyCore.withAck()
+        )
     }
 
 

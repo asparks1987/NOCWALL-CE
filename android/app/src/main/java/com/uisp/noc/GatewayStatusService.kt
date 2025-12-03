@@ -59,7 +59,7 @@ class GatewayStatusService : Service() {
     private suspend fun updateNotification() {
         val sessionStore = SessionStore.getInstance(this)
         val session = sessionStore.load() ?: return
-        val repository = Injector.getRepository()
+        val repository = Injector.getRepository(this)
 
         try {
             repository.fetchSummary(session, this)

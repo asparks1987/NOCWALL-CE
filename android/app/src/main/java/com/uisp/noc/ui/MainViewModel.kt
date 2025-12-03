@@ -56,10 +56,10 @@ class MainViewModel(
         }
     }
 
-    fun attemptLogin(backendUrl: String, username: String, password: String) {
-        if (backendUrl.isBlank() || username.isBlank() || password.isBlank()) {
+    fun attemptLogin(uispUrl: String, apiToken: String, displayName: String) {
+        if (uispUrl.isBlank() || apiToken.isBlank()) {
             viewModelScope.launch {
-                _events.emit(UiEvent.Message("Please fill out server, username, and password."))
+                _events.emit(UiEvent.Message("Please provide your UISP URL and API token."))
             }
             return
         }
@@ -68,16 +68,16 @@ class MainViewModel(
             _sessionState.value = SessionState.Loading
             try {
                 val session = repository.authenticate(
-                    backendUrl = backendUrl,
-                    username = username,
-                    password = password
+                    uispUrl = uispUrl,
+                    displayName = displayName,
+                    apiToken = apiToken
                 )
                 activeSession = session
                 sessionStore.save(session)
                 _sessionState.value = SessionState.Authenticated(session)
                 refreshSummary()
             } catch (authEx: UispRepository.AuthException) {
-                _events.emit(UiEvent.Message(authEx.message ?: "Invalid credentials"))
+                _events.emit(UiEvent.Message(authEx.message ?: "Invalid UISP credentials"))
                 _sessionState.value = SessionState.Unauthenticated(
                     lastBackendUrl = sessionStore.lastBackendUrl(),
                     lastUsername = sessionStore.lastUsername()
@@ -142,6 +142,26 @@ class MainViewModel(
         viewModelScope.launch {
             repository.clearSimulatedGatewayOutage()
             _events.emit(UiEvent.Message("Simulated outage cleared."))
+        }
+    }
+
+    fun acknowledgeDevice(deviceId: String, durationMinutes: Int) {
+        viewModelScope.launch {
+            repository.acknowledgeDevice(deviceId, durationMinutes)
+            val label = if (durationMinutes >= 60) {
+                val hours = durationMinutes / 60
+                "${hours}h"
+            } else {
+                "${durationMinutes}m"
+            }
+            _events.emit(UiEvent.Message("Acknowledged for $label."))
+        }
+    }
+
+    fun clearAcknowledgement(deviceId: String) {
+        viewModelScope.launch {
+            repository.clearAcknowledgement(deviceId)
+            _events.emit(UiEvent.Message("Acknowledgement cleared."))
         }
     }
 

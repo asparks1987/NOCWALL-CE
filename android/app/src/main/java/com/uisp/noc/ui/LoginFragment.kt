@@ -22,8 +22,8 @@ class LoginFragment : Fragment() {
 
     private lateinit var backendLayout: TextInputLayout
     private lateinit var backendInput: TextInputEditText
-    private lateinit var usernameInput: TextInputEditText
-    private lateinit var passwordInput: TextInputEditText
+    private lateinit var apiTokenInput: TextInputEditText
+    private lateinit var displayNameInput: TextInputEditText
     private lateinit var loginButton: MaterialButton
     private lateinit var progress: View
 
@@ -42,17 +42,17 @@ class LoginFragment : Fragment() {
 
         backendLayout = view.findViewById(R.id.input_backend_layout)
         backendInput = view.findViewById(R.id.input_backend)
-        usernameInput = view.findViewById(R.id.input_username)
-        passwordInput = view.findViewById(R.id.input_password)
+        apiTokenInput = view.findViewById(R.id.input_username)
+        displayNameInput = view.findViewById(R.id.input_password)
         loginButton = view.findViewById(R.id.button_login)
         progress = view.findViewById(R.id.login_progress)
 
         loginButton.setOnClickListener {
             backendLayout.error = null
             val backend = backendInput.text?.toString().orEmpty()
-            val username = usernameInput.text?.toString().orEmpty()
-            val password = passwordInput.text?.toString().orEmpty()
-            viewModel.attemptLogin(backend, username, password)
+            val apiToken = apiTokenInput.text?.toString().orEmpty()
+            val displayName = displayNameInput.text?.toString().orEmpty()
+            viewModel.attemptLogin(backend, apiToken, displayName)
         }
 
         backendInput.doAfterTextChanged {
@@ -84,7 +84,7 @@ class LoginFragment : Fragment() {
     private fun prefillInputs(state: MainViewModel.SessionState.Unauthenticated) {
         if (!isPrefilled) {
             state.lastBackendUrl?.let { backendInput.setText(it) }
-            state.lastUsername?.let { usernameInput.setText(it) }
+            state.lastUsername?.let { displayNameInput.setText(it) }
             isPrefilled = true
         }
     }
@@ -93,7 +93,7 @@ class LoginFragment : Fragment() {
         progress.visibility = if (isLoading) View.VISIBLE else View.GONE
         loginButton.isEnabled = !isLoading
         backendInput.isEnabled = !isLoading
-        usernameInput.isEnabled = !isLoading
-        passwordInput.isEnabled = !isLoading
+        apiTokenInput.isEnabled = !isLoading
+        displayNameInput.isEnabled = !isLoading
     }
 }

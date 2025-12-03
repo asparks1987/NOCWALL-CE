@@ -6,6 +6,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
 import androidx.annotation.ColorRes
@@ -18,6 +19,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.card.MaterialCardView
+import com.google.android.material.button.MaterialButton
 import com.uisp.noc.R
 import com.uisp.noc.data.Session
 import com.uisp.noc.data.model.DeviceStatus
@@ -29,6 +31,7 @@ import kotlin.math.roundToInt
 class DashboardFragment : Fragment() {
 
     private val viewModel: MainViewModel by activityViewModels()
+    private val ackDurationsMinutes = listOf(30, 60, 360, 720)
 
     private lateinit var swipeRefresh: SwipeRefreshLayout
     private lateinit var connectionSummary: TextView
@@ -169,17 +172,20 @@ class DashboardFragment : Fragment() {
             updateDeviceList(
                 listOfflineGateways,
                 emptyList(),
-                "No gateway data yet."
+                "No gateway data yet.",
+                allowAck = true
             )
             updateDeviceList(
                 listOfflineAps,
                 emptyList(),
-                "No AP data yet."
+                "No AP data yet.",
+                allowAck = true
             )
             updateDeviceList(
                 listOfflineBackbone,
                 emptyList(),
-                "No backbone data yet."
+                "No backbone data yet.",
+                allowAck = true
             )
             updateDeviceList(
                 listLatency,
@@ -219,17 +225,20 @@ class DashboardFragment : Fragment() {
             updateDeviceList(
                 listOfflineGateways,
                 summary.offlineGateways,
-                "All gateways online."
+                "All gateways online.",
+                allowAck = true
             )
             updateDeviceList(
                 listOfflineAps,
                 summary.offlineAps,
-                "All APs online."
+                "All APs online.",
+                allowAck = true
             )
             updateDeviceList(
                 listOfflineBackbone,
                 summary.offlineBackbone,
-                "All backbone devices online."
+                "All backbone devices online.",
+                allowAck = true
             )
             updateDeviceList(
                 listLatency,
@@ -247,7 +256,8 @@ class DashboardFragment : Fragment() {
         container: LinearLayout,
         items: List<DeviceStatus>,
         emptyMessage: String,
-        showLatency: Boolean = false
+        showLatency: Boolean = false,
+        allowAck: Boolean = false
     ) {
         container.removeAllViews()
         if (items.isEmpty()) {
@@ -266,6 +276,8 @@ class DashboardFragment : Fragment() {
             val nameView = row.findViewById<TextView>(R.id.text_name)
             val detailsView = row.findViewById<TextView>(R.id.text_details)
             val statusChip = row.findViewById<TextView>(R.id.text_status_chip)
+            val ackBadge = row.findViewById<TextView>(R.id.text_ack_badge)
+            val ackButton = row.findViewById<MaterialButton>(R.id.button_ack)
 
             nameView.text = device.name
             val roleLabel = device.role.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
@@ -296,8 +308,49 @@ class DashboardFragment : Fragment() {
                 statusChip.setBackgroundResource(R.drawable.bg_status_chip_bad)
             }
 
+            val ackEligible = allowAck && (device.isGateway || device.isAp || device.isBackbone)
+            if (ackEligible) {
+                val now = System.currentTimeMillis()
+                val ackUntil = device.ackUntilEpochMillis
+                val isAcked = ackUntil != null && ackUntil > now
+                if (isAcked && ackUntil != null) {
+                    val formatter = DateFormat.getTimeInstance(DateFormat.SHORT)
+                    ackBadge.text = "Acked until ${formatter.format(Date(ackUntil))}"
+                    ackBadge.isVisible = true
+                    ackButton.text = "Unack"
+                } else {
+                    ackBadge.isVisible = false
+                    ackButton.text = "Ack"
+                }
+
+                ackButton.isVisible = true
+                ackButton.setOnClickListener {
+                    if (isAcked) {
+                        viewModel.clearAcknowledgement(device.id)
+                    } else {
+                        showAckMenu(it, device.id)
+                    }
+                }
+            } else {
+                ackBadge.isVisible = false
+                ackButton.isVisible = false
+            }
+
             container.addView(row)
         }
+    }
+
+    private fun showAckMenu(anchor: View, deviceId: String) {
+        val popup = PopupMenu(anchor.context, anchor)
+        ackDurationsMinutes.forEach { minutes ->
+            val label = if (minutes >= 60) "${minutes / 60}h" else "${minutes}m"
+            popup.menu.add(0, minutes, 0, "Ack $label")
+        }
+        popup.setOnMenuItemClickListener { item ->
+            viewModel.acknowledgeDevice(deviceId, item.itemId)
+            true
+        }
+        popup.show()
     }
 
     private fun setConnectionSummaryColor(@ColorRes colorRes: Int) {

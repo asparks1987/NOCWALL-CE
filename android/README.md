@@ -11,7 +11,8 @@ This module provides a minimal Android application that wraps the UISP NOC dashb
 * Default URL of `http://10.0.2.2/` for emulator testing (maps to the host machine running Docker).
 * Accepts an explicit URL via an Intent extra named `url` for deep linking.
 * Mirrors the desktop layout (Gateways, APs, Routers/Switches); stations/CPEs are not shown, and siren triggers only for gateway/AP outages with latencies streaming in as the dashboard polls.
-* Calls `https://<noc-host>/?ajax=mobile_config` to retrieve the UISP base URL and token when hosted alongside the server (requires the same network and configured token on the server).
+* Connects directly to your UISP instance using its base URL and an API token; no desktop companion required.
+* Allows acknowledging offline gateways/APs from the mobile dashboard so noisy alerts can be muted on the go.
 * Launches full-screen with no browser chrome so the gateway/AP/routers-switches grids feel like a native console.
 * Mirrors the desktop siren/vibration cues so Gotify-driven alerts stay loud even when the device is pocketed.
 
