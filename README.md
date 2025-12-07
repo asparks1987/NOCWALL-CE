@@ -2,7 +2,15 @@
 
 A self-hosted, zero-friction Network Operations Center for Ubiquiti UISP deployments. UISP NOC polls your UISP controller every few seconds, persists short-term history in SQLite, sounds a siren for unacknowledged outages, and can push offline/online, flapping, and latency alerts through an embedded Gotify server. Caddy is bundled to front the app with HTTPS and to expose the optional Gotify UI on its own hostname.
 
-**New:** Pair the stack with the native Android companion app to keep on-call techs glued to the most critical telemetry. The wrapper ships inside this repository, caches single sign-on credentials, relays the in-browser siren through the handset, and keeps vibration/push alerts flowing even when the device screen is off. No PWA gymnastics, no custom MDM work—just a branded launcher that boots straight into your UISP NOC.
+**Revamp in progress:** We are rebuilding UISP NOC into a service-oriented platform with a modern API, SPA web app, and full native Android client. See `docs/future_plans.md` for the phase-by-phase roadmap covering API, poller, alerting engine, notifications, and migration.
+
+**Android direction:** The existing WebView wrapper stays for now but will be replaced by a native Kotlin client with feature parity (actionable push, offline cache, on-call schedules). Until that ships, the wrapper still mirrors the siren/vibration and caches credentials for field teams.
+
+---
+
+## Revamp Roadmap
+
+We are modernizing UISP NOC into a service-oriented platform with a new API, alert engine, SPA web app, and full native Android client. The phase-by-phase plan lives in `docs/future_plans.md` and covers backend services, notifications, migrations, and parity across browser and Android.
 
 ---
 
@@ -21,6 +29,8 @@ A self-hosted, zero-friction Network Operations Center for Ubiquiti UISP deploym
 ## Android Companion App
 
 The included Android WebView wrapper turns UISP NOC into a purpose-built field operations tool. Ship a fully branded APK to on-call technicians, keep the siren/vibration running with the screen off, and let teams acknowledge incidents directly from the handset without juggling tabs or custom PWAs.
+
+> Status: This WebView wrapper remains supported for continuity but will be superseded by a native Kotlin client with offline cache, actionable push, and on-call schedules. Track progress in `docs/future_plans.md` (Phases 8-9).
 
 ### Key Capabilities
 
@@ -217,5 +227,8 @@ To reset credentials, delete `cache/auth.json` inside `noc_cache`. To clear hist
 ## License
 
 MIT License. See `LICENSE` (if present) or the project repository for details.
+
+
+
 
 

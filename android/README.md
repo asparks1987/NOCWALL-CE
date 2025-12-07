@@ -2,6 +2,8 @@
 
 This module provides a minimal Android application that wraps the UISP NOC dashboard inside a WebView. It is intended for technicians who want a dedicated launcher on handheld devices without installing a full browser bookmark or PWA. Think of it as the officially blessed companion: it mirrors the siren/vibration from Gotify alerts, stores sessions between shifts, and drops techs directly into gateway/AP outage grids the moment they unlock their phone.
 
+> Status: This WebView wrapper remains for continuity but will be superseded by a native Kotlin app with offline cache, actionable push, and on-call schedules. Track the plan in `docs/future_plans.md` (Phases 8–9). Keep using this wrapper until the native client ships.
+
 ---
 
 ## Project Highlights

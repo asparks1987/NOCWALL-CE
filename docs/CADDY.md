@@ -4,6 +4,12 @@ Caddy ships alongside the UISP NOC container to terminate TLS, publish the dashb
 
 ---
 
+## Roadmap Note
+
+As part of the platform revamp (see `docs/future_plans.md`), Caddy remains the TLS terminator and reverse proxy but will front multiple services: API, SPA web app, notification endpoints, and optional Gotify. Expect updated Compose/Helm wiring once the new services land.
+
+---
+
 ## Files of Interest
 
 | File | Purpose |

@@ -4,6 +4,12 @@ The UISP NOC container bundles a Gotify 2.6 server for push notifications. Gotif
 
 ---
 
+## Roadmap Note
+
+Gotify remains supported, but the upcoming notification service will fan out to multiple channels (Gotify, FCM push, email/SMS/webhooks) with throttling and actionable notifications. See `docs/future_plans.md` (Phases 6–7) for how Gotify fits into the multi-channel plan.
+
+---
+
 ## How It Works
 
 * `start.sh` launches Gotify before Apache with configuration at `/etc/gotify/config.yml` (listening on `0.0.0.0:18080`).
