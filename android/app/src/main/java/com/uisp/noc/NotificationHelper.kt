@@ -20,6 +20,7 @@ object NotificationHelper {
 
     private const val CHANNEL_ID = "gateway_status"
     private const val FOREGROUND_CHANNEL_ID = "foreground_service"
+    private const val LOGIN_NOTIFICATION_ID = 2 // Unique ID for the login notification
 
     fun createNotificationChannel(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -43,6 +44,28 @@ object NotificationHelper {
             notificationManager.createNotificationChannel(foregroundChannel)
         }
     }
+
+    fun sendLoginRequiredNotification(context: Context) {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+        val pendingIntent: PendingIntent = PendingIntent.getActivity(
+            context, 0, intent, PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher) // Use a better icon
+            .setContentTitle("Authentication Expired")
+            .setContentText("Your UISP session has expired. Please log in again.")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+
+        with(NotificationManagerCompat.from(context)) {
+            notify(LOGIN_NOTIFICATION_ID, builder.build())
+        }
+    }
+
 
     fun createForegroundNotification(
         context: Context,

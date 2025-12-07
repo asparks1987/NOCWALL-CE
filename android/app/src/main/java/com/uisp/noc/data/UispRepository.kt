@@ -52,7 +52,7 @@ open class UispRepository(
         val sanitizedToken = apiToken.trim()
 
         val statusRequest = Request.Builder()
-            .url("$normalizedBackend/nms/api/v2.1/server/status")
+            .url("$normalizedBackend/nms/heartbeat")
             .get()
             .header("Accept", "application/json")
             .header("x-auth-token", sanitizedToken)
@@ -67,15 +67,15 @@ open class UispRepository(
                 val message = response.body?.string().orEmpty()
                 throw IOException("Unable to reach UISP server (HTTP ${response.code}). $message")
             }
-
-            val technicianName = displayName.ifBlank { "UISP technician" }
-            return@withContext Session(
-                backendUrl = normalizedBackend,
-                username = technicianName,
-                uispBaseUrl = normalizedBackend,
-                uispToken = sanitizedToken
-            )
         }
+
+        val technicianName = displayName.ifBlank { "UISP technician" }
+        return@withContext Session(
+            backendUrl = normalizedBackend,
+            username = technicianName,
+            uispBaseUrl = normalizedBackend,
+            uispToken = sanitizedToken
+        )
     }
 
     /**
@@ -101,6 +101,11 @@ open class UispRepository(
 
                 if (!response.isSuccessful) {
                     throw IOException("Failed to download UISP devices: HTTP ${response.code}")
+                }
+
+                val contentType = response.header("Content-Type")
+                if (contentType == null || !contentType.startsWith("application/json")) {
+                    throw AuthException("Login required. The UISP server returned an HTML page instead of JSON. Please check your session.")
                 }
 
                 val newSummary = applyAcknowledgements(parseDevices(body))
@@ -247,7 +252,7 @@ open class UispRepository(
         return withContext(Dispatchers.IO) {
             try {
                 val request = Request.Builder()
-                    .url(session.uispBaseUrl.trimEnd('/') + "/nms/api/v2.1/server/status")
+                    .url(session.uispBaseUrl.trimEnd('/') + "/nms/heartbeat")
                     .get()
                     .header("Accept", "application/json")
                     .header("x-auth-token", session.uispToken.trim())
@@ -270,80 +275,84 @@ open class UispRepository(
      * Parses the raw JSON string of devices into a structured [DevicesSummary].
      */
     private fun parseDevices(payload: String): DevicesSummary {
-        val root = JSONArray(payload)
-        val allDevices = mutableListOf<DeviceStatus>()
-        val gateways = mutableListOf<DeviceStatus>()
-        val aps = mutableListOf<DeviceStatus>()
-        val switches = mutableListOf<DeviceStatus>()
-        val routers = mutableListOf<DeviceStatus>()
-        val offlineGateways = mutableListOf<DeviceStatus>()
-        val offlineAps = mutableListOf<DeviceStatus>()
-        val offlineBackbone = mutableListOf<DeviceStatus>()
-        val highLatencyCore = mutableListOf<DeviceStatus>()
+        try {
+            val root = JSONArray(payload)
+            val allDevices = mutableListOf<DeviceStatus>()
+            val gateways = mutableListOf<DeviceStatus>()
+            val aps = mutableListOf<DeviceStatus>()
+            val switches = mutableListOf<DeviceStatus>()
+            val routers = mutableListOf<DeviceStatus>()
+            val offlineGateways = mutableListOf<DeviceStatus>()
+            val offlineAps = mutableListOf<DeviceStatus>()
+            val offlineBackbone = mutableListOf<DeviceStatus>()
+            val highLatencyCore = mutableListOf<DeviceStatus>()
 
-        for (i in 0 until root.length()) {
-            val device = root.optJSONObject(i) ?: continue
-            val identification = device.optJSONObject("identification")
-            val overview = device.optJSONObject("overview")
+            for (i in 0 until root.length()) {
+                val device = root.optJSONObject(i) ?: continue
+                val identification = device.optJSONObject("identification")
+                val overview = device.optJSONObject("overview")
 
-            val id = identification?.optString("id")
-                ?: identification?.optString("mac")
-                ?: device.optString("id", "unknown")
-            val name = identification?.optString("name")?.takeIf { it.isNotBlank() } ?: id
-            val roleRaw = identification?.optString("role")?.lowercase()?.trim() ?: "device"
-            val role = normalizeRole(roleRaw)
-            val online = isOnline(overview?.optString("status"))
-            val latencyMs = extractLatency(overview)
+                val id = identification?.optString("id")
+                    ?: identification?.optString("mac")
+                    ?: device.optString("id", "unknown")
+                val name = identification?.optString("name")?.takeIf { it.isNotBlank() } ?: id
+                val roleRaw = identification?.optString("role")?.lowercase()?.trim() ?: "device"
+                val role = normalizeRole(roleRaw)
+                val online = isOnline(overview?.optString("status"))
+                val latencyMs = extractLatency(overview)
 
-            val isGateway = role == "gateway"
-            val isAp = role == "ap"
-            val isBackbone = role == "router" || role == "switch" || isGateway || isAp
+                val isGateway = role == "gateway"
+                val isAp = role == "ap"
+                val isBackbone = role == "router" || role == "switch" || isGateway || isAp
 
-            val status = DeviceStatus(
-                id = id,
-                name = name,
-                role = role,
-                isGateway = isGateway,
-                isAp = isAp,
-                isBackbone = isBackbone,
-                online = online,
-                latencyMs = latencyMs,
-                status = overview?.optString("status") ?: "unknown"
-            )
-            allDevices.add(status)
+                val status = DeviceStatus(
+                    id = id,
+                    name = name,
+                    role = role,
+                    isGateway = isGateway,
+                    isAp = isAp,
+                    isBackbone = isBackbone,
+                    online = online,
+                    latencyMs = latencyMs,
+                    status = overview?.optString("status") ?: "unknown"
+                )
+                allDevices.add(status)
 
-            when (role) {
-                "gateway" -> gateways.add(status)
-                "ap" -> aps.add(status)
-                "switch" -> switches.add(status)
-                "router" -> routers.add(status)
-            }
+                when (role) {
+                    "gateway" -> gateways.add(status)
+                    "ap" -> aps.add(status)
+                    "switch" -> switches.add(status)
+                    "router" -> routers.add(status)
+                }
 
-            if (!online) {
-                when {
-                    isGateway -> offlineGateways.add(status)
-                    isAp -> offlineAps.add(status)
-                    isBackbone -> offlineBackbone.add(status)
+                if (!online) {
+                    when {
+                        isGateway -> offlineGateways.add(status)
+                        isAp -> offlineAps.add(status)
+                        isBackbone -> offlineBackbone.add(status)
+                    }
+                }
+
+                if (latencyMs != null && latencyMs > LATENCY_ALERT_THRESHOLD_MS && (isGateway || isAp)) {
+                    highLatencyCore += status
                 }
             }
 
-            if (latencyMs != null && latencyMs > LATENCY_ALERT_THRESHOLD_MS && (isGateway || isAp)) {
-                highLatencyCore += status
-            }
+            return DevicesSummary(
+                allDevices = allDevices,
+                lastUpdatedEpochMillis = System.currentTimeMillis(),
+                gateways = gateways,
+                aps = aps,
+                switches = switches,
+                routers = routers,
+                offlineGateways = offlineGateways,
+                offlineAps = offlineAps,
+                offlineBackbone = offlineBackbone,
+                highLatencyCore = highLatencyCore
+            )
+        } catch (e: JSONException) {
+            throw IOException("Failed to parse UISP devices response. Expected JSON array.", e)
         }
-
-        return DevicesSummary(
-            allDevices = allDevices,
-            lastUpdatedEpochMillis = System.currentTimeMillis(),
-            gateways = gateways,
-            aps = aps,
-            switches = switches,
-            routers = routers,
-            offlineGateways = offlineGateways,
-            offlineAps = offlineAps,
-            offlineBackbone = offlineBackbone,
-            highLatencyCore = highLatencyCore
-        )
     }
 
     private fun extractLatency(overview: JSONObject?): Double? {

@@ -1,0 +1,32 @@
+<variant
+    name="fullRelease"
+    package="com.uisp.noc"
+    minSdkVersion="24"
+    targetSdkVersion="36.0"
+    shrinking="true"
+    mergedManifest="build\intermediates\merged_manifest\fullRelease\processFullReleaseMainManifest\AndroidManifest.xml"
+    manifestMergeReport="build\outputs\logs\manifest-merger-full-release-report.txt"
+    proguardFiles="build\intermediates\default_proguard_files\global\proguard-android-optimize.txt-8.13.1;proguard-rules.pro"
+    partialResultsDir="build\intermediates\lint_vital_partial_results\fullRelease\lintVitalAnalyzeFullRelease\out">
+  <buildFeatures
+      namespacing="REQUIRED"/>
+  <sourceProviders>
+    <sourceProvider
+        manifests="src\main\AndroidManifest.xml"
+        javaDirectories="src\main\java;src\full\java;src\release\java;src\fullRelease\java;src\main\kotlin;src\full\kotlin;src\release\kotlin;src\fullRelease\kotlin"
+        resDirectories="src\main\res;src\full\res;src\release\res;src\fullRelease\res"
+        assetsDirectories="src\main\assets;src\full\assets;src\release\assets;src\fullRelease\assets"/>
+  </sourceProviders>
+  <testSourceProviders>
+  </testSourceProviders>
+  <testFixturesSourceProviders>
+  </testFixturesSourceProviders>
+  <artifact
+      classOutputs="build\intermediates\javac\fullRelease\compileFullReleaseJavaWithJavac\classes;build\tmp\kotlin-classes\fullRelease;build\kotlinToolingMetadata;build\intermediates\compile_and_runtime_not_namespaced_r_class_jar\fullRelease\processFullReleaseResources\R.jar"
+      type="MAIN"
+      applicationId="com.uisp.noc"
+      generatedSourceFolders="build\generated\ap_generated_sources\fullRelease\out"
+      generatedResourceFolders="build\generated\res\processFullReleaseGoogleServices;build\generated\res\resValues\full\release"
+      desugaredMethodsFiles="C:\Users\Aryns\.gradle\caches\9.0-milestone-1\transforms\7cfcb7760401f7a1f4dae66cf22ffade\transformed\D8BackportedDesugaredMethods.txt">
+  </artifact>
+</variant>

@@ -1,0 +1,20 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.uisp.noc.app-mergeFullReleaseResources-52:/values-watch-v21/values-watch-v21.xml",
+            "map": [
+                {
+                    "source": "C:\\Users\\Aryns\\.gradle\\caches\\9.0-milestone-1\\transforms\\0f786101813e52af41a32fe039931d14\\transformed\\appcompat-1.6.1\\res\\values-watch-v21\\values-watch-v21.xml",
+                    "from": {
+                        "startLines": "2,6,10",
+                        "startColumns": "4,4,4",
+                        "startOffsets": "55,271,499",
+                        "endLines": "5,9,13",
+                        "endColumns": "12,12,12",
+                        "endOffsets": "266,494,724"
+                    }
+                }
+            ]
+        }
+    ]
+}

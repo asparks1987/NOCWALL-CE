@@ -1,3 +1,6 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 // app/build.gradle.kts
 
 plugins {
@@ -8,9 +11,24 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization") version "1.9.22"
 }
 
+val localProperties = Properties()
+val localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localProperties.load(FileInputStream(localPropertiesFile))
+}
+
 android {
     namespace = "com.uisp.noc"
     compileSdk = 36
+
+    signingConfigs {
+        create("release") {
+            storeFile = file(localProperties.getProperty("storeFile", "keystore.jks"))
+            storePassword = localProperties.getProperty("storePassword", "9iaY7o86")
+            keyAlias = localProperties.getProperty("keyAlias", "mike")
+            keyPassword = localProperties.getProperty("keyPassword", "poop123")
+        }
+    }
 
     defaultConfig {
         applicationId = "com.uisp.noc"
@@ -22,13 +40,26 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    flavorDimensions += "version"
+    productFlavors {
+        create("demo") {
+            dimension = "version"
+            applicationIdSuffix = ".demo"
+            versionNameSuffix = "-demo"
+        }
+        create("full") {
+            dimension = "version"
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {

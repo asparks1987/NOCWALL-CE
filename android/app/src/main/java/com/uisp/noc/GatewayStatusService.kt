@@ -9,12 +9,14 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.uisp.noc.data.SessionStore
+import com.uisp.noc.data.UispRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 class GatewayStatusService : Service() {
@@ -37,6 +39,7 @@ class GatewayStatusService : Service() {
 
         // Launch a coroutine to update the notification periodically
         scope.launch {
+            delay(5000) // Add a 5-second delay to avoid race conditions on login
             while (true) {
                 updateNotification()
                 delay(TimeUnit.MINUTES.toMillis(1))
@@ -76,10 +79,18 @@ class GatewayStatusService : Service() {
             with(NotificationManagerCompat.from(this)) {
                 notify(NOTIFICATION_ID, notification)
             }
+        } catch (e: UispRepository.AuthException) {
+            Log.e(TAG, "Authentication error", e)
+            NotificationHelper.sendLoginRequiredNotification(this)
+            stopSelf() // Stop the service as we can't continue without a valid session
+        } catch (e: IOException) {
+            Log.e(TAG, "Network error while updating notification", e)
+            // Optionally, update the notification to show a disconnected/error state
         } catch (e: Exception) {
-            Log.e("GatewayStatusService", "Failed to update notification", e)
+            Log.e(TAG, "Failed to update notification", e)
         }
     }
+
 
     override fun onBind(intent: Intent?): IBinder? {
         return null
