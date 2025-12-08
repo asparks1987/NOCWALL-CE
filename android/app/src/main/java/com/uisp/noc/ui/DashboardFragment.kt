@@ -123,6 +123,7 @@ class DashboardFragment : Fragment() {
                     viewModel.dashboardState.collect { state ->
                         swipeRefresh.isRefreshing = state.isLoading
                         renderSummary(state)
+                        renderConnectionSummary(state)
                     }
                 }
                 launch {
@@ -130,10 +131,7 @@ class DashboardFragment : Fragment() {
                         when (state) {
                             is MainViewModel.SessionState.Authenticated -> {
                                 currentSession = state.session
-                                val host = state.session.uispBaseUrl.substringAfter("://")
-                                connectionSummary.text =
-                                    "Connected to $host\nSigned in as ${state.session.username}"
-                                setConnectionSummaryColor(R.color.uisp_text_primary)
+                                renderConnectionSummary(viewModel.dashboardState.value)
                             }
                             is MainViewModel.SessionState.Unauthenticated -> {
                                 currentSession = null
@@ -154,6 +152,18 @@ class DashboardFragment : Fragment() {
                 }
             }
         }
+    }
+
+    private fun renderConnectionSummary(state: MainViewModel.DashboardState) {
+        val session = currentSession ?: return
+        val host = session.uispBaseUrl.substringAfter("://")
+        val sourceLabel = state.source.name.lowercase().replaceFirstChar { it.titlecase() }
+        val incidents = state.incidentsCount
+        val incidentsLine = incidents?.let { "Incidents: $it" } ?: ""
+        connectionSummary.text =
+            "Connected to $host ($sourceLabel)\nSigned in as ${session.username}" +
+                    if (incidentsLine.isNotEmpty()) "\n$incidentsLine" else ""
+        setConnectionSummaryColor(R.color.uisp_text_primary)
     }
 
     private fun renderSummary(state: MainViewModel.DashboardState) {

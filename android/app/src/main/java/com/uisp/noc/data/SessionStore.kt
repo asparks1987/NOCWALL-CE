@@ -50,6 +50,7 @@ class SessionStore private constructor(context: Context) {
         editor.remove(KEY_UISP_BASE_URL)
         editor.remove(KEY_API_TOKEN)
         editor.remove(KEY_AUTH_AT)
+        editor.remove(KEY_PUSH_TOKEN)
         editor.apply()
 
         WearSyncManager.syncConfig(appContext, null, null)
@@ -58,6 +59,12 @@ class SessionStore private constructor(context: Context) {
     fun lastBackendUrl(): String? = prefs.getString(KEY_BACKEND_URL, null)
 
     fun lastUsername(): String? = prefs.getString(KEY_USERNAME, null)
+
+    fun savePushToken(token: String) {
+        prefs.edit().putString(KEY_PUSH_TOKEN, token).apply()
+    }
+
+    fun pushToken(): String? = prefs.getString(KEY_PUSH_TOKEN, null)
 
     companion object {
         @Volatile
@@ -77,5 +84,6 @@ class SessionStore private constructor(context: Context) {
         private const val KEY_UISP_BASE_URL = "dashboard_url"
         private const val KEY_API_TOKEN = "api_token"
         private const val KEY_AUTH_AT = "authenticated_at"
+        private const val KEY_PUSH_TOKEN = "push_token"
     }
 }

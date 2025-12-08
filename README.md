@@ -167,8 +167,13 @@ The included Android WebView wrapper turns UISP NOC into a purpose-built field o
 
 - Prereqs: Android SDK + JDK 11+.
 - Build: `cd android && ./gradlew assembleDebug`
-- Current behavior: legacy UISP auth + dashboard polling; new API client calls `/mobile/config` when available. Global diagnostic banner shows code/message/detail/request ID and offers “copy diagnostics”. WebView fallback remains until the SPA/API ship.
+- Current behavior: legacy UISP auth + dashboard polling; new API client calls `/mobile/config` when available and can pull devices/incidents. Global diagnostic banner shows code/message/detail/request ID and offers “copy diagnostics”. WebView fallback remains until the SPA/API ship.
 - Signing: release/debug builds fall back to the standard Android debug keystore if no custom keystore is provided.
+
+## CI & Health
+
+- CI: GitHub Actions builds Android (`./gradlew assembleDebug`) and runs a Docker build on pushes/PRs.
+- Healthchecks: `docker-compose.yml` defines container health checks for `uisp-noc` and `caddy` (simple HTTP probe).
 
 ## Testing
 

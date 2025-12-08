@@ -4,6 +4,12 @@ services:
   uisp-noc:
     build: .
     container_name: uisp-noc
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     environment:
       - UISP_URL=https://changeme.unmsapp.com
       - UISP_TOKEN=YOUR_API_TOKEN_HERE
@@ -26,6 +32,12 @@ services:
     container_name: uisp-caddy
     depends_on:
       - uisp-noc
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     environment:
       # Set your public domain(s) and ACME email for real certs
       - NOC_DOMAIN=noc.example.com

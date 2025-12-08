@@ -38,6 +38,8 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
+        // Persist token so UI can register with backend when available
+        SessionStore.getInstance(applicationContext).savePushToken(token)
     }
 
     companion object {

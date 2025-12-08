@@ -4,14 +4,19 @@ import android.app.Application
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.google.firebase.messaging.FirebaseMessaging
+import com.uisp.noc.BuildConfig
 import com.uisp.noc.data.NewApiRepository
 import com.uisp.noc.data.Session
 import com.uisp.noc.data.SessionStore
 import com.uisp.noc.data.UispRepository
+import com.uisp.noc.data.model.DeviceStatus
 import com.uisp.noc.data.model.DevicesSummary
 import com.uisp.noc.network.ApiClient
 import com.uisp.noc.network.ApiResult
+import com.uisp.noc.network.DeviceSummaryDto
 import com.uisp.noc.network.DiagnosticError
+import com.uisp.noc.network.IncidentDto
 import com.uisp.noc.network.MobileConfigDto
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -20,10 +25,11 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.IOException
+import java.util.Locale
 import java.util.UUID
 
 class MainViewModel(
@@ -38,9 +44,19 @@ class MainViewModel(
     private val _isHistoryAvailable = MutableStateFlow(false)
     val isHistoryAvailable: StateFlow<Boolean> = _isHistoryAvailable.asStateFlow()
 
-    val dashboardState: StateFlow<DashboardState> = repository.summaryFlow
-        .map { summary -> DashboardState(summary = summary) }
-        .stateIn(viewModelScope, SharingStarted.Lazily, DashboardState())
+    private val apiSummaryState = MutableStateFlow<DevicesSummary?>(null)
+    private val apiIncidentsState = MutableStateFlow<List<IncidentDto>>(emptyList())
+
+    val dashboardState: StateFlow<DashboardState> = combine(
+        repository.summaryFlow,
+        apiSummaryState,
+        apiIncidentsState
+    ) { legacySummary, apiSummary, incidents ->
+        val chosen = apiSummary ?: legacySummary
+        val source = if (apiSummary != null) DataSource.API else DataSource.LEGACY
+        val incidentsCount = if (apiSummary != null) incidents.size else null
+        DashboardState(summary = chosen, source = source, incidentsCount = incidentsCount)
+    }.stateIn(viewModelScope, SharingStarted.Lazily, DashboardState())
 
     private val _mobileConfigState =
         MutableStateFlow<MobileConfigUiState>(MobileConfigUiState.Idle)
@@ -59,9 +75,7 @@ class MainViewModel(
     init {
         viewModelScope.launch {
             loadExistingSession()
-            _sessionState.collect {
-                checkHistoryAvailability()
-            }
+            _sessionState.collect { checkHistoryAvailability() }
         }
     }
 
@@ -94,6 +108,7 @@ class MainViewModel(
                 _sessionState.value = SessionState.Authenticated(session)
                 buildNewApiRepository(session)
                 loadMobileConfig()
+                refreshFromNewApi()
                 refreshSummary()
             } catch (authEx: UispRepository.AuthException) {
                 _events.emit(
@@ -138,6 +153,8 @@ class MainViewModel(
                 sessionStore.clear()
                 activeSession = null
                 newApiRepository = null
+                apiSummaryState.value = null
+                apiIncidentsState.value = emptyList()
                 _events.emit(
                     UiEvent.Error(
                         diagnostic(
@@ -165,11 +182,35 @@ class MainViewModel(
         }
     }
 
+    fun refreshFromNewApi() {
+        val repo = newApiRepository ?: return
+        viewModelScope.launch {
+            val devicesResult = repo.fetchDevices()
+            val incidentsResult = repo.fetchIncidents()
+
+            if (devicesResult is ApiResult.Success) {
+                apiSummaryState.value = mapApiSummary(devicesResult.data)
+            } else if (devicesResult is ApiResult.Error) {
+                val diag = diagnosticFromApi(devicesResult.diagnostic)
+                _events.emit(UiEvent.Error(diag))
+            }
+
+            if (incidentsResult is ApiResult.Success) {
+                apiIncidentsState.value = incidentsResult.data
+            } else if (incidentsResult is ApiResult.Error) {
+                val diag = diagnosticFromApi(incidentsResult.diagnostic)
+                _events.emit(UiEvent.Error(diag))
+            }
+        }
+    }
+
     fun logout() {
         viewModelScope.launch {
             sessionStore.clear()
             activeSession = null
             newApiRepository = null
+            apiSummaryState.value = null
+            apiIncidentsState.value = emptyList()
             _mobileConfigState.value = MobileConfigUiState.Idle
             _sessionState.value = SessionState.Unauthenticated(
                 lastBackendUrl = sessionStore.lastBackendUrl(),
@@ -225,6 +266,7 @@ class MainViewModel(
             _sessionState.value = SessionState.Authenticated(session)
             buildNewApiRepository(session)
             loadMobileConfig()
+            refreshFromNewApi()
             refreshSummary()
         } else {
             _sessionState.value = SessionState.Unauthenticated(
@@ -234,11 +276,57 @@ class MainViewModel(
         }
     }
 
+    private fun mapApiSummary(dto: DeviceSummaryDto): DevicesSummary {
+        val allDevices = dto.devices.map { device ->
+            val role = device.role.lowercase(Locale.getDefault())
+            val isGateway = role == "gateway"
+            val isAp = role == "ap"
+            val isBackbone = isGateway || isAp || role == "switch" || role == "router" || role == "ptp"
+            DeviceStatus(
+                id = device.id,
+                name = device.name,
+                role = role,
+                isGateway = isGateway,
+                isAp = isAp,
+                isBackbone = isBackbone,
+                online = device.online,
+                latencyMs = device.latencyMs,
+                status = if (device.online) "online" else "offline",
+                ackUntilEpochMillis = device.ackUntil
+            )
+        }
+        val gateways = allDevices.filter { it.isGateway }
+        val aps = allDevices.filter { it.isAp }
+        val switches = allDevices.filter { it.role == "switch" }
+        val routers = allDevices.filter { it.role == "router" || it.role == "ptp" }
+        val offlineGateways = gateways.filterNot { it.online }
+        val offlineAps = aps.filterNot { it.online }
+        val offlineBackbone = allDevices.filter { it.isBackbone && !it.online }
+        val highLatencyCore = allDevices.filter { (it.isGateway || it.isAp) && (it.latencyMs ?: 0.0) > 200 }
+
+        return DevicesSummary(
+            allDevices = allDevices,
+            lastUpdatedEpochMillis = System.currentTimeMillis(),
+            gateways = gateways,
+            aps = aps,
+            switches = switches,
+            routers = routers,
+            offlineGateways = offlineGateways,
+            offlineAps = offlineAps,
+            offlineBackbone = offlineBackbone,
+            highLatencyCore = highLatencyCore
+        )
+    }
+
     data class DashboardState(
         val isLoading: Boolean = false,
         val summary: DevicesSummary? = null,
-        val errorMessage: String? = null
+        val errorMessage: String? = null,
+        val source: DataSource = DataSource.LEGACY,
+        val incidentsCount: Int? = null
     )
+
+    enum class DataSource { LEGACY, API }
 
     sealed class SessionState {
         object Loading : SessionState()
@@ -317,7 +405,6 @@ class MainViewModel(
             when (val result = repo.fetchMobileConfig()) {
                 is ApiResult.Success -> {
                     _mobileConfigState.value = MobileConfigUiState.Success(result.data)
-                    // If API base is provided, rebuild client to target it
                     val apiBase = result.data.apiBaseUrl
                     if (!apiBase.isNullOrBlank() && activeSession != null) {
                         buildNewApiRepository(activeSession!!, apiBase)
@@ -327,12 +414,44 @@ class MainViewModel(
                             "Config loaded" + (result.data.environment?.let { " ($it)" } ?: "")
                         )
                     )
+                    ensurePushRegistration()
                 }
                 is ApiResult.Error -> {
                     val diag = diagnosticFromApi(result.diagnostic)
                     _mobileConfigState.value = MobileConfigUiState.Failure(diag)
                     _events.emit(UiEvent.Error(diag))
                 }
+            }
+        }
+    }
+
+    private fun ensurePushRegistration() {
+        val repo = newApiRepository ?: return
+        FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
+            sessionStore.savePushToken(token)
+            viewModelScope.launch {
+                val result = repo.registerPush(
+                    token = token,
+                    platform = "android",
+                    appVersion = BuildConfig.VERSION_NAME,
+                    locale = Locale.getDefault()
+                )
+                when (result) {
+                    is ApiResult.Success -> _events.emit(UiEvent.Message("Push registered"))
+                    is ApiResult.Error -> _events.emit(UiEvent.Error(diagnosticFromApi(result.diagnostic)))
+                }
+            }
+        }.addOnFailureListener { ex ->
+            viewModelScope.launch {
+                _events.emit(
+                    UiEvent.Error(
+                        diagnostic(
+                            code = "push_token_failed",
+                            message = "Unable to get push token",
+                            detail = ex.message
+                        )
+                    )
+                )
             }
         }
     }
