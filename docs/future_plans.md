@@ -3,8 +3,8 @@
 Phase-by-phase plan to revamp UISP NOC into a full-featured NOC monitoring application for browser and Android with parity across platforms.
 
 ## Phase 1: Discovery & Target Decisions
-- [ ] Inventory current codepaths (PHP UI, JS assets, Android WebView, Docker/Caddy/Gotify).
-- [ ] Confirm target users, roles, on-call schedule, notification channels, and SSO needs.
+- [X] Inventory current codepaths (PHP UI, JS assets, Android WebView, Docker/Caddy/Gotify).
+- [X] Confirm target users, roles, on-call schedule, notification channels, and SSO needs.
 - [ ] Pick core stack: API framework, Postgres/Timescale, Redis/queue (NATS/Rabbit), front-end (React/Vue/Svelte), Android native (Kotlin).
 - [ ] Define environments (dev/stage/prod) and hosting model.
 - [ ] Decide identity (OIDC/SSO), RBAC roles, token format.
