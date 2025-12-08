@@ -9,7 +9,7 @@ import com.uisp.noc.network.PushRegisterResponse
 import java.util.Locale
 
 /**
- * Placeholder repository for the new API described in docs/future_plans.md.
+ * Placeholder repository for the new API described in docs/PROJECT_PLAN.md.
  * Not yet wired into the UI; provides a seam to migrate away from the legacy WebView flow.
  */
 class NewApiRepository(

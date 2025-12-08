@@ -2,13 +2,13 @@
 
 This module provides a minimal Android application that wraps the UISP NOC dashboard inside a WebView. It is intended for technicians who want a dedicated launcher on handheld devices without installing a full browser bookmark or PWA. Think of it as the officially blessed companion: it mirrors the siren/vibration from Gotify alerts, stores sessions between shifts, and drops techs directly into gateway/AP outage grids the moment they unlock their phone.
 
-> Status: This WebView wrapper remains for continuity but will be superseded by a native Kotlin app with offline cache, actionable push, and on-call schedules. Track the plan in `docs/future_plans.md` (Phases 8-9). Keep using this wrapper until the native client ships.
+> Status: This WebView wrapper remains for continuity but will be superseded by a native Kotlin app with offline cache, actionable push, and on-call schedules. Track the plan in `docs/PROJECT_PLAN.md` (Phases 8-9). Keep using this wrapper until the native client ships.
 
 ## Native Client Kickoff (in progress)
 
 - Added a global diagnostic banner in the Kotlin scaffold: shows error code, message, detail, and request ID with one-tap copy for support.
 - ViewModel emits structured error events; Activity renders dismiss/copy actions so operators can report issues quickly.
-- Network/auth flows will be aligned with the new mobile config and API endpoints described in `docs/future_plans.md`.
+- Network/auth flows will be aligned with the new mobile config and API endpoints described in `docs/PROJECT_PLAN.md`.
 
 ---
 

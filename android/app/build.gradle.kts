@@ -21,14 +21,18 @@ android {
     namespace = "com.uisp.noc"
     compileSdk = 36
 
-    signingConfigs {
-        create("release") {
-            storeFile = file(localProperties.getProperty("storeFile", "keystore.jks"))
-            storePassword = localProperties.getProperty("storePassword", "9iaY7o86")
-            keyAlias = localProperties.getProperty("keyAlias", "mike")
-            keyPassword = localProperties.getProperty("keyPassword", "poop123")
-        }
+val defaultHome = System.getenv("HOME") ?: System.getenv("USERPROFILE") ?: "."
+val defaultDebugKeystore = File(defaultHome, ".android/debug.keystore")
+signingConfigs {
+    create("release") {
+        val configuredStore = file(localProperties.getProperty("storeFile", "keystore.jks"))
+        val chosen = if (configuredStore.exists()) configuredStore else defaultDebugKeystore
+        storeFile = chosen
+        storePassword = localProperties.getProperty("storePassword", "android")
+        keyAlias = localProperties.getProperty("keyAlias", "androiddebugkey")
+        keyPassword = localProperties.getProperty("keyPassword", "android")
     }
+}
 
     defaultConfig {
         applicationId = "com.uisp.noc"
@@ -59,6 +63,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("release")
+        }
+        debug {
             signingConfig = signingConfigs.getByName("release")
         }
     }

@@ -1,8 +1,1 @@
-# Phase 11 Item 6 - Post-Cutover Monitoring & Rollback
-
-## Monitoring
-- Track key metrics (alerts, poller lag, notification failures, API errors) post-cutover.
-- Banners surface any degradation with request_id for support.
-
-## Rollback
-- Document rollback steps to legacy stack; maintain data integrity; clear DNS/cache as needed.
+See docs/PROJECT_PLAN.md for consolidated guidance; this file is retained as a pointer for phase11_monitor.

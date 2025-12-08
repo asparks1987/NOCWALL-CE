@@ -4,10 +4,15 @@ import android.app.Application
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.uisp.noc.data.NewApiRepository
 import com.uisp.noc.data.Session
 import com.uisp.noc.data.SessionStore
 import com.uisp.noc.data.UispRepository
 import com.uisp.noc.data.model.DevicesSummary
+import com.uisp.noc.network.ApiClient
+import com.uisp.noc.network.ApiResult
+import com.uisp.noc.network.DiagnosticError
+import com.uisp.noc.network.MobileConfigDto
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,8 +32,7 @@ class MainViewModel(
     private val sessionStore: SessionStore
 ) : ViewModel() {
 
-    private val _sessionState =
-        MutableStateFlow<SessionState>(SessionState.Loading)
+    private val _sessionState = MutableStateFlow<SessionState>(SessionState.Loading)
     val sessionState: StateFlow<SessionState> = _sessionState
 
     private val _isHistoryAvailable = MutableStateFlow(false)
@@ -38,6 +42,9 @@ class MainViewModel(
         .map { summary -> DashboardState(summary = summary) }
         .stateIn(viewModelScope, SharingStarted.Lazily, DashboardState())
 
+    private val _mobileConfigState =
+        MutableStateFlow<MobileConfigUiState>(MobileConfigUiState.Idle)
+    val mobileConfigState: StateFlow<MobileConfigUiState> = _mobileConfigState.asStateFlow()
 
     private val _events = MutableSharedFlow<UiEvent>(
         replay = 0,
@@ -47,6 +54,7 @@ class MainViewModel(
     val events = _events.asSharedFlow()
 
     private var activeSession: Session? = null
+    private var newApiRepository: NewApiRepository? = null
 
     init {
         viewModelScope.launch {
@@ -84,6 +92,8 @@ class MainViewModel(
                 activeSession = session
                 sessionStore.save(session)
                 _sessionState.value = SessionState.Authenticated(session)
+                buildNewApiRepository(session)
+                loadMobileConfig()
                 refreshSummary()
             } catch (authEx: UispRepository.AuthException) {
                 _events.emit(
@@ -118,10 +128,7 @@ class MainViewModel(
     }
 
     fun refreshSummary() {
-        val session = activeSession
-        if (session == null) {
-            return
-        }
+        val session = activeSession ?: return
 
         viewModelScope.launch {
             try {
@@ -130,6 +137,7 @@ class MainViewModel(
             } catch (authEx: UispRepository.AuthException) {
                 sessionStore.clear()
                 activeSession = null
+                newApiRepository = null
                 _events.emit(
                     UiEvent.Error(
                         diagnostic(
@@ -161,6 +169,8 @@ class MainViewModel(
         viewModelScope.launch {
             sessionStore.clear()
             activeSession = null
+            newApiRepository = null
+            _mobileConfigState.value = MobileConfigUiState.Idle
             _sessionState.value = SessionState.Unauthenticated(
                 lastBackendUrl = sessionStore.lastBackendUrl(),
                 lastUsername = sessionStore.lastUsername()
@@ -213,6 +223,8 @@ class MainViewModel(
         if (session != null) {
             activeSession = session
             _sessionState.value = SessionState.Authenticated(session)
+            buildNewApiRepository(session)
+            loadMobileConfig()
             refreshSummary()
         } else {
             _sessionState.value = SessionState.Unauthenticated(
@@ -241,6 +253,13 @@ class MainViewModel(
     sealed class UiEvent {
         data class Message(val text: String) : UiEvent()
         data class Error(val diagnostic: DiagnosticMessage) : UiEvent()
+    }
+
+    sealed class MobileConfigUiState {
+        object Idle : MobileConfigUiState()
+        object Loading : MobileConfigUiState()
+        data class Success(val config: MobileConfigDto) : MobileConfigUiState()
+        data class Failure(val diagnostic: DiagnosticMessage) : MobileConfigUiState()
     }
 
     class Factory(
@@ -273,4 +292,48 @@ class MainViewModel(
             requestId = UUID.randomUUID().toString(),
             timestampMillis = System.currentTimeMillis()
         )
+
+    private fun diagnosticFromApi(error: DiagnosticError): DiagnosticMessage =
+        DiagnosticMessage(
+            code = error.code,
+            message = error.message,
+            detail = error.detail,
+            requestId = error.requestId,
+            timestampMillis = error.timestampMillis
+        )
+
+    private fun buildNewApiRepository(session: Session, apiBaseOverride: String? = null) {
+        val apiClient = ApiClient(
+            baseUrl = apiBaseOverride?.takeIf { it.isNotBlank() } ?: session.uispBaseUrl,
+            tokenProvider = { session.uispToken }
+        )
+        newApiRepository = NewApiRepository(apiClient)
+    }
+
+    private fun loadMobileConfig() {
+        val repo = newApiRepository ?: return
+        _mobileConfigState.value = MobileConfigUiState.Loading
+        viewModelScope.launch {
+            when (val result = repo.fetchMobileConfig()) {
+                is ApiResult.Success -> {
+                    _mobileConfigState.value = MobileConfigUiState.Success(result.data)
+                    // If API base is provided, rebuild client to target it
+                    val apiBase = result.data.apiBaseUrl
+                    if (!apiBase.isNullOrBlank() && activeSession != null) {
+                        buildNewApiRepository(activeSession!!, apiBase)
+                    }
+                    _events.emit(
+                        UiEvent.Message(
+                            "Config loaded" + (result.data.environment?.let { " ($it)" } ?: "")
+                        )
+                    )
+                }
+                is ApiResult.Error -> {
+                    val diag = diagnosticFromApi(result.diagnostic)
+                    _mobileConfigState.value = MobileConfigUiState.Failure(diag)
+                    _events.emit(UiEvent.Error(diag))
+                }
+            }
+        }
+    }
 }

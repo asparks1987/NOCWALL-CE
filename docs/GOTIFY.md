@@ -6,7 +6,7 @@ The UISP NOC container bundles a Gotify 2.6 server for push notifications. Gotif
 
 ## Roadmap Note
 
-Gotify remains supported, but the upcoming notification service will fan out to multiple channels (Gotify, FCM push, email/SMS/webhooks) with throttling and actionable notifications. See `docs/future_plans.md` (Phases 6–7) for how Gotify fits into the multi-channel plan.
+Gotify remains supported, but the upcoming notification service will fan out to multiple channels (Gotify, FCM push, email/SMS/webhooks) with throttling and actionable notifications. See `docs/PROJECT_PLAN.md` (Phases 6–7) for how Gotify fits into the multi-channel plan.
 
 ---
 

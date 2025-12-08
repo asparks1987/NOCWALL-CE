@@ -2,15 +2,21 @@
 
 A self-hosted, zero-friction Network Operations Center for Ubiquiti UISP deployments. UISP NOC polls your UISP controller every few seconds, persists short-term history in SQLite, sounds a siren for unacknowledged outages, and can push offline/online, flapping, and latency alerts through an embedded Gotify server. Caddy is bundled to front the app with HTTPS and to expose the optional Gotify UI on its own hostname.
 
-**Revamp in progress:** We are rebuilding UISP NOC into a service-oriented platform with a modern API, SPA web app, and full native Android client. See `docs/future_plans.md` for the phase-by-phase roadmap covering API, poller, alerting engine, notifications, and migration.
+**Revamp in progress:** We are rebuilding UISP NOC into a service-oriented platform with a modern API, SPA web app, and full native Android client. See `docs/PROJECT_PLAN.md` for the consolidated phase-by-phase roadmap (API, poller, alerting, notifications, migration).
 
-**Android direction:** The existing WebView wrapper stays for now but will be replaced by a native Kotlin client with feature parity (actionable push, offline cache, on-call schedules). Until that ships, the wrapper still mirrors the siren/vibration and caches credentials for field teams.
+**Android direction:** The Kotlin app now includes a native scaffold (foreground activity/fragments, global diagnostic banner, structured errors with request IDs) and a new API client wired to the mobile-config endpoint. Legacy WebView behavior stays as fallback until the new backend/SPA are live.
 
 ---
 
 ## Revamp Roadmap
 
-We are modernizing UISP NOC into a service-oriented platform with a new API, alert engine, SPA web app, and full native Android client. The phase-by-phase plan lives in `docs/future_plans.md` and covers backend services, notifications, migrations, and parity across browser and Android.
+We are modernizing UISP NOC into a service-oriented platform with a new API, alert engine, SPA web app, and full native Android client. The consolidated plan lives in `docs/PROJECT_PLAN.md` and covers backend services, notifications, migrations, and parity across browser and Android. A short index lives in `docs/wiki.md`.
+
+## Documentation
+
+- `docs/PROJECT_PLAN.md` — consolidated status/roadmap (browser + Android + backend).
+- `docs/wiki.md` — quick index; phase documents are retained as pointers to the consolidated plan.
+- `docs/CADDY.md`, `docs/DOCKERHUB.md`, `docs/GOTIFY.md`, `docs/inventory.md` — operations and component summaries.
 
 ---
 
@@ -30,7 +36,7 @@ We are modernizing UISP NOC into a service-oriented platform with a new API, ale
 
 The included Android WebView wrapper turns UISP NOC into a purpose-built field operations tool. Ship a fully branded APK to on-call technicians, keep the siren/vibration running with the screen off, and let teams acknowledge incidents directly from the handset without juggling tabs or custom PWAs.
 
-> Status: This WebView wrapper remains supported for continuity but will be superseded by a native Kotlin client with offline cache, actionable push, and on-call schedules. Track progress in `docs/future_plans.md` (Phases 8-9).
+> Status: This WebView wrapper remains supported for continuity but will be superseded by a native Kotlin client with offline cache, actionable push, and on-call schedules. Track progress in `docs/PROJECT_PLAN.md` (Phases 8-9).
 
 ### Key Capabilities
 
@@ -156,6 +162,18 @@ The included Android WebView wrapper turns UISP NOC into a purpose-built field o
 
    * Set `SHOW_TLS_UI=1` on the `uisp-noc` service and restart.
    * Open the TLS modal, enter your domain(s) and ACME email, optionally toggle staging, and submit. Caddy will fetch certificates and reload.
+
+## Android (Native Scaffold) Build & Run
+
+- Prereqs: Android SDK + JDK 11+.
+- Build: `cd android && ./gradlew assembleDebug`
+- Current behavior: legacy UISP auth + dashboard polling; new API client calls `/mobile/config` when available. Global diagnostic banner shows code/message/detail/request ID and offers “copy diagnostics”. WebView fallback remains until the SPA/API ship.
+- Signing: release/debug builds fall back to the standard Android debug keystore if no custom keystore is provided.
+
+## Testing
+
+- Legacy PHP/JS: manual verification via browser; no automated tests yet.
+- Android: run `./gradlew test` (unit) and `./gradlew connectedAndroidTest` for instrumented tests when a device/emulator is attached.
 
 ---
 

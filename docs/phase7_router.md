@@ -1,9 +1,1 @@
-# Phase 7 Item 1 - Notification Router
-
-## Behavior
-- Consumes incident events; fans out to channels (Gotify, FCM, email, SMS/webhook).
-- Templates per channel; actionable where supported.
-- Retries with backoff; dead-letter on repeated failures.
-
-## Error/Diagnostics
-- Logs include channel, incident_id, request_id, error details; UI shows delivery status and last error banner.
+See docs/PROJECT_PLAN.md for consolidated guidance; this file is retained as a pointer for phase7_router.

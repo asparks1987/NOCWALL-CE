@@ -28,7 +28,7 @@ Inventory of current codepaths and components.
 
 ## Documentation/Specs
 - `README.md`: Project overview, current features, Android direction, roadmap link.
-- `docs/`: CADDY, DOCKERHUB summary, GOTIFY, future_plans roadmap.
+- `docs/`: CADDY, DOCKERHUB summary, GOTIFY, PROJECT_PLAN roadmap.
 - `swagger.json`: UISP API reference snapshot (used for reference; not wired into code).
 
 ## TLS/Reverse Proxy

@@ -1,9 +1,1 @@
-# Phase 9 Item 9 - Android Tests
-
-## Scope
-- UI tests (Espresso) for auth, incidents, actions, settings.
-- WorkManager tests for background sync and push handling.
-- Unit tests for viewmodels/repositories.
-
-## Error/Diagnostics
-- Test reports include logs with request_id and last API calls; screenshots on failure.
+See docs/PROJECT_PLAN.md for consolidated guidance; this file is retained as a pointer for phase9_tests_android.

@@ -15,7 +15,7 @@ import java.util.Locale
 import java.util.UUID
 
 /**
- * Early API client scaffold for the new UISP NOC backend (see docs/future_plans.md).
+ * Early API client scaffold for the new UISP NOC backend (see docs/PROJECT_PLAN.md).
  * Uses OkHttp + Kotlin serialization; designed to surface verbose diagnostics for the UI banner.
  */
 class ApiClient(

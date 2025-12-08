@@ -12,4 +12,5 @@
     <string name="error_banner_dismiss">Dismiss error banner</string>
     <string name="error_banner_copy">Copy diagnostics</string>
     <string name="error_request_id_label">Request ID: %1$s</string>
+    <string name="config_loaded_env">Config loaded (%1$s)</string>
 </resources>

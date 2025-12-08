@@ -1,8 +1,1 @@
-# Phase 9 Item 3 - Android UI (Wallboard & Incidents)
-
-## Features
-- Wallboard and incident list screens with filters.
-- Detail views with charts and actions (ack/maintenance/clear).
-
-## Error/Diagnostics
-- Screens show banners for API/WS errors with request_id; retry controls.
+See docs/PROJECT_PLAN.md for consolidated guidance; this file is retained as a pointer for phase9_ui.

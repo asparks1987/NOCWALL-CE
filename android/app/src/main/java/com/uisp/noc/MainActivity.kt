@@ -118,6 +118,22 @@ class MainActivity : AppCompatActivity() {
         }
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
+                vm.mobileConfigState.collect { state ->
+                    when (state) {
+                        is MainViewModel.MobileConfigUiState.Failure -> showError(state.diagnostic)
+                        is MainViewModel.MobileConfigUiState.Success -> {
+                            hideErrorBanner()
+                            state.config.environment?.let { env ->
+                                showMessage(getString(R.string.config_loaded_env, env))
+                            }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+        }
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
                 vm.events.collect { event ->
                     when (event) {
                         is MainViewModel.UiEvent.Message -> showMessage(event.text)
