@@ -36,6 +36,12 @@ Draft selections for core technologies. Adjust if constraints or preferences dif
 - IaC/packaging: Docker/Compose for dev; Helm (or K8s manifests) for staging/prod.
 - Observability: OpenTelemetry (traces/metrics/logs) exported to Prometheus/Grafana stack.
 
+## Error Handling, Logging, and Verbose Banners
+- Global error banner in web/Android clients for surfaced failures (auth, network, API, push registration, poller lag) with actionable detail and correlation IDs.
+- API responses carry structured error codes, human-readable messages, and request IDs; verbose server logs kept behind feature flag for prod.
+- Workers/poller log retries, backoff, and payload snippets for debugging; dead-letter queues enabled on notification fan-out.
+- UI/Android expose debug mode toggle to show last error, last sync time, and connectivity status.
+
 ## Defaults Summary (if no overrides)
 - API + workers: TypeScript (NestJS/Express) + Redis Streams + Postgres/Timescale.
 - Web: React + Vite + React Query + WS/SSE.

@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.IOException
+import java.util.UUID
 
 class MainViewModel(
     private val application: Application,
@@ -59,7 +60,15 @@ class MainViewModel(
     fun attemptLogin(uispUrl: String, apiToken: String, displayName: String) {
         if (uispUrl.isBlank() || apiToken.isBlank()) {
             viewModelScope.launch {
-                _events.emit(UiEvent.Message("Please provide your UISP URL and API token."))
+                _events.emit(
+                    UiEvent.Error(
+                        diagnostic(
+                            code = "auth_missing",
+                            message = "Please provide your UISP URL and API token.",
+                            detail = "Missing UISP URL or API token"
+                        )
+                    )
+                )
             }
             return
         }
@@ -77,15 +86,27 @@ class MainViewModel(
                 _sessionState.value = SessionState.Authenticated(session)
                 refreshSummary()
             } catch (authEx: UispRepository.AuthException) {
-                _events.emit(UiEvent.Message(authEx.message ?: "Invalid UISP credentials"))
+                _events.emit(
+                    UiEvent.Error(
+                        diagnostic(
+                            code = "auth_invalid",
+                            message = "Invalid UISP credentials",
+                            detail = authEx.message
+                        )
+                    )
+                )
                 _sessionState.value = SessionState.Unauthenticated(
                     lastBackendUrl = sessionStore.lastBackendUrl(),
                     lastUsername = sessionStore.lastUsername()
                 )
             } catch (ex: IOException) {
                 _events.emit(
-                    UiEvent.Message(
-                        ex.message ?: "Unable to connect to backend. Check your URL and network."
+                    UiEvent.Error(
+                        diagnostic(
+                            code = "network_unreachable",
+                            message = "Unable to connect to backend. Check your URL and network.",
+                            detail = ex.message
+                        )
                     )
                 )
                 _sessionState.value = SessionState.Unauthenticated(
@@ -109,13 +130,29 @@ class MainViewModel(
             } catch (authEx: UispRepository.AuthException) {
                 sessionStore.clear()
                 activeSession = null
-                _events.emit(UiEvent.Message("Session expired. Please sign in again."))
+                _events.emit(
+                    UiEvent.Error(
+                        diagnostic(
+                            code = "auth_expired",
+                            message = "Session expired. Please sign in again.",
+                            detail = authEx.message
+                        )
+                    )
+                )
                 _sessionState.value = SessionState.Unauthenticated(
                     lastBackendUrl = sessionStore.lastBackendUrl(),
                     lastUsername = sessionStore.lastUsername()
                 )
             } catch (ex: IOException) {
-                _events.emit(UiEvent.Message("Unable to refresh data."))
+                _events.emit(
+                    UiEvent.Error(
+                        diagnostic(
+                            code = "refresh_failed",
+                            message = "Unable to refresh data.",
+                            detail = ex.message
+                        )
+                    )
+                )
             }
         }
     }
@@ -203,6 +240,7 @@ class MainViewModel(
 
     sealed class UiEvent {
         data class Message(val text: String) : UiEvent()
+        data class Error(val diagnostic: DiagnosticMessage) : UiEvent()
     }
 
     class Factory(
@@ -218,4 +256,21 @@ class MainViewModel(
             throw IllegalArgumentException("Unknown ViewModel class: $modelClass")
         }
     }
+
+    data class DiagnosticMessage(
+        val code: String,
+        val message: String,
+        val detail: String?,
+        val requestId: String,
+        val timestampMillis: Long
+    )
+
+    private fun diagnostic(code: String, message: String, detail: String?): DiagnosticMessage =
+        DiagnosticMessage(
+            code = code,
+            message = message,
+            detail = detail,
+            requestId = UUID.randomUUID().toString(),
+            timestampMillis = System.currentTimeMillis()
+        )
 }

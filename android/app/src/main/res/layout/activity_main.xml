@@ -7,37 +7,122 @@
     android:background="@color/uisp_background"
     tools:context=".MainActivity">
 
-    <com.google.android.material.appbar.AppBarLayout
-        android:id="@+id/app_bar_layout"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:background="@color/uisp_toolbar"
-        android:stateListAnimator="@null"
-        app:liftOnScroll="false">
-
-        <com.google.android.material.appbar.MaterialToolbar
-            android:id="@+id/toolbar"
-            style="?attr/toolbarStyle"
-            android:layout_width="match_parent"
-            android:layout_height="?attr/actionBarSize"
-            android:background="@color/uisp_toolbar"
-            android:stateListAnimator="@null"
-            app:title="@string/app_name"
-            app:titleCentered="true" />
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="2dp"
-            android:background="@color/uisp_toolbar_border" />
-
-    </com.google.android.material.appbar.AppBarLayout>
-
-    <!-- Main content area -->
-    <FrameLayout
-        android:id="@+id/content_container"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        app:layout_behavior="@string/appbar_scrolling_view_behavior" />
+        android:orientation="vertical">
+
+        <com.google.android.material.appbar.AppBarLayout
+            android:id="@+id/app_bar_layout"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@color/uisp_toolbar"
+            android:stateListAnimator="@null"
+            app:liftOnScroll="false">
+
+            <com.google.android.material.appbar.MaterialToolbar
+                android:id="@+id/toolbar"
+                style="?attr/toolbarStyle"
+                android:layout_width="match_parent"
+                android:layout_height="?attr/actionBarSize"
+                android:background="@color/uisp_toolbar"
+                android:stateListAnimator="@null"
+                app:title="@string/app_name"
+                app:titleCentered="true" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="2dp"
+                android:background="@color/uisp_toolbar_border" />
+
+        </com.google.android.material.appbar.AppBarLayout>
+
+        <!-- Global error/diagnostic banner -->
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/error_banner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:layout_marginTop="8dp"
+            android:layout_marginEnd="12dp"
+            android:visibility="gone"
+            app:cardBackgroundColor="@color/design_default_color_error"
+            app:cardCornerRadius="10dp"
+            app:cardElevation="4dp"
+            app:strokeColor="@android:color/white"
+            app:strokeWidth="1dp"
+            tools:visibility="visible">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="12dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="space_between"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/error_title"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/error_banner_title"
+                        android:textAppearance="@style/TextAppearance.MaterialComponents.Subtitle1"
+                        android:textColor="@android:color/white"
+                        android:textStyle="bold"
+                        tools:text="Unable to reach API" />
+
+                    <ImageButton
+                        android:id="@+id/error_dismiss"
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="@string/error_banner_dismiss"
+                        android:padding="8dp"
+                        android:tint="@android:color/white"
+                        app:srcCompat="@android:drawable/ic_menu_close_clear_cancel" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/error_detail"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="@android:color/white"
+                    android:textAppearance="@style/TextAppearance.MaterialComponents.Body2"
+                    tools:text="HTTP 503 backend_unavailable: upstream timeout" />
+
+                <TextView
+                    android:id="@+id/error_request_id"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="@android:color/white"
+                    android:textStyle="italic"
+                    android:textAppearance="@style/TextAppearance.MaterialComponents.Caption"
+                    tools:text="Request ID: 123e4567-e89b-12d3-a456-426614174000" />
+
+                <Button
+                    android:id="@+id/error_copy"
+                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/error_banner_copy"
+                    android:textColor="@android:color/white" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- Main content area -->
+        <FrameLayout
+            android:id="@+id/content_container"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            app:layout_behavior="@string/appbar_scrolling_view_behavior" />
+    </LinearLayout>
 
     <!-- Loading Overlay -->
     <FrameLayout

@@ -8,4 +8,8 @@
     <string name="login_username_hint">API token</string>
     <string name="login_password_hint">Display name (optional)</string>
     <string name="login_button">Save &amp; Connect</string>
+    <string name="error_banner_title">Something went wrong</string>
+    <string name="error_banner_dismiss">Dismiss error banner</string>
+    <string name="error_banner_copy">Copy diagnostics</string>
+    <string name="error_request_id_label">Request ID: %1$s</string>
 </resources>

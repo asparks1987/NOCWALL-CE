@@ -3,6 +3,8 @@ package com.uisp.noc
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -25,7 +27,11 @@ import com.google.android.material.snackbar.Snackbar
 import com.uisp.noc.ui.DashboardFragment
 import com.uisp.noc.ui.LoginFragment
 import com.uisp.noc.ui.MainViewModel
+import com.uisp.noc.ui.MainViewModel.DiagnosticMessage
 import kotlinx.coroutines.launch
+import android.widget.TextView
+import android.widget.Button
+import android.widget.ImageButton
 
 class MainActivity : AppCompatActivity() {
 
@@ -33,6 +39,12 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var toolbar: MaterialToolbar
     private lateinit var loadingOverlay: View
+    private lateinit var errorBanner: View
+    private lateinit var errorTitle: TextView
+    private lateinit var errorDetail: TextView
+    private lateinit var errorRequestId: TextView
+    private lateinit var errorCopyButton: Button
+    private lateinit var errorDismiss: ImageButton
     private var optionsMenu: Menu? = null
 
     private val requestPermissionLauncher =
@@ -48,6 +60,12 @@ class MainActivity : AppCompatActivity() {
 
         toolbar = findViewById(R.id.toolbar)
         loadingOverlay = findViewById(R.id.loading_overlay)
+        errorBanner = findViewById(R.id.error_banner)
+        errorTitle = findViewById(R.id.error_title)
+        errorDetail = findViewById(R.id.error_detail)
+        errorRequestId = findViewById(R.id.error_request_id)
+        errorCopyButton = findViewById(R.id.error_copy)
+        errorDismiss = findViewById(R.id.error_dismiss)
         setSupportActionBar(toolbar)
 
         // Create the notification channel
@@ -63,6 +81,9 @@ class MainActivity : AppCompatActivity() {
                 replace(R.id.content_container, LoginFragment())
             }
         }
+
+        errorDismiss.setOnClickListener { hideErrorBanner() }
+        errorCopyButton.setOnClickListener { copyDiagnostics() }
 
         askNotificationPermission()
         askForBatteryOptimizations()
@@ -100,6 +121,7 @@ class MainActivity : AppCompatActivity() {
                 vm.events.collect { event ->
                     when (event) {
                         is MainViewModel.UiEvent.Message -> showMessage(event.text)
+                        is MainViewModel.UiEvent.Error -> showError(event.diagnostic)
                     }
                 }
             }
@@ -114,6 +136,7 @@ class MainActivity : AppCompatActivity() {
             }
             is MainViewModel.SessionState.Unauthenticated -> {
                 showLoading(false)
+                hideErrorBanner()
                 showLogin()
                 toolbar.subtitle = null
                 // Stop the service when the user logs out
@@ -121,6 +144,7 @@ class MainActivity : AppCompatActivity() {
             }
             is MainViewModel.SessionState.Authenticated -> {
                 showLoading(false)
+                hideErrorBanner()
                 showDashboard()
                 toolbar.subtitle = state.session.uispBaseUrl.toHostLabel()
                 // Start the service when the user is authenticated
@@ -177,6 +201,28 @@ class MainActivity : AppCompatActivity() {
     private fun showMessage(message: String) {
         val root = findViewById<View>(android.R.id.content)
         Snackbar.make(root, message, Snackbar.LENGTH_LONG).show()
+    }
+
+    private fun showError(diagnostic: DiagnosticMessage) {
+        errorBanner.isVisible = true
+        val title = "${diagnostic.code}: ${diagnostic.message}"
+        errorTitle.text = title
+        val detailText = diagnostic.detail?.takeIf { it.isNotBlank() } ?: "No extra detail"
+        errorDetail.text = detailText
+        errorRequestId.text = getString(R.string.error_request_id_label, diagnostic.requestId)
+        // Save diagnostics in the tag for copy action
+        errorBanner.tag = "code=${diagnostic.code}; message=${diagnostic.message}; detail=${diagnostic.detail ?: "-"}; requestId=${diagnostic.requestId}"
+    }
+
+    private fun hideErrorBanner() {
+        errorBanner.isVisible = false
+    }
+
+    private fun copyDiagnostics() {
+        val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+        val text = errorBanner.tag as? String ?: "No diagnostics available"
+        clipboard.setPrimaryClip(ClipData.newPlainText("Diagnostics", text))
+        showMessage("Diagnostics copied to clipboard.")
     }
 
     private fun String.toHostLabel(): String {
