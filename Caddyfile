@@ -13,6 +13,18 @@
         header_up X-Forwarded-Host {host}
         header_up X-Forwarded-For {remote}
     }
+
+    @api path /api/* /mobile/config /devices /incidents /push/register /health
+    reverse_proxy @api api:8080
+
+    @spa {
+        path /spa/*
+    }
+    handle @spa {
+        root * /var/www/html/web
+        try_files {path} {path}/ /spa/index.html
+        file_server
+    }
 }
 
 # Optional: serve the embedded Gotify on a separate hostname.
