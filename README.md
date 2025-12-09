@@ -17,8 +17,8 @@ See `docs/PROJECT_PLAN.md` for the consolidated plan (API/poller/alerting/notifi
 docker compose up -d
 ```
 - Legacy UI: https://localhost (via Caddy)
-- API: http://localhost:8080 (proxied via Caddy /api)
-- Minimal SPA preview: http://localhost/spa/
+- API preview: http://localhost:8080 (proxied via Caddy `/api`)
+- Minimal SPA preview: http://localhost/spa/ (static demo hitting the API preview)
 
 ## Android Build
 ```bash

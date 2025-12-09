@@ -5,8 +5,9 @@ This document consolidates the roadmap, current state, and future targets for th
 ## Current State
 - Legacy stack: PHP single-page app + Vanilla JS/Chart.js, SQLite, Gotify, Caddy TLS sidecar.
 - Dockerized (Compose) with embedded Gotify; Caddy terminates TLS.
-- Android: Kotlin app scaffold with a global diagnostic banner (codes/details/request IDs), structured error events, and a new API client hooked to mobile-config/push/devices/incidents endpoints (backend WIP). API devices/incidents are rendered when available; push registration is wired to FCM tokens. Legacy WebView remains as fallback.
-- CI: GitHub Actions builds Android and Docker image. Compose health checks added for `uisp-noc` and `caddy`.
+- Android: Kotlin app scaffold with a global diagnostic banner (codes/details/request IDs), structured error events, and a new API client hooked to mobile-config/push/devices/incidents endpoints. API devices/incidents are rendered when available; push registration is wired to FCM tokens. Legacy WebView remains as fallback.
+- API/SPA preview: lightweight Go API exposing `/mobile/config`, `/devices`, `/incidents`, `/push/register`, `/health`; minimal static SPA preview under `/spa/` via Caddy. In-memory data only (placeholder until real persistence).
+- CI: GitHub Actions builds Android and Docker image. Compose health checks added for `uisp-noc`, `api`, and `caddy`.
 
 ## Future Architecture (browser + Android parity)
 - Versioned API service with auth/RBAC, inventory/incidents/alerts/metrics, WebSocket/SSE, and audit logs.
