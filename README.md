@@ -44,7 +44,7 @@ cd android
 - Legacy UI: manual verification.
 
 ## Next Steps
-- Flesh out API endpoints per plan (auth, inventory, incidents, metrics, notifications) and persist data stores.
-- Replace SPA preview with full React/Vite app consuming the new API.
-- Wire FCM `registerPush` to live backend once available.
+- Flesh out API persistence (DB-backed auth, inventory/incidents/metrics/notifications) beyond the current in-memory demo.
+- Expand the React/Vite SPA to the full dashboard/incident UI consuming the new API.
+- Wire FCM `registerPush` to live backend and persist tokens for notifications.
 - Add backend tests and tighter CI checks.

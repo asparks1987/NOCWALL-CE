@@ -1,37 +1,12 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>UISP NOC SPA (Preview)</title>
-  <style>
-    body { font-family: Arial, sans-serif; background: #0b1628; color: #e6edf3; margin: 0; padding: 20px; }
-    h1 { margin-top: 0; }
-    .card { background: #152238; border: 1px solid #21314a; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
-    code { color: #9cdcfe; }
-  </style>
-</head>
-<body>
-  <h1>UISP NOC SPA (Preview)</h1>
-  <p>Minimal static preview. Fetches devices and incidents from the new API (defaults to <code>http://localhost:8080</code>).</p>
-  <div class="card">
-    <button id="load">Load Data</button>
-    <pre id="output">Click load to fetch.</pre>
-  </div>
-  <script>
-    const output = document.getElementById('output');
-    const api = location.hostname === 'localhost' ? 'http://localhost:8080' : '/api';
-    document.getElementById('load').onclick = async () => {
-      try {
-        const [devices, incidents] = await Promise.all([
-          fetch(api + '/devices').then(r => r.json()),
-          fetch(api + '/incidents').then(r => r.json())
-        ]);
-        output.textContent = JSON.stringify({ devices, incidents }, null, 2);
-      } catch (err) {
-        output.textContent = 'Error: ' + err;
-      }
-    };
-  </script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>UISP NOC SPA</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
 </html>

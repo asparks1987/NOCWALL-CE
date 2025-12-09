@@ -4,76 +4,19 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 )
 
-// In-memory stores (lightweight placeholder until real persistence is added)
-type stores struct {
-	mu        sync.Mutex
-	devices   []Device
-	incidents []Incident
-	pushTokens []PushRegisterRequest
-}
-
-type MobileConfig struct {
-	UispBaseURL  string          `json:"uisp_base_url"`
-	APIBaseURL   string          `json:"api_base_url"`
-	FeatureFlags map[string]bool `json:"feature_flags"`
-	PushRegister string          `json:"push_register_url"`
-	Environment  string          `json:"environment"`
-	Version      string          `json:"version"`
-	Banner       string          `json:"banner"`
-}
-
-type Device struct {
-	ID        string   `json:"id"`
-	Name      string   `json:"name"`
-	Role      string   `json:"role"`
-	SiteID    string   `json:"site_id"`
-	Online    bool     `json:"online"`
-	LatencyMs *float64 `json:"latency_ms"`
-	AckUntil  *int64   `json:"ack_until"`
-}
-
-type Incident struct {
-	ID        string  `json:"id"`
-	DeviceID  string  `json:"device_id"`
-	Type      string  `json:"type"`
-	Severity  string  `json:"severity"`
-	Started   string  `json:"started_at"`
-	Resolved  *string `json:"resolved_at"`
-	AckUntil  *string `json:"ack_until"`
-}
-
-type PushRegisterRequest struct {
-	Token      string `json:"token"`
-	Platform   string `json:"platform"`
-	AppVersion string `json:"app_version"`
-	Locale     string `json:"locale"`
-}
-
-type PushRegisterResponse struct {
-	RequestID string `json:"request_id"`
-	Message   string `json:"message"`
-}
-
-type DevicesResponse struct {
-	LastUpdated int64    `json:"last_updated"`
-	Devices     []Device `json:"devices"`
-}
-
-type AckRequest struct {
-	DurationMinutes int `json:"duration_minutes"`
-}
-
 func main() {
-	app := fiber.New()
-	store := seedStore()
-
+	dataFile := getenv("DATA_FILE", "")
+	store := LoadStore(dataFile)
 	apiToken := getenv("API_TOKEN", "")
+
+	app := fiber.New()
+
+	// Simple bearer auth if API_TOKEN is set
 	authMiddleware := func(c *fiber.Ctx) error {
 		if apiToken == "" {
 			return c.Next()
@@ -89,6 +32,18 @@ func main() {
 
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok", "time": time.Now().UTC()})
+	})
+
+	app.Post("/auth/login", func(c *fiber.Ctx) error {
+		var creds User
+		if err := c.BodyParser(&creds); err != nil {
+			return c.Status(http.StatusBadRequest).JSON(fiber.Map{"code": "invalid_body", "message": "Invalid request body"})
+		}
+		if store.ValidateUser(creds.Username, creds.Password) {
+			// Demo token; real impl would issue JWT
+			return c.JSON(TokenResponse{AccessToken: apiTokenOrDefault(apiToken), ExpiresAt: time.Now().Add(24 * time.Hour).Unix()})
+		}
+		return c.Status(http.StatusUnauthorized).JSON(fiber.Map{"code": "auth_failed", "message": "Invalid credentials"})
 	})
 
 	app.Get("/mobile/config", func(c *fiber.Ctx) error {
@@ -107,15 +62,12 @@ func main() {
 	})
 
 	app.Get("/devices", authMiddleware, func(c *fiber.Ctx) error {
-		store.mu.Lock()
-		defer store.mu.Unlock()
-		return c.JSON(DevicesResponse{LastUpdated: time.Now().UnixMilli(), Devices: store.devices})
+		devices := store.ListDevices()
+		return c.JSON(DevicesResponse{LastUpdated: time.Now().UnixMilli(), Devices: devices})
 	})
 
 	app.Get("/incidents", authMiddleware, func(c *fiber.Ctx) error {
-		store.mu.Lock()
-		defer store.mu.Unlock()
-		return c.JSON(store.incidents)
+		return c.JSON(store.ListIncidents())
 	})
 
 	app.Post("/incidents/:id/ack", authMiddleware, func(c *fiber.Ctx) error {
@@ -127,21 +79,15 @@ func main() {
 		if req.DurationMinutes <= 0 {
 			req.DurationMinutes = 30
 		}
-		store.mu.Lock()
-		defer store.mu.Unlock()
-		for i := range store.incidents {
-			if store.incidents[i].ID == id {
-				until := time.Now().Add(time.Duration(req.DurationMinutes) * time.Minute).UTC().Format(time.RFC3339)
-				store.incidents[i].AckUntil = &until
-				return c.JSON(store.incidents[i])
-			}
+		inc, ok := store.AckIncident(id, req.DurationMinutes)
+		if !ok {
+			return c.Status(http.StatusNotFound).JSON(fiber.Map{"code": "not_found", "message": "Incident not found"})
 		}
-		return c.Status(http.StatusNotFound).JSON(fiber.Map{"code": "not_found", "message": "Incident not found"})
+		return c.JSON(inc)
 	})
 
 	app.Get("/metrics/devices/:id", authMiddleware, func(c *fiber.Ctx) error {
 		id := c.Params("id")
-		// Placeholder metrics
 		points := []fiber.Map{
 			{"timestamp": time.Now().Add(-5 * time.Minute).Unix(), "latency": 5, "cpu": 20, "ram": 30, "online": true},
 			{"timestamp": time.Now().Unix(), "latency": 8, "cpu": 22, "ram": 31, "online": true},
@@ -158,9 +104,7 @@ func main() {
 			return c.Status(http.StatusBadRequest).JSON(fiber.Map{"code": "missing_token", "message": "token is required"})
 		}
 		rid := randomID()
-		store.mu.Lock()
-		store.pushTokens = append(store.pushTokens, req)
-		store.mu.Unlock()
+		store.RegisterPush(req)
 		log.Printf("Push token registered platform=%s token=%s version=%s locale=%s request_id=%s", req.Platform, req.Token, req.AppVersion, req.Locale, rid)
 		return c.JSON(PushRegisterResponse{RequestID: rid, Message: "registered"})
 	})
@@ -172,19 +116,11 @@ func main() {
 	}
 }
 
-func seedStore() *stores {
-	lat12 := 12.0
-	lat3 := 3.0
-	devs := []Device{
-		{ID: "gw-1", Name: "Gateway-1", Role: "gateway", SiteID: "site-1", Online: true, LatencyMs: &lat12},
-		{ID: "ap-1", Name: "AP-1", Role: "ap", SiteID: "site-1", Online: false, LatencyMs: nil},
-		{ID: "sw-1", Name: "Switch-1", Role: "switch", SiteID: "site-1", Online: true, LatencyMs: &lat3},
+func apiTokenOrDefault(t string) string {
+	if t != "" {
+		return t
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	inc := []Incident{
-		{ID: "inc-1", DeviceID: "ap-1", Type: "offline", Severity: "critical", Started: now, Resolved: nil, AckUntil: nil},
-	}
-	return &stores{devices: devs, incidents: inc, pushTokens: []PushRegisterRequest{}}
+	return "dev-token"
 }
 
 func getenv(key, def string) string {
