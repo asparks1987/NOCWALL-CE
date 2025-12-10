@@ -1,48 +1,51 @@
 # UISP NOC - Consolidated Plan and Status
 
-This document consolidates the roadmap, current state, and future targets for the browser and Android revamp.
+This document consolidates current state, what was implemented, what remains, and platform/multi-arch targets.
 
-## Current State
+## Current State (implemented)
 - Legacy stack: PHP single-page app + Vanilla JS/Chart.js, SQLite, Gotify, Caddy TLS sidecar.
-- Dockerized (Compose) with embedded Gotify; Caddy terminates TLS.
-- Android: Kotlin app scaffold with a global diagnostic banner (codes/details/request IDs), structured error events, and a new API client hooked to mobile-config/push/devices/incidents endpoints. API devices/incidents are rendered when available; push registration is wired to FCM tokens. Legacy WebView remains as fallback.
-- API/SPA preview: lightweight Go API exposing `/mobile/config`, `/devices`, `/incidents`, `/push/register`, `/health`; minimal static SPA preview under `/spa/` via Caddy. In-memory data only (placeholder until real persistence).
-- CI: GitHub Actions builds Android and Docker image. Compose health checks added for `uisp-noc`, `api`, and `caddy`.
+- Docker Compose stack with Caddy proxy. Health checks in Compose for app/API/Caddy.
+- Android: Kotlin scaffold with global diagnostic banner (codes/details/request IDs), structured error events, FCM token capture, and API client wired to mobile-config/devices/incidents. Uses API data when available; WebView fallback remains.
+- Go API preview (`/mobile/config`, `/devices`, `/incidents`, `/incidents/:id/ack`, `/metrics/devices/:id`, `/push/register`, `/health`) with in-memory store; placeholder auth token; Dockerfile and Compose wiring.
+- SPA preview: React/Vite minimal page at `/spa/` that reads devices/incidents from the API.
+- CI: GitHub Actions building Android (assembleDebug) and a Docker image. `build-multiarch.sh` builds/pushes both app and API images.
 
-## Future Architecture (browser + Android parity)
-- Versioned API service with auth/RBAC, inventory/incidents/alerts/metrics, WebSocket/SSE, and audit logs.
-- UISP poller workers publishing events to Redis Streams/NATS; alert engine with rules (downtime/flap/latency/loss/utilization/temperature), suppression, maintenance, escalations, and SLA tracking.
-- Notification service with multi-channel fan-out (Gotify, FCM, email/SMS/webhook) plus actionable notifications and DLQ.
-- Web SPA (React + Vite) with wallboard, device grids, incident console, dependency graph/map, settings, and offline/error banners with request IDs.
-- Native Android app (Kotlin) consuming the same API: wallboard/incidents/actions, FCM actionable push, background sync, offline cache, kiosk mode.
-- Ops: OpenTelemetry/Prometheus dashboards, CI/CD pipelines, backups/restore, load/soak tests, security hardening.
-- Migration: parallel run with legacy UI, parity validation, staged cutover, rollback plan, legacy deprecation.
+## Multi-Arch / Platform Targets
+- Images must ship for amd64 + arm64 (Linux) and run on x86_64/ARM hosts; API image currently failing with exec format error because the pushed tag is not multi-arch.
+- Client targets: browser (desktop/mobile), Android (phone/tablet), iPad (via browser/SPA). Native Android client must function on arm64/x86 emulation.
+- Action: rebuild and push multi-arch app/API images (`./build-multiarch.sh --author <you> --tag <tag>`) before deployment (Portainer/stack).
 
-## Phase Checklist (completed planning; build in progress)
-- **Discovery/Targets:** Users/roles, on-call schedules, notification channels, SSO, alert policies, dependency mapping, migration approach.
-- **Architecture/Data:** Entity model, API schema, event model, alert engine inputs/outputs, metrics retention, incident/audit schema, realtime channels, mobile config endpoint, runbooks, privacy.
-- **Infrastructure:** Multi-service layout (api/poller/notifier/web/caddy/gotify/db/redis), healthchecks, secrets/config templates, observability, CI/migrations, multi-arch builds, staging seeds, backups.
-- **Backend API/Auth:** Endpoint contracts for auth, inventory, incidents/maintenance, metrics/history, mobile bootstrap, audit, security, contract tests.
-- **Poller/Normalization:** UISP poller, normalization, event publishing/dedupe, metrics persistence, dependency awareness, health, cadence, tests.
-- **Alert Engine:** Rule worker, maintenance/blackouts, dependency suppression, escalations, SLA tracking, manual incidents, tests.
-- **Notifications:** Router, token registration/cleanup, dedupe/throttle, actionable notifications, deliverability/DLQ, smoke tests.
-- **Web SPA:** Scaffold, wallboard, device grids/detail, incidents, settings, simulation/maintenance/graph/map, responsive/kiosk, accessibility/offline/error states, tests/perf.
-- **Android Native:** Scaffold, API client + realtime, wallboard/incidents UI, ack/maintenance, FCM, WorkManager sync, settings, kiosk/offline, tests, branding.
-- **Ops/Hardening:** Observability, ops alerts, security, retention/backups, CI/CD pipelines, load/soak tests.
-- **Migration/Cutover:** Staging mirror, parity validation, pilots, training, cutover/rollback, legacy deprecation.
-- **Post-Launch:** Feedback, integrations, expanded device actions, optimization, chaos drills/on-call reviews.
+## Remaining Work (high level)
+- Replace in-memory API with persistent store (Postgres/Redis). Implement full auth/RBAC, inventory, incidents, metrics, notifications, audit logs per contracts.
+- Implement poller workers + alert engine (downtime/flap/latency/loss/utilization/temp, suppression, maintenance, escalation, SLA).
+- Notification service with multi-channel fan-out and actionable notifications; persist and use FCM tokens from Android.
+- Replace SPA preview with full React/Vite app (wallboard, grids, incidents, settings, dependency graph/map, offline/error banners with request IDs).
+- Finish migration path: parity validation against legacy UI, staged cutover, rollback.
+- Add backend tests, load/soak tests, observability (OTel/Prometheus), security hardening.
+
+## Phase Checklist (planning done; build in progress)
+- **Discovery/Targets:** Complete.
+- **Architecture/Data:** Complete (entity/API/event/rule/metrics/realtime/runbooks/privacy defined).
+- **Infrastructure:** Baseline Compose/CI and multi-arch builder present; need real DB/cache and Helm/k8s packaging later.
+- **Backend API/Auth:** Contracts defined; implementation pending beyond current preview.
+- **Poller/Normalization:** Planned; not implemented.
+- **Alert Engine:** Planned; not implemented.
+- **Notifications:** Planned; minimal push register endpoint only.
+- **Web SPA:** Preview only; full app pending.
+- **Android Native:** Scaffold + diagnostics + API data + FCM token capture; awaiting live backend and full UI.
+- **Ops/Hardening:** CI + health checks; need observability, security, backups, load tests.
+- **Migration/Cutover:** Pending once new stack achieves parity.
+- **Post-Launch:** Pending (integrations, actions, optimization, drills).
 
 ## Build & Run (current)
-- **Browser/Backend (legacy):**
-  - `docker compose up -d`
-  - Environment vars: `UISP_URL`, `UISP_TOKEN`, `NOC_DOMAIN` (Caddy), optional `SHOW_TLS_UI=1`.
-- **Android (native scaffold):**
-  - `cd android && ./gradlew assembleDebug`
-  - Requires JDK 11+ and Android SDK; defaults to existing UISP URL/token auth flow. Mobile config call is wired; backend endpoints still in progress.
-  - Global error banner shows codes/details/request IDs; “Copy diagnostics” for support.
+- **Stack:** `docker compose up -d` (requires images `predheadtx/uisp-noc:beta` and `predheadtx/uisp-api:beta` or your rebuilt multi-arch equivalents; Caddy file embedded via Compose config).
+- **Android:** `cd android && ./gradlew assembleDebug` (JDK 11+, Android SDK). Diagnostic banner and API data enabled; FCM token captured and sent to `/push/register`.
 
-## Next Build Targets
-- Wire the new API responses (devices/incidents) into the Android UI (replace legacy UISP endpoints as backend lands).
-- Hook FCM registration to `registerPush`.
-- Swap the WebView fallback for native flows once SPA/API are available.
-- Implement SPA and backend services per contracts above; add CI and health checks.
+## Known Issues from Logs
+- `api` image exec format error on target host: rebuild/push multi-arch API image.
+- Caddy warnings about HTTP/2/3 skipped: expected when serving HTTP only.
+
+## Immediate Next Steps
+- Rebuild/push multi-arch images for app/API and redeploy to clear exec format error.
+- Implement persistent API (Postgres/Redis) with auth/RBAC, inventory/incidents/metrics/notifications.
+- Expand SPA to real UI; connect Android to live backend; wire notification service using stored FCM tokens.

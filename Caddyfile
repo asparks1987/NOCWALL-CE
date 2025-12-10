@@ -1,34 +1,19 @@
 {
-    # Optional: send an email to ACME CA for cert events
     email {env.ACME_EMAIL}
-    # Enable admin API on container network so the app can request certs
     admin 0.0.0.0:2019
 }
 
-# Main site with automatic HTTPS. Default to localhost if NOC_DOMAIN not set.
 {$NOC_DOMAIN:localhost} {
-    # Reverse proxy to the PHP app running in the uisp-noc container
+    @api path /api/* /mobile/config /devices /incidents /push/register /health
+    reverse_proxy @api api:8080
+
     reverse_proxy uisp-noc:80 {
         header_up X-Forwarded-Proto {scheme}
         header_up X-Forwarded-Host {host}
         header_up X-Forwarded-For {remote}
     }
-
-    @api path /api/* /mobile/config /devices /incidents /push/register /health
-    reverse_proxy @api api:8080
-
-    @spa {
-        path /spa/*
-    }
-    handle @spa {
-        root * /var/www/html/web
-        try_files {path} {path}/ /spa/index.html
-        file_server
-    }
 }
 
-# Optional: serve the embedded Gotify on a separate hostname.
-# Set GOTIFY_DOMAIN to e.g. gotify.example.com to enable.
 {$GOTIFY_DOMAIN} {
     reverse_proxy uisp-noc:18080 {
         header_up X-Forwarded-Proto {scheme}

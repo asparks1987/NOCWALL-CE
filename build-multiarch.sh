@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
-# Multi-arch builder for UISP NOC (backend + assets). Builds and optionally pushes.
+# Multi-arch builder for UISP NOC app and API. Builds and pushes both images.
 # Usage:
-#   ./build-multiarch.sh --image youruser/uisp-noc:tag [options]
+#   ./build-multiarch.sh --author youruser --tag beta [options]
 # Options:
-#   --image <name:tag>   (required) target image
-#   --context <path>     build context (default: .)
-#   --platforms <list>   platforms (default: linux/amd64,linux/arm64)
-#   --builder <name>     buildx builder (default: uisp-noc-multiarch)
-#   --push               push image (default)
-#   --load               load into local Docker (mutually exclusive with --push)
-#   --pull               pull latest bases
-#   --no-cache           disable cache
-#   --build-arg KEY=VAL  repeatable build args
-#   -h|--help            show this help
+#   --author <name>        (required) registry namespace/author
+#   --tag <tag>            (required) image tag
+#   --platforms <list>     platforms (default: linux/amd64,linux/arm64)
+#   --builder <name>       buildx builder (default: uisp-noc-multiarch)
+#   --push                 push images (default)
+#   --load                 load into local Docker (mutually exclusive with --push)
+#   --pull                 pull latest bases
+#   --no-cache             disable cache
+#   --build-arg KEY=VAL    repeatable build args (applied to both builds)
+#   -h|--help              show this help
 set -euo pipefail
 
-show_help() { sed -n '2,80p' "$0"; }
+show_help() { sed -n '2,120p' "$0"; }
 
-image=""
-context="."
+author=""
+tag=""
 platforms="linux/amd64,linux/arm64"
 builder="uisp-noc-multiarch"
 push=true
@@ -29,8 +29,8 @@ build_args=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --image) image="$2"; shift 2 ;;
-    --context) context="$2"; shift 2 ;;
+    --author) author="$2"; shift 2 ;;
+    --tag) tag="$2"; shift 2 ;;
     --platforms) platforms="$2"; shift 2 ;;
     --builder) builder="$2"; shift 2 ;;
     --push) push=true; load=false; shift ;;
@@ -43,10 +43,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$image" ]]; then
-  echo "Error: --image <name:tag> is required." >&2
-  show_help; exit 1
+if [[ -z "$author" || -z "$tag" ]]; then
+  echo "Error: --author and --tag are required." >&2
+  show_help
+  exit 1
 fi
+
+app_image="${author}/uisp-noc:${tag}"
+api_image="${author}/uisp-api:${tag}"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "Error: docker CLI not found." >&2; exit 1
@@ -63,21 +67,24 @@ else
 fi
 docker buildx inspect "$builder" --bootstrap >/dev/null
 
-cmd=(docker buildx build --platform "$platforms" -t "$image")
-
-if $push; then cmd+=(--push); fi
-if $load; then cmd+=(--load); fi
-if $pull; then cmd+=(--pull); fi
-if $no_cache; then cmd+=(--no-cache); fi
-if [[ ${#build_args[@]} -gt 0 ]]; then cmd+=("${build_args[@]}"); fi
-
-cmd+=("$context")
+common_opts=(--platform "$platforms")
+if $push; then common_opts+=(--push); fi
+if $load; then common_opts+=(--load); fi
+if $pull; then common_opts+=(--pull); fi
+if $no_cache; then common_opts+=(--no-cache); fi
+if [[ ${#build_args[@]} -gt 0 ]]; then common_opts+=("${build_args[@]}"); fi
 
 echo
-echo "Running: ${cmd[*]}"
-echo
+echo "Building app image: $app_image"
+app_cmd=(docker buildx build "${common_opts[@]}" -t "$app_image" -f Dockerfile .)
+echo "Running: ${app_cmd[*]}"
+"${app_cmd[@]}"
 
-"${cmd[@]}"
+echo
+echo "Building API image: $api_image"
+api_cmd=(docker buildx build "${common_opts[@]}" -t "$api_image" -f api/Dockerfile .)
+echo "Running: ${api_cmd[*]}"
+"${api_cmd[@]}"
 
 echo
-echo "Build complete." >&2
+echo "Builds complete." >&2

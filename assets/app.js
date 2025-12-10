@@ -64,6 +64,7 @@ let chartJsLoader=null;
 let cpeHistoryChart=null;
 let cpeHistoryReqId=0;
 const AP_ALERT_GRACE_SEC = 900; // 15 minutes
+const MIN_OFFLINE_TS = 1; // guard against missing/zero offline_since
 
 const POLL_INTERVAL_NORMAL_MS = 5000;
 const POLL_INTERVAL_FAST_MS = 2000;
@@ -280,13 +281,15 @@ function renderDevices(meta, opts){
   const overallEl=document.getElementById('overallSummary');
   if(overallEl) overallEl.innerHTML=summaryHTML;
 
+  const isApAlertEligible = (dev, nowSeconds) => {
+    if(!dev || dev.online || !dev.ap) return false;
+    const offlineSince = typeof dev.offline_since === 'number' ? dev.offline_since : null;
+    if(!offlineSince || offlineSince < MIN_OFFLINE_TS) return false; // ignore missing/zero timestamps
+    return offlineSince <= (nowSeconds - AP_ALERT_GRACE_SEC);
+  };
+
   const alertCandidates = gateways.concat(
-    apItems.filter(d=>{
-      if(d.online) return false;
-      const offlineSince = typeof d.offline_since === 'number' ? d.offline_since : null;
-      if(offlineSince===null) return false;
-      return offlineSince <= (nowSec - AP_ALERT_GRACE_SEC);
-    })
+    apItems.filter(d=> isApAlertEligible(d, nowSec))
   );
   const shouldAlert = alertCandidates.some(d=>!d.online && !(d.ack_until && d.ack_until>nowSec));
 
@@ -297,18 +300,17 @@ function renderDevices(meta, opts){
     }
     if(!sirenTimeout){
       sirenTimeout=setTimeout(()=>{
-        const stillAlert = devicesCache
-          .filter(d=>d && (d.gateway || d.ap))
-          .some(d=>{
-            if(d.online) return false;
-            if(d.ack_until && d.ack_until > (Date.now()/1000)) return false;
-            if(d.ap){
-              const offlineSince = typeof d.offline_since === 'number' ? d.offline_since : null;
-              if(offlineSince===null) return false;
-              return offlineSince <= ((Date.now()/1000) - AP_ALERT_GRACE_SEC);
-            }
-            return true; // gateways alert immediately
-          });
+            const nowSeconds = Math.floor(Date.now()/1000);
+            const stillAlert = devicesCache
+              .filter(d=>d && (d.gateway || d.ap))
+              .some(d=>{
+                if(d.online) return false;
+                if(d.ack_until && d.ack_until > nowSeconds) return false;
+                if(d.ap){
+                  return isApAlertEligible(d, nowSeconds);
+                }
+                return true; // gateways alert immediately
+              });
         if(stillAlert){
           const a=document.getElementById('siren');
           if(a){
