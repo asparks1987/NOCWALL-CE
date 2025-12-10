@@ -7,8 +7,7 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("com.google.gms.google-services")
-    // Add the Kotlin serialization plugin
-    id("org.jetbrains.kotlin.plugin.serialization") version "1.9.22"
+    id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 val localProperties = Properties()
@@ -19,41 +18,33 @@ if (localPropertiesFile.exists()) {
 
 android {
     namespace = "com.uisp.noc"
-    compileSdk = 36
+    compileSdk = 35
 
-val defaultHome = System.getenv("HOME") ?: System.getenv("USERPROFILE") ?: "."
-val defaultDebugKeystore = File(defaultHome, ".android/debug.keystore")
-signingConfigs {
-    create("release") {
-        val configuredStore = file(localProperties.getProperty("storeFile", "keystore.jks"))
-        val chosen = if (configuredStore.exists()) configuredStore else defaultDebugKeystore
-        storeFile = chosen
-        storePassword = localProperties.getProperty("storePassword", "android")
-        keyAlias = localProperties.getProperty("keyAlias", "androiddebugkey")
-        keyPassword = localProperties.getProperty("keyPassword", "android")
+    buildFeatures {
+        buildConfig = true
     }
-}
+
+    val defaultHome = System.getenv("HOME") ?: System.getenv("USERPROFILE") ?: "."
+    val defaultDebugKeystore = File(defaultHome, ".android/debug.keystore")
+    signingConfigs {
+        create("release") {
+            val configuredStore = file(localProperties.getProperty("storeFile", "keystore.jks"))
+            val chosen = if (configuredStore.exists()) configuredStore else defaultDebugKeystore
+            storeFile = chosen
+            storePassword = localProperties.getProperty("storePassword", "android")
+            keyAlias = localProperties.getProperty("keyAlias", "androiddebugkey")
+            keyPassword = localProperties.getProperty("keyPassword", "android")
+        }
+    }
 
     defaultConfig {
         applicationId = "com.uisp.noc"
         minSdk = 24
-        targetSdk = 36
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0-beta1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    }
-
-    flavorDimensions += "version"
-    productFlavors {
-        create("demo") {
-            dimension = "version"
-            applicationIdSuffix = ".demo"
-            versionNameSuffix = "-demo"
-        }
-        create("full") {
-            dimension = "version"
-        }
     }
 
     buildTypes {
@@ -66,19 +57,21 @@ signingConfigs {
             signingConfig = signingConfigs.getByName("release")
         }
         debug {
-            signingConfig = signingConfigs.getByName("release")
+
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions {
-        jvmTarget = "11"
+        jvmTarget = "17"
     }
 }
 
 dependencies {
+    // Align all Kotlin libs to the Kotlin plugin version
+    implementation(platform("org.jetbrains.kotlin:kotlin-bom:1.9.22"))
 
     // Firebase
     implementation(platform("com.google.firebase:firebase-bom:33.1.2"))
@@ -98,7 +91,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0")
     implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
     implementation("androidx.coordinatorlayout:coordinatorlayout:1.2.0")
-    implementation("androidx.work:work-runtime-ktx:2.11.0")
+    // WorkManager built with Kotlin 1.9.x to match the toolchain
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
 
     // Wear OS
     implementation("com.google.android.gms:play-services-wearable:18.2.0")

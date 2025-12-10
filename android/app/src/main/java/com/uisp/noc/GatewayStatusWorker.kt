@@ -12,8 +12,17 @@ class GatewayStatusWorker(
 ) : CoroutineWorker(appContext, workerParams) {
 
     companion object {
-        // In-memory store for offline gateways. A persistent store would be better for a real app.
+        // In-memory stores. In a production app this should be persisted.
         private val offlineGateways = mutableMapOf<String, OfflineGatewayInfo>()
+        private val offlineAps = mutableMapOf<String, OfflineGatewayInfo>()
+        private val offlineBackbone = mutableMapOf<String, OfflineGatewayInfo>()
+
+        private const val GATEWAY_INITIAL_MINUTES = 1L    // gateways alert quickly (desktop parity)
+        private const val GATEWAY_REPEAT_MINUTES = 15L
+        private const val AP_INITIAL_MINUTES = 15L        // APs must be down 15m before alerting (desktop parity)
+        private const val AP_REPEAT_MINUTES = 15L
+        private const val BACKBONE_INITIAL_MINUTES = 15L  // treat backbone like APs for noise control
+        private const val BACKBONE_REPEAT_MINUTES = 15L
     }
 
     override suspend fun doWork(): Result {
@@ -26,53 +35,56 @@ class GatewayStatusWorker(
             val summary = repository.summaryFlow.value ?: return Result.failure()
             val now = System.currentTimeMillis()
 
-            val currentOfflineIds = summary.offlineGateways.map { it.id }.toSet()
+            // 1) Handle devices that came back online
+            handleRestoredDevices(
+                currentOffline = summary.offlineGateways,
+                tracked = offlineGateways,
+                now = now,
+                onlineMessage = "The device is now connected."
+            )
+            handleRestoredDevices(
+                currentOffline = summary.offlineAps,
+                tracked = offlineAps,
+                now = now,
+                onlineMessage = "The access point is now connected."
+            )
+            handleRestoredDevices(
+                currentOffline = summary.offlineBackbone,
+                tracked = offlineBackbone,
+                now = now,
+                onlineMessage = "The backbone device is now connected."
+            )
 
-            // 1. Check for gateways that came back online
-            val newlyOnlineGateways = offlineGateways.filter { (id, _) -> id !in currentOfflineIds }
-            newlyOnlineGateways.forEach { (id, info) ->
-                MyFirebaseMessagingService.sendNotification(
-                    appContext,
-                    title = "${info.gateway.name} is online",
-                    messageBody = "The device is now connected.",
-                    sound = "default_online"
-                )
-                offlineGateways.remove(id)
-            }
+            // 2) Track newly offline devices
+            trackOffline(summary.offlineGateways, offlineGateways, now)
+            trackOffline(summary.offlineAps, offlineAps, now)
+            trackOffline(summary.offlineBackbone, offlineBackbone, now)
 
-            // 2. Add newly offline gateways to tracking
-            summary.offlineGateways.forEach { gateway ->
-                if (!offlineGateways.containsKey(gateway.id)) {
-                    offlineGateways[gateway.id] = OfflineGatewayInfo(gateway, now)
-                }
-            }
-
-            // 3. Handle notifications for gateways that are still offline
-            offlineGateways.values.forEach { info ->
-                val minutesOffline = (now - info.firstSeenOffline) / 1000 / 60
-
-                if (minutesOffline >= 1 && !info.notifiedInitial) {
-                    MyFirebaseMessagingService.sendNotification(
-                        appContext,
-                        title = "${info.gateway.name} is offline",
-                        messageBody = "The device has been offline for 1 minute.",
-                        sound = "buz"
-                    )
-                    info.notifiedInitial = true
-                    info.lastNotified = now
-                } else if (info.notifiedInitial) {
-                    val minutesSinceLastNotification = (now - info.lastNotified) / 1000 / 60
-                    if (minutesSinceLastNotification >= 15) {
-                        MyFirebaseMessagingService.sendNotification(
-                            appContext,
-                            title = "${info.gateway.name} is still offline",
-                            messageBody = "The device has been offline for over 15 minutes.",
-                            sound = "buz"
-                        )
-                        info.lastNotified = now
-                    }
-                }
-            }
+            // 3) Notify for ongoing outages with desktop parity timing
+            notifyOngoing(
+                map = offlineGateways,
+                now = now,
+                initialThresholdMinutes = GATEWAY_INITIAL_MINUTES,
+                repeatThresholdMinutes = GATEWAY_REPEAT_MINUTES,
+                initialMessage = { "${it.name} is offline" },
+                repeatMessage = { "${it.name} is still offline" }
+            )
+            notifyOngoing(
+                map = offlineAps,
+                now = now,
+                initialThresholdMinutes = AP_INITIAL_MINUTES,
+                repeatThresholdMinutes = AP_REPEAT_MINUTES,
+                initialMessage = { "${it.name} is offline" },
+                repeatMessage = { "${it.name} is still offline" }
+            )
+            notifyOngoing(
+                map = offlineBackbone,
+                now = now,
+                initialThresholdMinutes = BACKBONE_INITIAL_MINUTES,
+                repeatThresholdMinutes = BACKBONE_REPEAT_MINUTES,
+                initialMessage = { "${it.name} is offline" },
+                repeatMessage = { "${it.name} is still offline" }
+            )
         } catch (e: Exception) {
             // Silently fail to avoid crashing the worker
             return Result.failure()
@@ -81,8 +93,88 @@ class GatewayStatusWorker(
         return Result.success()
     }
 
+    private fun handleRestoredDevices(
+        currentOffline: List<DeviceStatus>,
+        tracked: MutableMap<String, OfflineGatewayInfo>,
+        now: Long,
+        onlineMessage: String
+    ) {
+        val currentOfflineIds = currentOffline.map { it.id }.toSet()
+        val restored = tracked.filter { (id, _) -> id !in currentOfflineIds }
+        restored.forEach { (id, info) ->
+            MyFirebaseMessagingService.sendNotification(
+                appContext,
+                title = "${info.device.name} is online",
+                messageBody = onlineMessage,
+                sound = "default_online"
+            )
+            tracked.remove(id)
+        }
+    }
+
+    private fun trackOffline(
+        offlineList: List<DeviceStatus>,
+        tracked: MutableMap<String, OfflineGatewayInfo>,
+        now: Long
+    ) {
+        offlineList.forEach { device ->
+            if (!tracked.containsKey(device.id)) {
+                tracked[device.id] = OfflineGatewayInfo(device, now)
+            }
+        }
+    }
+
+    private fun notifyOngoing(
+        map: MutableMap<String, OfflineGatewayInfo>,
+        now: Long,
+        initialThresholdMinutes: Long,
+        repeatThresholdMinutes: Long,
+        initialMessage: (DeviceStatus) -> String,
+        repeatMessage: (DeviceStatus) -> String
+    ) {
+        val nowMinutes = now / 60000
+        map.values.forEach { info ->
+            // Respect ACKs if provided by backend
+            val ackUntil = info.device.ackUntilEpochMillis
+            if (ackUntil != null && ackUntil > now) {
+                return@forEach
+            }
+
+            val minutesOffline = nowMinutes - (info.firstSeenOffline / 60000)
+            if (!info.notifiedInitial && minutesOffline >= initialThresholdMinutes) {
+                MyFirebaseMessagingService.sendNotification(
+                    appContext,
+                    title = initialMessage(info.device),
+                    messageBody = buildMessage(minutesOffline, initialThresholdMinutes),
+                    sound = "buz"
+                )
+                info.notifiedInitial = true
+                info.lastNotified = now
+            } else if (info.notifiedInitial) {
+                val minutesSinceLast = (now - info.lastNotified) / 60000
+                if (minutesSinceLast >= repeatThresholdMinutes) {
+                    MyFirebaseMessagingService.sendNotification(
+                        appContext,
+                        title = repeatMessage(info.device),
+                        messageBody = buildMessage(minutesOffline, repeatThresholdMinutes),
+                        sound = "buz"
+                    )
+                    info.lastNotified = now
+                }
+            }
+        }
+    }
+
+    private fun buildMessage(minutesOffline: Long, thresholdMinutes: Long): String {
+        return if (minutesOffline >= thresholdMinutes) {
+            "The device has been offline for over ${thresholdMinutes} minute${if (thresholdMinutes == 1L) "" else "s"}."
+        } else {
+            "The device is offline."
+        }
+    }
+
     private data class OfflineGatewayInfo(
-        val gateway: DeviceStatus,
+        val device: DeviceStatus,
         val firstSeenOffline: Long,
         var notifiedInitial: Boolean = false,
         var lastNotified: Long = 0

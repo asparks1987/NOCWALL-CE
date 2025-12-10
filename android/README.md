@@ -37,6 +37,34 @@ This module provides a minimal Android application that wraps the UISP NOC dashb
 
 The WebView caches cookies/local storage, so the UISP NOC session persists between launches. To reset, clear the app data from Android settings.
 
+## Troubleshooting and Development Notes
+
+A number of steps were taken to get the application to a stable, runnable state. These are documented below for future reference.
+
+### Initial Build Failures
+
+The project initially failed to compile due to several issues:
+
+*   **Missing Imports:** `MyFirebaseMessagingService.kt` was missing a necessary import for `com.uisp.noc.data.SessionStore`.
+*   **Serialization Library Changes:** `Diagnostics.kt` was using an outdated API for the `kotlinx-serialization-json` library. The code was updated to use the modern API.
+*   **BuildConfig Not Generated:** The `BuildConfig` file was not being generated, causing unresolved reference errors. This was fixed by adding `buildFeatures { buildConfig = true }` to the `android` block in `app/build.gradle.kts`.
+*   **Signing Configuration:** The debug build was incorrectly configured to use the release signing key, causing signing failures. This was resolved by removing the `signingConfig` from the `debug` build type in `app/build.gradle.kts`.
+
+### Runtime Crashes
+
+After the build issues were resolved, the application experienced a couple of runtime crashes:
+
+*   **NetworkOnMainThreadException:** The application was attempting to perform network operations on the main UI thread, leading to a crash. This was fixed by wrapping the network calls in `withContext(Dispatchers.IO)` within `ApiClient.kt` to ensure they run on a background thread.
+*   **IllegalStateException: closed:** The app was attempting to read a network response body more than once, which is not allowed. This was resolved by ensuring the response body is read only a single time in `ApiClient.kt` and `Diagnostics.kt`.
+
+### Improvements and Bug Fixes
+
+Several other improvements were made to enhance the application:
+
+*   **Predictive Back Gesture:** The predictive back gesture was enabled for a more modern user experience on newer Android devices by adding `android:enableOnBackInvokedCallback="true"` to the `application` tag in `AndroidManifest.xml`.
+*   **Corrected API Endpoints:** Several network requests were failing with "404 Not Found" errors. The URLs in `ApiClient.kt` were corrected to include the proper `/nms/api/v2.1` prefix.
+
+
 ## Field Workflow Ideas
 
 * Pair the APK with Gotify push notifications so tapping an alert jumps straight back into the outage dashboard.
@@ -61,6 +89,3 @@ The WebView caches cookies/local storage, so the UISP NOC session persists betwe
 ```
 
 Configure signing configs (`app/build.gradle`) or use Android Studio’s **Build > Generate Signed Bundle / APK** workflow. The wrapper does not include Play Store metadata; add icons, branding, and store assets if you plan to publish it publicly.
-
-
-

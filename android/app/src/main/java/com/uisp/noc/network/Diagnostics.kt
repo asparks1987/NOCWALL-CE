@@ -8,10 +8,9 @@ import java.util.UUID
 
 private val json = Json { ignoreUnknownKeys = true }
 
-fun Response.asDiagnostic(codeFallback: String, messageFallback: String): DiagnosticError {
+fun Response.asDiagnostic(body: String, codeFallback: String, messageFallback: String): DiagnosticError {
     val rid = header("X-Request-ID") ?: UUID.randomUUID().toString()
-    val bodyStr = body?.string().orEmpty()
-    val detail = extractDetail(bodyStr)
+    val detail = extractDetail(body)
     return DiagnosticError(
         code = codeFallback,
         message = messageFallback,
@@ -34,7 +33,7 @@ private fun extractDetail(body: String): String? {
     return runCatching {
         val node = json.parseToJsonElement(body) as? JsonObject ?: return null
         listOf("detail", "message", "error").firstNotNullOfOrNull { key ->
-            node[key]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            node[key]?.jsonPrimitive?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
         }
     }.getOrNull()
 }

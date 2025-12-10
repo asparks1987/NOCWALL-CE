@@ -1,2 +1,0 @@
-#- File Locator -
-listingFile=../../../bundle_ide_model/fullRelease/produceFullReleaseBundleIdeListingFile/output-metadata.json

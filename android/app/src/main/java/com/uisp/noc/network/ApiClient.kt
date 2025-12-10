@@ -1,5 +1,7 @@
 package com.uisp.noc.network
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -28,7 +30,7 @@ class ApiClient(
     private val apiBase = baseUrl.trimEnd('/')
 
     suspend fun fetchMobileConfig(): ApiResult<MobileConfigDto> {
-        val url = "$apiBase/mobile/config"
+        val url = "$apiBase/nms/api/v2.1/mobile/config"
         val request = Request.Builder()
             .url(url)
             .get()
@@ -40,7 +42,7 @@ class ApiClient(
     }
 
     suspend fun registerPush(token: String, platform: String, appVersion: String, locale: Locale): ApiResult<PushRegisterResponse> {
-        val url = "$apiBase/push/register"
+        val url = "$apiBase/nms/api/v2.1/push/register"
         val payload = PushRegisterRequest(
             token = token,
             platform = platform,
@@ -60,7 +62,7 @@ class ApiClient(
     }
 
     suspend fun fetchDevices(): ApiResult<DeviceSummaryDto> {
-        val url = "$apiBase/devices"
+        val url = "$apiBase/nms/api/v2.1/devices"
         val request = Request.Builder()
             .url(url)
             .get()
@@ -72,7 +74,7 @@ class ApiClient(
     }
 
     suspend fun fetchIncidents(): ApiResult<List<IncidentDto>> {
-        val url = "$apiBase/incidents"
+        val url = "$apiBase/nms/api/v2.1/incidents"
         val request = Request.Builder()
             .url(url)
             .get()
@@ -91,7 +93,7 @@ class ApiClient(
         }
         .build()
 
-    private fun <T> execute(
+    private suspend fun <T> execute(
         request: Request,
         defaultErrorCode: String,
         parser: (String) -> T
@@ -108,13 +110,17 @@ class ApiClient(
         }
 
         return try {
-            client.newCall(request).execute().use { response ->
-                val reqId = response.header("X-Request-ID")
-                val bodyStr = response.body?.string().orEmpty()
-                if (!response.isSuccessful) {
-                    val diag = response.asDiagnostic(
+            val response = withContext(Dispatchers.IO) {
+                client.newCall(request).execute()
+            }
+            response.use {
+                val reqId = it.header("X-Request-ID")
+                val bodyStr = it.body?.string().orEmpty()
+                if (!it.isSuccessful) {
+                    val diag = it.asDiagnostic(
+                        body = bodyStr,
                         codeFallback = defaultErrorCode,
-                        messageFallback = "HTTP ${response.code} from server"
+                        messageFallback = "HTTP ${it.code} from server"
                     )
                     return ApiResult.Error(diag)
                 }
