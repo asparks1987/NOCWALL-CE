@@ -1,54 +1,125 @@
-﻿# UISP NOC
+﻿# NOCWALL-CE
 
-A self-hosted, zero-friction Network Operations Center for Ubiquiti UISP deployments. Legacy stack: PHP/JS UI, SQLite metrics, embedded Gotify, Caddy TLS sidecar, Docker Compose. Revamp in progress with a new API, SPA, and native Android client.
+NOCWALL-CE is the community/open foundation for the NOCWALL platform.
 
-## Current State
-- Legacy PHP/JS dashboard with siren, acks, outage simulation, TLS modal, Gotify alerts.
-- Docker Compose with Caddy + embedded Gotify.
-- Android: Kotlin scaffold with global diagnostic banner (codes/details/request IDs), new API client (mobile-config/devices/incidents), FCM push token capture, and legacy WebView fallback.
-- New lightweight Go API skeleton (`api/`) exposing `/mobile/config`, `/devices`, `/incidents`, `/push/register`, `/health` with Dockerfile and Compose wiring. Minimal SPA preview at `web/index.html` proxied via Caddy at `/spa/`.
-- CI: GitHub Actions builds Android (assembleDebug) and a Docker image. Healthchecks added for `uisp-noc`, `api`, and `caddy` in Compose.
- - Multi-arch intent: images must run on amd64/arm64 (Linux) and support x86_64/ARM hosts; clients must work on desktop browsers, Android, and iPad via SPA. Current API image tag `predheadtx/uisp-api:beta` fails on some hosts due to architecture mismatch—rebuild/push multi-arch images.
+Target product direction:
+- Users sign up at `nocwall.com`.
+- Each user gets a provisioned browser-based NOC workspace.
+- Telemetry is collected from:
+  - Vendor APIs (example: UISP API keys)
+  - Local network agents (Linux/SBC daemon)
+- The wallboard UI focuses on dense, glanceable, per-device status cards with alert-first behavior.
 
-## Roadmap
-See `docs/PROJECT_PLAN.md` for the consolidated plan (API/poller/alerting/notifications/SPA/Android/migration). `docs/wiki.md` links remaining component docs.
+This repository currently contains a local development stack and transitional code while we move from legacy UISP-NOC to NOCWALL.
 
-## Run (legacy + api preview)
+## What Works Today
+
+- Legacy dashboard (PHP + JS) with:
+  - live device cards
+  - flashing offline behavior
+  - siren audio alerts
+  - ack / clear ack
+  - outage simulation
+  - station ping history modal
+- New dashboard display controls:
+  - persistent card density (`Normal`, `Compact`)
+  - metric toggles (CPU, RAM, Temp, Latency, Uptime, Outage)
+  - local storage persistence per browser
+- Go API preview with in-memory/file-backed store:
+  - `GET /health`
+  - `POST /auth/login`
+  - `GET /mobile/config`
+  - `GET /devices`
+  - `GET /incidents`
+  - `POST /incidents/:id/ack`
+  - `GET /metrics/devices/:id`
+  - `POST /push/register`
+  - `GET /agents` (stub)
+  - `POST /agents/register` (stub)
+  - `POST /telemetry/ingest` (stub)
+  - `POST /events/ingest` (stub)
+- Docker Compose wiring with safe env placeholders (no hardcoded real keys).
+
+## What Is Stubbed / Not Fully Implemented
+
+- True hosted multi-tenant SaaS control plane.
+- Production auth/session model (JWT/refresh/RBAC/SSO).
+- Production persistence for API services (currently demo-level store).
+- Agent PKI/enrollment, secure long-lived channels, and fleet lifecycle management.
+- Correlation/dedup/suppression/escalation and enterprise routing.
+- Production mobile backend workflows and push delivery orchestration.
+
+## Quick Start (Local Dev)
+
+1. Copy environment defaults:
+
 ```bash
-docker compose up -d
+cp .env.example .env
 ```
-- Legacy UI: https://localhost (via Caddy)
-- API preview: http://localhost:8080 (proxied via Caddy `/api`)
-- Minimal SPA preview: http://localhost/spa/ (static demo hitting the API preview)
 
-> Portainer/stack note: `docker-compose.yml` references images `yourregistry/uisp-noc:latest` and `yourregistry/uisp-api:latest`. Build and push those images to your registry before deploying the stack (e.g., `./build-multiarch.sh --image yourregistry/uisp-noc:tag` for the app and `docker build -f api/Dockerfile -t yourregistry/uisp-api:tag .` for the API).
+2. Start stack:
 
-## Android Build
 ```bash
-cd android
-./gradlew assembleDebug
+docker-compose up -d
 ```
-- Uses default debug keystore fallback if none provided.
-- Diagnostic banner shows errors with request IDs; API data used when available.
 
-## Multi-arch Image
+3. Open:
+- Dashboard: `http://localhost` (or your Caddy endpoint)
+- API: `http://localhost:8080`
+
+## API Smoke Tests
+
+Health:
+
 ```bash
-./build-multiarch.sh --image youruser/uisp-noc:tag
+curl http://localhost:8080/health
+```
+
+Create a down event (incident should appear):
+
+```bash
+curl -X POST http://localhost:8080/events/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"type":"device_down","device_id":"demo-1","site":"lab","message":"demo down"}'
+```
+
+Create/refresh an agent (stub):
+
+```bash
+curl -X POST http://localhost:8080/agents/register \
+  -H "Content-Type: application/json" \
+  -d '{"id":"agent-lab-1","name":"Lab SBC","site_id":"lab","version":"0.1.0","capabilities":["discovery","snmp"]}'
+```
+
+Ingest telemetry (stub):
+
+```bash
+curl -X POST http://localhost:8080/telemetry/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"source":"agent","agent_id":"agent-lab-1","event_type":"device_up","device_id":"sw-lab-1","device":"Switch Lab 1","site_id":"lab","online":true,"latency_ms":2.1}'
+```
+
+List incidents:
+
+```bash
+curl http://localhost:8080/incidents
 ```
 
 ## Documentation
-- `docs/PROJECT_PLAN.md` — consolidated status/roadmap.
-- `docs/wiki.md` — quick index; phase docs are pointers.
-- `docs/CADDY.md`, `docs/DOCKERHUB.md`, `docs/GOTIFY.md`, `docs/inventory.md` — operations/components.
 
-## Testing
-- Android unit: `./gradlew test`
-- Android instrumented: `./gradlew connectedAndroidTest` (device/emulator required)
-- Legacy UI: manual verification.
+Documentation is consolidated around two primary files:
+- `README.md` (product state, runbook, test commands)
+- `BURNDOWN.md` (chronological multi-phase execution plan)
 
-## Next Steps
-- Rebuild/push multi-arch images for app/API to clear exec format errors on ARM hosts; then redeploy stack.
-- Flesh out API persistence (DB-backed auth, inventory/incidents/metrics/notifications) beyond the current in-memory demo.
-- Expand the React/Vite SPA to the full dashboard/incident UI consuming the new API.
-- Wire FCM `registerPush` to live backend and persist tokens for notifications.
-- Add backend tests and tighter CI checks.
+Legacy phase docs remain under `docs/` as historical planning references and should be treated as secondary.
+
+## Security / Publishing Guardrails
+
+- Do not commit real keys/tokens/customer details.
+- Keep `.env` private; commit `.env.example` only.
+- Treat advanced workflows (multi-tenant/RBAC/escalation/billing/mobile orchestration) as Pro/private until explicitly split.
+
+## Repo Status Notes
+
+- `assets/app.js` was restored from git history because it was missing in this checkout and is required by `index.php`.
+- This repo is in active migration from UISP-NOC naming/architecture to NOCWALL-CE and hosted-first operation.
