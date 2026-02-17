@@ -486,3 +486,70 @@ footer {
   .grid { gap: 24px; }
   .card { padding: 18px; }
 }
+
+.display-controls {
+  background: #1a1a1a;
+  border-top: 1px solid #2a2a2a;
+  border-bottom: 1px solid #2a2a2a;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.display-controls-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #aaa;
+}
+.display-controls-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.display-controls-row label,
+.display-controls-label {
+  font-size: 13px;
+  color: #ccc;
+}
+.display-controls select {
+  background: #242424;
+  color: #eee;
+  border: 1px solid #444;
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+.display-controls input[type="checkbox"] {
+  vertical-align: middle;
+}
+
+body.density-compact .grid {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+}
+body.density-compact .card {
+  padding: 8px;
+}
+body.density-compact .card h2 {
+  margin: 2px 0;
+  font-size: 16px;
+}
+body.density-compact .status {
+  margin-top: 2px;
+  font-size: 12px;
+}
+body.density-compact .badge {
+  margin: 1px 2px;
+  padding: 2px 4px;
+  font-size: 11px;
+}
+body.density-compact .actions {
+  gap: 4px;
+  margin-top: 6px;
+}
+body.density-compact .actions button {
+  margin: 1px;
+  padding: 4px 6px;
+  font-size: 11px;
+}

@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 session_start();
@@ -771,13 +771,13 @@ if(isset($_GET['view']) && $_GET['view']==='device'){
 <html>
 <head>
 <meta charset="utf-8">
-<title>UISP NOC</title>
+<title>NOCWALL-CE</title>
 <link rel="stylesheet" href="assets/style.css?v=<?=$ASSET_VERSION?>">
 </head>
 <body>
 <header>
   <div class="brand">
-    <span class="brand-title">UISP NOC</span>
+    <span class="brand-title">NOCWALL-CE</span>
     <span id="overallSummary"></span>
   </div>
   <div class="header-actions">
@@ -795,6 +795,26 @@ if(isset($_GET['view']) && $_GET['view']==='device'){
     <button class="tablink" onclick="openTab('aps', event)">APs</button>
     <button class="tablink" onclick="openTab('routers', event)">Routers & Switches</button>
 </div>
+<section class="display-controls" aria-label="Dashboard display controls">
+  <div class="display-controls-title">Display Controls</div>
+  <div class="display-controls-row">
+    <label for="settingDensity">Card Density</label>
+    <select id="settingDensity">
+      <option value="normal">Normal</option>
+      <option value="compact">Compact</option>
+    </select>
+    <button id="settingReset" type="button" class="btn-outline">Reset</button>
+  </div>
+  <div class="display-controls-row">
+    <span class="display-controls-label">Visible Metrics</span>
+    <label><input type="checkbox" id="settingMetricCpu" checked> CPU</label>
+    <label><input type="checkbox" id="settingMetricRam" checked> RAM</label>
+    <label><input type="checkbox" id="settingMetricTemp" checked> Temp</label>
+    <label><input type="checkbox" id="settingMetricLatency" checked> Latency</label>
+    <label><input type="checkbox" id="settingMetricUptime" checked> Uptime</label>
+    <label><input type="checkbox" id="settingMetricOutage" checked> Outage</label>
+  </div>
+</section>
 <div id="gateways" class="tabcontent" style="display:block"><div id="gateGrid" class="grid"></div></div>
 <div id="aps" class="tabcontent" style="display:none">
   <div class="grid-actions"></div>
@@ -844,3 +864,6 @@ if(isset($_GET['view']) && $_GET['view']==='device'){
 <script src="assets/app.js?v=<?=$ASSET_VERSION?>"></script>
 </body>
 </html>
+
+
+
