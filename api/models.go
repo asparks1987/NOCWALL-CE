@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import "time"
 
@@ -80,6 +80,41 @@ type TelemetryIngestResponse struct {
 	Device   Device    `json:"device"`
 	Incident *Incident `json:"incident,omitempty"`
 	Stub     bool      `json:"stub"`
+}
+
+type SourcePollRequest struct {
+	Cursor  string `json:"cursor,omitempty"`
+	Limit   int    `json:"limit,omitempty"`
+	Demo    bool   `json:"demo,omitempty"`
+	Retries int    `json:"retries,omitempty"`
+}
+
+type SourcePollResponse struct {
+	Source           string `json:"source"`
+	Cursor           string `json:"cursor"`
+	Fetched          int    `json:"fetched"`
+	Normalized       int    `json:"normalized"`
+	Emitted          int    `json:"emitted"`
+	Deduped          int    `json:"deduped"`
+	Ingested         int    `json:"ingested"`
+	IncidentsCreated int    `json:"incidents_created"`
+	Backfill         bool   `json:"backfill"`
+	Demo             bool   `json:"demo"`
+	DurationMs       int64  `json:"duration_ms"`
+	Stub             bool   `json:"stub"`
+	Error            string `json:"error,omitempty"`
+}
+
+type SourceStatus struct {
+	Source         string `json:"source"`
+	LastPollAt     string `json:"last_poll_at,omitempty"`
+	LastCursor     string `json:"last_cursor,omitempty"`
+	LastError      string `json:"last_error,omitempty"`
+	LastFetched    int    `json:"last_fetched"`
+	LastNormalized int    `json:"last_normalized"`
+	LastEmitted    int    `json:"last_emitted"`
+	Demo           bool   `json:"demo"`
+	Stub           bool   `json:"stub"`
 }
 
 type PushRegisterRequest struct {

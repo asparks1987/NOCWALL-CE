@@ -612,7 +612,7 @@ setInterval(tickLiveCounters, 1000);
 function changePassword(){
   const current = prompt('Enter current password');
   if(current===null) return;
-  const next = prompt('Enter new password (min 6 chars)');
+  const next = prompt('Enter new password (min 8 chars)');
   if(next===null) return;
   const fd = new FormData();
   fd.append('current', current);
@@ -622,6 +622,39 @@ function changePassword(){
     const j = await r.json().catch(()=>({ok:0,error:'bad_json'}));
     if(j.ok){ alert('Password updated. You will be logged out.'); logout(); }
     else { alert('Failed to update password: '+(j.error||'unknown')); }
+  }).catch(()=>{});
+}
+function manageUispToken(){
+  fetch('?ajax=token_status&t='+Date.now(), { cache:'no-store' }).then(async r=>{
+    if(r.status===401){ location.reload(); return null; }
+    return r.json().catch(()=>null);
+  }).then(status=>{
+    if(!status) return;
+    const source = status.source || 'none';
+    let sourceLabel = 'none';
+    if(source === 'account') sourceLabel = 'account';
+    if(source === 'server_default') sourceLabel = 'server default';
+    const promptMsg = [
+      'Paste UISP API token for this account.',
+      'Leave blank to clear the account token and fall back to server default.',
+      'Current token source: ' + sourceLabel
+    ].join('\n');
+    const token = prompt(promptMsg, '');
+    if(token===null) return;
+    const fd = new FormData();
+    fd.append('token', token.trim());
+    fetch('?ajax=save_uisp_token', { method:'POST', body: fd }).then(async rr=>{
+      if(rr.status===401){ location.reload(); return null; }
+      return rr.json().catch(()=>null);
+    }).then(j=>{
+      if(!j) return;
+      if(j.ok){
+        alert('UISP token updated.');
+        fetchDevices({ force:true, nextDelaySuccess:POLL_INTERVAL_FAST_MS });
+      } else {
+        alert('Failed to save token: ' + (j.error || 'unknown'));
+      }
+    }).catch(()=>{});
   }).catch(()=>{});
 }
 function logout(){

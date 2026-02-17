@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 session_start();
@@ -26,6 +26,7 @@ $CACHE_DIR  = __DIR__ . "/cache";
 $CACHE_FILE = $CACHE_DIR . "/status_cache.json";
 $DB_FILE    = $CACHE_DIR . "/metrics.sqlite";
 $AUTH_FILE  = $CACHE_DIR . "/auth.json";
+$USERS_FILE = $CACHE_DIR . "/users.json";
 
 $FIRST_OFFLINE_THRESHOLD = 30;
 $FLAP_ALERT_THRESHOLD = 3;
@@ -40,37 +41,140 @@ $LATENCY_ALERT_STREAK = 3;
 if (!is_dir($CACHE_DIR)) @mkdir($CACHE_DIR, 0775, true);
 if (!is_writable($CACHE_DIR)) @chmod($CACHE_DIR, 0775);
 
-// Simple Sign-On: bootstrap default admin/admin on first run
-function load_auth($file){
-    if(is_file($file)){
-        $j = json_decode(@file_get_contents($file), true);
-        if(is_array($j) && isset($j['username']) && isset($j['password_hash'])) return $j;
-    }
-    $default = [
+function read_json_file($file){
+    if(!is_file($file)) return null;
+    $raw = @file_get_contents($file);
+    if($raw === false || trim($raw) === '') return null;
+    $json = json_decode($raw, true);
+    return is_array($json) ? $json : null;
+}
+
+function write_json_file($file, $data){
+    $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+    if($json === false) return false;
+    return @file_put_contents($file, $json, LOCK_EX) !== false;
+}
+
+function normalize_username($value){
+    return strtolower(trim((string)$value));
+}
+
+function default_admin_user(){
+    $now = date('c');
+    return [
         'username' => 'admin',
         'password_hash' => password_hash('admin', PASSWORD_DEFAULT),
-        'updated_at' => date('c')
+        'uisp_token' => '',
+        'created_at' => $now,
+        'updated_at' => $now
     ];
-    @file_put_contents($file, json_encode($default));
-    return $default;
 }
-function save_auth($file, $username, $password){
-    $data = [
-        'username' => $username,
-        'password_hash' => password_hash($password, PASSWORD_DEFAULT),
-        'updated_at' => date('c')
-    ];
-    @file_put_contents($file, json_encode($data));
-    return $data;
-}
-$AUTH = load_auth($AUTH_FILE);
 
-// Handle login/logout actions early
+function bootstrap_users_store($usersFile, $legacyAuthFile){
+    $store = read_json_file($usersFile);
+    if(is_array($store) && isset($store['users']) && is_array($store['users']) && count($store['users']) > 0){
+        return $store;
+    }
+
+    $users = [];
+    $legacy = read_json_file($legacyAuthFile);
+    if(is_array($legacy) && !empty($legacy['username']) && !empty($legacy['password_hash'])){
+        $username = normalize_username($legacy['username']);
+        $now = date('c');
+        $users[$username] = [
+            'username' => $username,
+            'password_hash' => (string)$legacy['password_hash'],
+            'uisp_token' => '',
+            'created_at' => (string)($legacy['created_at'] ?? $legacy['updated_at'] ?? $now),
+            'updated_at' => (string)($legacy['updated_at'] ?? $now)
+        ];
+    } else {
+        $admin = default_admin_user();
+        $users[$admin['username']] = $admin;
+    }
+
+    $store = ['users' => $users, 'updated_at' => date('c')];
+    write_json_file($usersFile, $store);
+    return $store;
+}
+
+function save_users_store($usersFile, &$store){
+    $store['updated_at'] = date('c');
+    return write_json_file($usersFile, $store);
+}
+
+function get_user_by_username($store, $username){
+    $u = normalize_username($username);
+    if($u === '') return null;
+    if(!isset($store['users'][$u]) || !is_array($store['users'][$u])) return null;
+    return $store['users'][$u];
+}
+
+function validate_username($username){
+    return preg_match('/^[a-z0-9._-]{3,32}$/', $username) === 1;
+}
+
+function get_session_user($store){
+    $u = normalize_username($_SESSION['auth_user'] ?? '');
+    if($u === '') return null;
+    return get_user_by_username($store, $u);
+}
+
+function get_effective_uisp_token($user, $envToken){
+    $userToken = trim((string)($user['uisp_token'] ?? ''));
+    if($userToken !== '') return $userToken;
+    return trim((string)$envToken);
+}
+
+// Simple users store with legacy auth migration from auth.json.
+$USERS_STORE = bootstrap_users_store($USERS_FILE, $AUTH_FILE);
+
+// Handle login/register/logout actions early
+if(isset($_GET['action']) && $_GET['action']==='register' && $_SERVER['REQUEST_METHOD']==='POST'){
+    $u = normalize_username($_POST['username'] ?? '');
+    $p = (string)($_POST['password'] ?? '');
+    $p2 = (string)($_POST['password_confirm'] ?? '');
+    if(!validate_username($u)){
+        $_SESSION['auth_err'] = 'Username must be 3-32 chars: a-z, 0-9, dot, underscore, hyphen.';
+        header('Location: ./?login=1');
+        exit;
+    }
+    if($p !== $p2){
+        $_SESSION['auth_err'] = 'Password confirmation does not match.';
+        header('Location: ./?login=1');
+        exit;
+    }
+    if(strlen($p) < 8){
+        $_SESSION['auth_err'] = 'Password must be at least 8 characters.';
+        header('Location: ./?login=1');
+        exit;
+    }
+    if(get_user_by_username($USERS_STORE, $u)){
+        $_SESSION['auth_err'] = 'Username already exists.';
+        header('Location: ./?login=1');
+        exit;
+    }
+    $now = date('c');
+    $USERS_STORE['users'][$u] = [
+        'username' => $u,
+        'password_hash' => password_hash($p, PASSWORD_DEFAULT),
+        'uisp_token' => '',
+        'created_at' => $now,
+        'updated_at' => $now
+    ];
+    save_users_store($USERS_FILE, $USERS_STORE);
+    $_SESSION['auth_ok'] = 1;
+    $_SESSION['auth_user'] = $u;
+    header('Location: ./');
+    exit;
+}
 if(isset($_GET['action']) && $_GET['action']==='login' && $_SERVER['REQUEST_METHOD']==='POST'){
-    $u = trim($_POST['username'] ?? '');
-    $p = $_POST['password'] ?? '';
-    if($u === ($AUTH['username'] ?? '') && password_verify($p, $AUTH['password_hash'] ?? '')){
+    $u = normalize_username($_POST['username'] ?? '');
+    $p = (string)($_POST['password'] ?? '');
+    $user = get_user_by_username($USERS_STORE, $u);
+    if($user && password_verify($p, (string)($user['password_hash'] ?? ''))){
         $_SESSION['auth_ok'] = 1;
+        $_SESSION['auth_user'] = $u;
         header('Location: ./');
         exit;
     } else {
@@ -85,12 +189,29 @@ if(isset($_GET['action']) && $_GET['action']==='logout'){
     exit;
 }
 
+// Legacy session fallback for prior single-user auth.
+if(isset($_SESSION['auth_ok']) && empty($_SESSION['auth_user'])){
+    if(isset($USERS_STORE['users']['admin'])){
+        $_SESSION['auth_user'] = 'admin';
+    } else {
+        unset($_SESSION['auth_ok']);
+    }
+}
+
 // For AJAX endpoints, require login except for a health or login check
 function require_login_for_ajax(){
+    global $USERS_STORE;
     if(!isset($_SESSION['auth_ok'])){
         http_response_code(401);
         header('Content-Type: application/json');
         echo json_encode(['error'=>'unauthorized']);
+        exit;
+    }
+    $u = normalize_username($_SESSION['auth_user'] ?? '');
+    if($u === '' || !isset($USERS_STORE['users'][$u])){
+        http_response_code(401);
+        header('Content-Type: application/json');
+        echo json_encode(['error'=>'invalid_session']);
         exit;
     }
 }
@@ -225,6 +346,8 @@ function send_gotify($title,$message,$priority=5){
 // AJAX
 if(isset($_GET['ajax'])){
     require_login_for_ajax();
+    $currentUser = get_session_user($USERS_STORE);
+    $effectiveUispToken = get_effective_uisp_token($currentUser, $UISP_TOKEN);
     header("Content-Type: application/json");
     // Prevent caching of AJAX responses
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
@@ -232,29 +355,40 @@ if(isset($_GET['ajax'])){
 
     if($_GET['ajax']==='mobile_config'){
         $base = rtrim((string)$UISP_URL, '/');
-        if(!$UISP_TOKEN || $UISP_TOKEN === 'changeme'){
+        if(!$effectiveUispToken || $effectiveUispToken === 'changeme'){
             http_response_code(503);
             echo json_encode([
                 'error' => 'uisp_token_not_configured',
-                'message' => 'UISP token has not been configured on the server.'
+                'message' => 'UISP token has not been configured for this account.'
             ]);
             exit;
         }
         echo json_encode([
             'uisp_base_url' => $base,
-            'uisp_token' => $UISP_TOKEN,
+            'uisp_token' => $effectiveUispToken,
             'issued_at' => date('c')
         ]);
         exit;
     }
 
     if($_GET['ajax']==='devices'){
+        if(!$effectiveUispToken || $effectiveUispToken === 'changeme'){
+            http_response_code(503);
+            echo json_encode([
+                'devices' => [],
+                'http' => 503,
+                'api_latency' => 0,
+                'error' => 'uisp_token_not_configured',
+                'message' => 'Set your UISP API token from the dashboard header.'
+            ]);
+            exit;
+        }
         $ch=curl_init();
         $start=microtime(true);
         curl_setopt_array($ch,[
             CURLOPT_URL=>rtrim($UISP_URL,"/")."/nms/api/v2.1/devices",
             CURLOPT_RETURNTRANSFER=>true,
-            CURLOPT_HTTPHEADER=>["accept: application/json","x-auth-token: $UISP_TOKEN"],
+            CURLOPT_HTTPHEADER=>["accept: application/json","x-auth-token: $effectiveUispToken"],
             CURLOPT_TIMEOUT=>10
         ]);
         $resp=curl_exec($ch);
@@ -589,15 +723,64 @@ if(isset($_GET['ajax'])){
     if($_GET['ajax']==='changepw' && $_SERVER['REQUEST_METHOD']==='POST'){
         $cur = $_POST['current'] ?? '';
         $new = $_POST['new'] ?? '';
-        $user = $_POST['username'] ?? ($AUTH['username'] ?? 'admin');
-        if(!password_verify($cur, $AUTH['password_hash'] ?? '')){
+        $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
+        $user = get_user_by_username($USERS_STORE, $sessionUser);
+        if(!$user){
+            echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
+        }
+        if(!password_verify($cur, (string)($user['password_hash'] ?? ''))){
             echo json_encode(['ok'=>0,'error'=>'current_password_incorrect']); exit;
         }
-        if(strlen($new) < 6){
+        if(strlen($new) < 8){
             echo json_encode(['ok'=>0,'error'=>'new_password_too_short']); exit;
         }
-        $AUTH = save_auth($AUTH_FILE, $user, $new);
+        $USERS_STORE['users'][$sessionUser]['password_hash'] = password_hash($new, PASSWORD_DEFAULT);
+        $USERS_STORE['users'][$sessionUser]['updated_at'] = date('c');
+        save_users_store($USERS_FILE, $USERS_STORE);
         echo json_encode(['ok'=>1]); exit;
+    }
+
+    if($_GET['ajax']==='token_status'){
+        $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
+        $user = get_user_by_username($USERS_STORE, $sessionUser);
+        $userToken = trim((string)($user['uisp_token'] ?? ''));
+        $envToken = trim((string)$UISP_TOKEN);
+        $source = 'none';
+        if($userToken !== ''){
+            $source = 'account';
+        } elseif($envToken !== '' && $envToken !== 'changeme'){
+            $source = 'server_default';
+        }
+        echo json_encode([
+            'ok' => 1,
+            'has_token' => ($source !== 'none'),
+            'source' => $source,
+            'username' => $sessionUser
+        ]);
+        exit;
+    }
+
+    if($_GET['ajax']==='save_uisp_token' && $_SERVER['REQUEST_METHOD']==='POST'){
+        $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
+        $user = get_user_by_username($USERS_STORE, $sessionUser);
+        if(!$user){
+            echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
+        }
+        $token = trim((string)($_POST['token'] ?? ''));
+        if($token !== '' && strlen($token) < 12){
+            echo json_encode(['ok'=>0,'error'=>'token_too_short']); exit;
+        }
+        $USERS_STORE['users'][$sessionUser]['uisp_token'] = $token;
+        $USERS_STORE['users'][$sessionUser]['updated_at'] = date('c');
+        save_users_store($USERS_FILE, $USERS_STORE);
+        $envToken = trim((string)$UISP_TOKEN);
+        $fallbackSource = ($envToken !== '' && $envToken !== 'changeme') ? 'server_default' : 'none';
+        echo json_encode([
+            'ok'=>1,
+            'has_token'=>($token !== '' || $fallbackSource !== 'none'),
+            'source'=>($token !== '' ? 'account' : $fallbackSource)
+        ]);
+        exit;
     }
 
     if($_GET['ajax']==='ack' && !empty($_GET['id']) && !empty($_GET['dur'])){
@@ -644,7 +827,7 @@ if(!isset($_GET['ajax'])){
 }
 
 if(isset($_GET['view']) && $_GET['view']==='device'){
-    if(!isset($_SESSION['auth_ok'])){
+    if(!isset($_SESSION['auth_ok']) || empty($_SESSION['auth_user'])){
         header('Location: ./?login=1');
         exit;
     }
@@ -731,15 +914,16 @@ if(isset($_GET['view']) && $_GET['view']==='device'){
     exit;
 }
 ?>
-<?php if(!isset($_SESSION['auth_ok'])): ?>
+<?php if(!isset($_SESSION['auth_ok']) || empty($_SESSION['auth_user'])): ?>
 <!doctype html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>UISP NOC - Login</title>
+  <title>NOCWALL-CE - Login</title>
   <style>
     body{font-family:system-ui,Segoe UI,Arial,sans-serif;background:#111;color:#eee;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
-    .login{background:#1b1b1b;padding:24px;border-radius:8px;box-shadow:0 0 0 1px #333;width:320px}
+    .wrap{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;width:min(760px,92vw)}
+    .login{background:#1b1b1b;padding:24px;border-radius:8px;box-shadow:0 0 0 1px #333;width:100%}
     .login h2{margin:0 0 12px 0;font-weight:600}
     .field{margin:10px 0}
     .field label{display:block;margin-bottom:6px;color:#ccc;font-size:12px}
@@ -750,20 +934,40 @@ if(isset($_GET['view']) && $_GET['view']==='device'){
   </style>
 </head>
 <body>
-  <form class="login" method="post" action="?action=login">
-    <h2>Sign in</h2>
-    <?php if(!empty($_SESSION['auth_err'])){ echo '<div class="err">'.htmlspecialchars($_SESSION['auth_err']).'</div>'; unset($_SESSION['auth_err']); } ?>
-    <div class="field">
-      <label>Username</label>
-      <input type="text" name="username" value="admin" autocomplete="username" required>
-    </div>
-    <div class="field">
-      <label>Password</label>
-      <input type="password" name="password" autocomplete="current-password" required>
-    </div>
-    <button class="btn" type="submit">Login</button>
-    <div class="hint">Default: admin / admin. You can change it after login.</div>
-  </form>
+  <div class="wrap">
+    <form class="login" method="post" action="?action=login">
+      <h2>Sign in</h2>
+      <?php if(!empty($_SESSION['auth_err'])){ echo '<div class="err">'.htmlspecialchars($_SESSION['auth_err']).'</div>'; unset($_SESSION['auth_err']); } ?>
+      <div class="field">
+        <label>Username</label>
+        <input type="text" name="username" value="admin" autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" name="password" autocomplete="current-password" required>
+      </div>
+      <button class="btn" type="submit">Login</button>
+      <div class="hint">Default bootstrap account is admin/admin until changed.</div>
+    </form>
+
+    <form class="login" method="post" action="?action=register">
+      <h2>Create account</h2>
+      <div class="field">
+        <label>Username</label>
+        <input type="text" name="username" pattern="[a-z0-9._-]{3,32}" autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" name="password" minlength="8" autocomplete="new-password" required>
+      </div>
+      <div class="field">
+        <label>Confirm password</label>
+        <input type="password" name="password_confirm" minlength="8" autocomplete="new-password" required>
+      </div>
+      <button class="btn" type="submit">Create account</button>
+      <div class="hint">After signup, import your UISP API token from the dashboard header.</div>
+    </form>
+  </div>
 </body>
 </html>
 <?php exit; endif; ?>
@@ -776,14 +980,17 @@ if(isset($_GET['view']) && $_GET['view']==='device'){
 </head>
 <body>
 <header>
+  <?php $AUTH_USER = htmlspecialchars((string)($_SESSION['auth_user'] ?? ''), ENT_QUOTES); ?>
   <div class="brand">
     <span class="brand-title">NOCWALL-CE</span>
     <span id="overallSummary"></span>
   </div>
   <div class="header-actions">
+    <span class="header-user">User: <?=$AUTH_USER?></span>
     <?php if($SHOW_TLS_UI): ?>
       <button onclick="openTLS()">TLS/Certs</button>
     <?php endif; ?>
+    <button onclick="manageUispToken()">UISP Token</button>
     <button id="enableSoundBtn" class="btn-accent" onclick="enableSound()">Enable Sound</button>
     <button onclick="clearAll()">Clear All Acks</button>
     <button onclick="changePassword()">Change Password</button>

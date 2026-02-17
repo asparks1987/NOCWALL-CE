@@ -1,25 +1,20 @@
-# API builder image
-# syntax=docker/dockerfile:1.4
+﻿# API builder image (BuildKit-independent)
 FROM golang:1.21-alpine AS api-builder
 WORKDIR /src
 ENV GOSUMDB=off
-COPY api/go.mod ./
+
+COPY api/go.mod api/go.sum ./
+RUN go mod download
+
 COPY api/ ./
-# Cache modules and build cache to speed up multi-arch builds
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    go mod download && go mod tidy
 ARG TARGETOS
 ARG TARGETARCH
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -o /out/api .
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -o /out/api .
 
 # SPA preview image
 FROM node:20-alpine AS spa-builder
 WORKDIR /app
 COPY web/ ./
-# No build step; static assets only
 
 # Final image
 FROM alpine:3.19

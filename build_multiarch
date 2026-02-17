@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Canonical multi-arch build + push entrypoint.
+# Delegates to scripts/publish-local-registry.sh so the standard command is:
+#   ./build_multiarch
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "${ROOT_DIR}/scripts/publish-local-registry.sh" "$@"

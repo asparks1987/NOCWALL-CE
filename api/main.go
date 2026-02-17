@@ -1,9 +1,11 @@
-﻿package main
+package main
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +19,18 @@ func main() {
 	dataFile := getenv("DATA_FILE", "")
 	store := LoadStore(dataFile)
 	apiToken := getenv("API_TOKEN", "")
+
+	uispConnector := NewUISPConnector(
+		getenv("UISP_URL", ""),
+		getenv("UISP_TOKEN", ""),
+		getenv("UISP_DEVICES_PATH", "/nms/api/v2.1/devices"),
+	)
+
+	pollSec := getenvInt("UISP_POLL_INTERVAL_SEC", 0)
+	pollRetries := getenvInt("UISP_POLL_RETRIES", 1)
+	if pollSec > 0 {
+		go runSourcePoller(context.Background(), uispConnector, store, logger, time.Duration(pollSec)*time.Second, pollRetries)
+	}
 
 	app := fiber.New()
 
@@ -56,15 +70,18 @@ func main() {
 			UispBaseURL: uispBase,
 			APIBaseURL:  apiBase,
 			FeatureFlags: map[string]bool{
-				"native_api":      true,
-				"agent_ingest":    true,
-				"events_ingest":   true,
-				"cloud_multi_tenant_stub": true,
+				"native_api":                 true,
+				"agent_ingest":               true,
+				"events_ingest":              true,
+				"source_uisp_poll":           true,
+				"source_poll_background":     pollSec > 0,
+				"cloud_multi_tenant_stub":    true,
+				"connector_multivendor_stub": true,
 			},
 			PushRegister: apiBase + "/push/register",
 			Environment:  getenv("APP_ENV", "dev"),
-			Version:      "0.2.0",
-			Banner:       "NOCWALL-CE API (stubbed SaaS ingestion)",
+			Version:      "0.3.0",
+			Banner:       "NOCWALL-CE API (UISP source poller stub)",
 		}
 		return c.JSON(resp)
 	})
@@ -101,6 +118,41 @@ func main() {
 			{"timestamp": time.Now().Unix(), "latency": 8, "cpu": 22, "ram": 31, "online": true},
 		}
 		return c.JSON(fiber.Map{"device_id": id, "points": points})
+	})
+
+	app.Get("/sources/uisp/status", authMiddleware, func(c *fiber.Ctx) error {
+		status := uispConnector.Status()
+		return c.JSON(status)
+	})
+
+	app.Post("/sources/uisp/poll", authMiddleware, func(c *fiber.Ctx) error {
+		var req SourcePollRequest
+		if len(c.Body()) > 0 {
+			if err := c.BodyParser(&req); err != nil {
+				return c.Status(http.StatusBadRequest).JSON(fiber.Map{"code": "invalid_body", "message": "Invalid request body"})
+			}
+		}
+
+		batch, err := uispConnector.Poll(c.Context(), req)
+		if err != nil {
+			resp := batch.Response
+			resp.Stub = true
+			return c.Status(http.StatusBadGateway).JSON(resp)
+		}
+		ingested, incidents := ingestSourceEvents(store, batch.Events)
+		batch.Response.Ingested = ingested
+		batch.Response.IncidentsCreated = incidents
+		batch.Response.Stub = true
+		logger.Info("source_poll_manual",
+			"source", "uisp",
+			"fetched", batch.Response.Fetched,
+			"normalized", batch.Response.Normalized,
+			"emitted", batch.Response.Emitted,
+			"ingested", ingested,
+			"incidents", incidents,
+			"demo", batch.Response.Demo,
+		)
+		return c.JSON(batch.Response)
 	})
 
 	app.Get("/agents", authMiddleware, func(c *fiber.Ctx) error {
@@ -176,7 +228,7 @@ func main() {
 	})
 
 	addr := getenv("API_ADDR", ":8080")
-	logger.Info("api_listening", "addr", addr, "data_file", dataFile)
+	logger.Info("api_listening", "addr", addr, "data_file", dataFile, "uisp_poll_interval_sec", pollSec)
 	if err := app.Listen(addr); err != nil {
 		logger.Error("api_start_failed", "error", err)
 		os.Exit(1)
@@ -195,6 +247,18 @@ func getenv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func getenvInt(key string, def int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	parsed, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return parsed
 }
 
 func randomID() string {
