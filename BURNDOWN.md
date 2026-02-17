@@ -12,22 +12,24 @@ Legend:
 ### Epic 1 - Identity, Positioning, and CE Scope Freeze
 - [x] Rename UI surface to NOCWALL-CE in active dashboard.
 - [x] Align README to hosted-first product direction (`nocwall.com` provisioning model).
+- [x] [STUB] Add local CE account creation + login flow (JSON-backed users store for demo use).
+- [x] [STUB] Add account-scoped UISP token import path in dashboard header.
 - [ ] Finalize CE vs Pro written contract for each module (API, UI, agent, mobile, notifications).
 - [ ] Lock namespace/package naming (`nocwall_ce`, `nocwall_pro`, agent IDs, telemetry schema).
 
 ### Epic 2 - Secret Hygiene and Publish Safety
 - [x] Remove hardcoded secrets from `docker-compose.yml`.
 - [x] Add `.env.example` safe defaults.
-- [ ] Add automated secret scanning in CI (trufflehog/gitleaks).
-- [ ] Add CE release gate script for blocked terms (`billing`, `license`, `rbac`, `sso`, etc.).
+- [x] Add automated secret scanning in CI (gitleaks action + CE guardrails workflow).
+- [x] Add CE release gate script for blocked terms (`billing`, `license`, `rbac`, `sso`, etc.).
 
 ## Phase 2 - Telemetry Ingestion and Device Truth
 
 ### Epic 3 - Vendor API Ingestion (UISP-first)
-- [ ] Build UISP connector worker with polling cadence and retry policy.
-- [ ] Normalize vendor payloads into canonical `device/site/link/event` models.
-- [ ] Add backfill cursoring and idempotent ingestion.
-- [ ] [STUB] Multi-vendor connector abstraction scaffold.
+- [x] [STUB] Build UISP connector worker with polling cadence and retry policy.
+- [x] [STUB] Normalize vendor payloads into canonical `device/site/link/event` models (device/event subset in CE).
+- [x] [STUB] Add backfill cursoring and idempotent ingestion (cursor + dedupe window).
+- [x] [STUB] Multi-vendor connector abstraction scaffold.
 
 ### Epic 4 - Agent Framework and Secure Enrollment
 - [x] [STUB] Add API stubs for `/agents/register` and `/telemetry/ingest`.
@@ -78,7 +80,15 @@ Legend:
 - [ ] Launch readiness checklist: legal/billing/support/onboarding docs.
 
 ## Current Pass Notes
+- [x] Added `/sources/uisp/poll` + `/sources/uisp/status` and optional background UISP polling cadence.
+- [x] Local `docker-compose` now builds API and web images from source by default.
 - [x] Dashboard display controls implemented with browser persistence.
 - [x] Agent + telemetry ingest API stubs implemented.
 - [x] Compose secrets replaced with placeholders.
-- [ ] Validate full run in environment with Go + PHP toolchains installed.
+- [x] Validate core run/build paths via Dockerized Go/PHP checks and API smoke tests.
+- [x] Verified `docker-compose build api uisp-noc` and `docker-compose up` smoke path (health + event ingest + web 200).
+- [x] Manual UISP poll smoke tested via Docker (/sources/uisp/poll, /sources/uisp/status).
+- [x] Implemented `index.php` multi-user auth migration (`cache/users.json`) with legacy `cache/auth.json` fallback.
+- [x] Added Create Account UI + login session user context.
+- [x] Added per-account UISP token save/status endpoints and dashboard action (`UISP Token` button).
+

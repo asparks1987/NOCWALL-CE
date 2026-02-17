@@ -15,12 +15,14 @@ This repository currently contains a local development stack and transitional co
 ## What Works Today
 
 - Legacy dashboard (PHP + JS) with:
+  - account creation + login (demo/local JSON-backed user store)
   - live device cards
   - flashing offline behavior
   - siren audio alerts
   - ack / clear ack
   - outage simulation
   - station ping history modal
+  - per-account UISP token import from dashboard header (`UISP Token` button)
 - New dashboard display controls:
   - persistent card density (`Normal`, `Compact`)
   - metric toggles (CPU, RAM, Temp, Latency, Uptime, Outage)
@@ -38,7 +40,10 @@ This repository currently contains a local development stack and transitional co
   - `POST /agents/register` (stub)
   - `POST /telemetry/ingest` (stub)
   - `POST /events/ingest` (stub)
-- Docker Compose wiring with safe env placeholders (no hardcoded real keys).
+  - `POST /sources/uisp/poll` (stub)
+  - `GET /sources/uisp/status` (stub)
+- Docker Compose builds API and web locally from source by default (no private image dependency).
+- Docker Compose wiring uses safe env placeholders (no hardcoded real keys).
 
 ## What Is Stubbed / Not Fully Implemented
 
@@ -60,12 +65,70 @@ cp .env.example .env
 2. Start stack:
 
 ```bash
-docker-compose up -d
+docker-compose up -d --build
 ```
 
-3. Open:
+One-command multi-arch publish to local registry (`172.16.120.5:5000` default):
+
+```bash
+./build_multiarch
+```
+
+PowerShell equivalent:
+
+```powershell
+./build_multiarch.cmd
+```
+
+Custom registry/tag example:
+
+```powershell
+./build_multiarch.cmd -Registry 172.16.120.5:5000 -Namespace nocwall -Tag v0.1.0
+```
+
+3. Open the dashboard:
+- `http://localhost`
+- Create an account from the login screen (or sign in with bootstrap `admin` / `admin`).
+- After login, click `UISP Token` in the header and paste a UISP API token.
+
+
+Optional UISP source polling env vars:
+- `UISP_URL` and `UISP_TOKEN`
+- `UISP_DEVICES_PATH` (default `/nms/api/v2.1/devices`)
+- `UISP_POLL_INTERVAL_SEC` (0 disables background polling)
+- `UISP_POLL_RETRIES` (default `1`)
+4. Open:
 - Dashboard: `http://localhost` (or your Caddy endpoint)
 - API: `http://localhost:8080`
+
+## Account + UISP Token Flow (curl)
+
+Register:
+
+```bash
+curl -i -c cookies.txt -b cookies.txt -X POST "http://localhost/?action=register" \
+  -d "username=tester1234&password=Password123&password_confirm=Password123"
+```
+
+Login:
+
+```bash
+curl -i -c cookies.txt -b cookies.txt -X POST "http://localhost/?action=login" \
+  -d "username=tester1234&password=Password123"
+```
+
+Save account token:
+
+```bash
+curl -c cookies.txt -b cookies.txt -X POST "http://localhost/?ajax=save_uisp_token" \
+  -d "token=demo_token_1234567890"
+```
+
+Verify token status:
+
+```bash
+curl -c cookies.txt -b cookies.txt "http://localhost/?ajax=token_status"
+```
 
 ## API Smoke Tests
 
@@ -99,6 +162,17 @@ curl -X POST http://localhost:8080/telemetry/ingest \
   -d '{"source":"agent","agent_id":"agent-lab-1","event_type":"device_up","device_id":"sw-lab-1","device":"Switch Lab 1","site_id":"lab","online":true,"latency_ms":2.1}'
 ```
 
+
+Run manual UISP poll (demo mode if no valid UISP creds):
+
+```bash
+curl -X POST http://localhost:8080/sources/uisp/poll -H "Content-Type: application/json" -d '{"demo":true,"limit":50}'
+```
+Guardrail scan before publishing CE:
+
+```bash
+bash scripts/ce-release-gate.sh
+```
 List incidents:
 
 ```bash
@@ -123,3 +197,8 @@ Legacy phase docs remain under `docs/` as historical planning references and sho
 
 - `assets/app.js` was restored from git history because it was missing in this checkout and is required by `index.php`.
 - This repo is in active migration from UISP-NOC naming/architecture to NOCWALL-CE and hosted-first operation.
+
+
+
+
+

@@ -1,6 +1,9 @@
-﻿services:
+services:
   uisp-noc:
-    image: predheadtx/uisp-noc:beta
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${NOC_WEB_IMAGE:-nocwall-ce-web:local}
     container_name: uisp-noc
     environment:
       UISP_URL: ${UISP_URL:-https://example.unmsapp.com}
@@ -13,7 +16,10 @@
     restart: unless-stopped
 
   api:
-    image: predheadtx/uisp-api:beta
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    image: ${NOC_API_IMAGE:-nocwall-ce-api:local}
     container_name: uisp-api
     environment:
       API_ADDR: :8080
@@ -22,6 +28,11 @@
       APP_ENV: ${APP_ENV:-dev}
       API_TOKEN: ${API_TOKEN:-}
       DATA_FILE: /data/store.json
+      UISP_URL: ${UISP_URL:-}
+      UISP_TOKEN: ${UISP_TOKEN:-}
+      UISP_DEVICES_PATH: ${UISP_DEVICES_PATH:-/nms/api/v2.1/devices}
+      UISP_POLL_INTERVAL_SEC: ${UISP_POLL_INTERVAL_SEC:-0}
+      UISP_POLL_RETRIES: ${UISP_POLL_RETRIES:-1}
     ports:
       - "8080:8080"
     volumes:
@@ -63,7 +74,8 @@ configs:
       }
 
       :80 {
-          @api path /api/* /mobile/config /devices /incidents /push/register /health /agents /agents/register /telemetry/ingest /events/ingest
+          @api path /api/* /auth/login /mobile/config /devices /incidents /push/register /health /agents /agents/register /telemetry/ingest /events/ingest /sources/uisp/poll /sources/uisp/status
           reverse_proxy @api api:8080
           reverse_proxy uisp-noc:80
       }
+

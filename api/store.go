@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"encoding/json"
@@ -273,5 +273,3 @@ func (s *Store) ValidateUser(username, password string) bool {
 	}
 	return false
 }
-
-
