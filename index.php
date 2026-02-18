@@ -59,20 +59,152 @@ function normalize_username($value){
     return strtolower(trim((string)$value));
 }
 
+function normalize_uisp_url($value){
+    $url = trim((string)$value);
+    if($url === '') return '';
+    if(!preg_match('#^https?://#i', $url)){
+        $url = 'https://' . $url;
+    }
+    return rtrim($url, '/');
+}
+
+function is_placeholder_uisp_url($url){
+    $u = strtolower(trim((string)$url));
+    if($u === '') return true;
+    if(strpos($u, 'changeme') !== false) return true;
+    if(strpos($u, 'example.unmsapp.com') !== false) return true;
+    return false;
+}
+
+function generate_source_id(){
+    try {
+        return 'src_' . bin2hex(random_bytes(6));
+    } catch (Exception $e) {
+        return 'src_' . str_replace('.', '', uniqid('', true));
+    }
+}
+
+function normalize_user_source($src, $fallbackName = 'UISP Source'){
+    if(!is_array($src)) return null;
+    $id = trim((string)($src['id'] ?? ''));
+    if($id === '') $id = generate_source_id();
+    $name = trim((string)($src['name'] ?? ''));
+    if($name === '') $name = $fallbackName;
+    $url = normalize_uisp_url($src['url'] ?? '');
+    $token = trim((string)($src['token'] ?? ''));
+    if($url === '' || $token === '') return null;
+    $enabledRaw = $src['enabled'] ?? true;
+    $enabled = !($enabledRaw === false || $enabledRaw === 0 || $enabledRaw === '0' || strtolower((string)$enabledRaw) === 'false');
+    return [
+        'id' => $id,
+        'name' => $name,
+        'url' => $url,
+        'token' => $token,
+        'enabled' => $enabled,
+        'created_at' => (string)($src['created_at'] ?? date('c')),
+        'updated_at' => (string)($src['updated_at'] ?? date('c'))
+    ];
+}
+
+function get_stored_user_sources($user){
+    $out = [];
+    if(!is_array($user)) return $out;
+    $sources = $user['sources'] ?? [];
+    if(!is_array($sources)) return $out;
+    foreach($sources as $src){
+        $normalized = normalize_user_source($src);
+        if($normalized) $out[] = $normalized;
+    }
+    return $out;
+}
+
+function get_effective_uisp_sources($user, $envUrl, $envToken){
+    $sources = [];
+    foreach(get_stored_user_sources($user) as $src){
+        if(!empty($src['enabled'])) $sources[] = $src;
+    }
+
+    if(count($sources) > 0) return $sources;
+
+    // Legacy compatibility fallback: account token + server UISP URL.
+    $legacyToken = trim((string)($user['uisp_token'] ?? ''));
+    $base = normalize_uisp_url($envUrl);
+    if($legacyToken !== '' && $legacyToken !== 'changeme' && $base !== '' && !is_placeholder_uisp_url($base)){
+        $sources[] = [
+            'id' => 'legacy-account',
+            'name' => 'Legacy Account UISP',
+            'url' => $base,
+            'token' => $legacyToken,
+            'enabled' => true
+        ];
+    }
+    if(count($sources) > 0) return $sources;
+
+    // Server-wide fallback.
+    $token = trim((string)$envToken);
+    if($token !== '' && $token !== 'changeme' && $base !== '' && !is_placeholder_uisp_url($base)){
+        $sources[] = [
+            'id' => 'server-default',
+            'name' => 'Server Default UISP',
+            'url' => $base,
+            'token' => $token,
+            'enabled' => true
+        ];
+    }
+    return $sources;
+}
+
 function default_admin_user(){
     $now = date('c');
     return [
         'username' => 'admin',
         'password_hash' => password_hash('admin', PASSWORD_DEFAULT),
         'uisp_token' => '',
+        'sources' => [],
         'created_at' => $now,
         'updated_at' => $now
     ];
 }
 
-function bootstrap_users_store($usersFile, $legacyAuthFile){
+function bootstrap_users_store($usersFile, $legacyAuthFile, $envUrl, $envToken){
     $store = read_json_file($usersFile);
+    $didMutate = false;
+
     if(is_array($store) && isset($store['users']) && is_array($store['users']) && count($store['users']) > 0){
+        foreach($store['users'] as $uname => $user){
+            if(!is_array($user)) continue;
+            if(!isset($store['users'][$uname]['sources']) || !is_array($store['users'][$uname]['sources'])){
+                $store['users'][$uname]['sources'] = [];
+                $didMutate = true;
+            }
+            // One-time migration path: legacy single token -> first source using server UISP URL.
+            $legacyToken = trim((string)($store['users'][$uname]['uisp_token'] ?? ''));
+            if($legacyToken !== '' && count(get_stored_user_sources($store['users'][$uname])) === 0){
+                $base = normalize_uisp_url($envUrl);
+                if($base !== '' && !is_placeholder_uisp_url($base)){
+                    $store['users'][$uname]['sources'][] = [
+                        'id' => generate_source_id(),
+                        'name' => 'Primary UISP',
+                        'url' => $base,
+                        'token' => $legacyToken,
+                        'enabled' => true,
+                        'created_at' => date('c'),
+                        'updated_at' => date('c')
+                    ];
+                    $didMutate = true;
+                }
+            }
+            // Normalize source rows.
+            $normalizedSources = get_stored_user_sources($store['users'][$uname]);
+            if(json_encode($normalizedSources) !== json_encode($store['users'][$uname]['sources'])){
+                $store['users'][$uname]['sources'] = $normalizedSources;
+                $didMutate = true;
+            }
+        }
+        if($didMutate){
+            $store['updated_at'] = date('c');
+            write_json_file($usersFile, $store);
+        }
         return $store;
     }
 
@@ -81,10 +213,24 @@ function bootstrap_users_store($usersFile, $legacyAuthFile){
     if(is_array($legacy) && !empty($legacy['username']) && !empty($legacy['password_hash'])){
         $username = normalize_username($legacy['username']);
         $now = date('c');
+        $migratedSources = [];
+        $legacyBase = normalize_uisp_url($envUrl);
+        if($legacyBase !== '' && !is_placeholder_uisp_url($legacyBase) && trim((string)$envToken) !== '' && trim((string)$envToken) !== 'changeme'){
+            $migratedSources[] = [
+                'id' => generate_source_id(),
+                'name' => 'Primary UISP',
+                'url' => $legacyBase,
+                'token' => trim((string)$envToken),
+                'enabled' => true,
+                'created_at' => $now,
+                'updated_at' => $now
+            ];
+        }
         $users[$username] = [
             'username' => $username,
             'password_hash' => (string)$legacy['password_hash'],
             'uisp_token' => '',
+            'sources' => $migratedSources,
             'created_at' => (string)($legacy['created_at'] ?? $legacy['updated_at'] ?? $now),
             'updated_at' => (string)($legacy['updated_at'] ?? $now)
         ];
@@ -120,14 +266,8 @@ function get_session_user($store){
     return get_user_by_username($store, $u);
 }
 
-function get_effective_uisp_token($user, $envToken){
-    $userToken = trim((string)($user['uisp_token'] ?? ''));
-    if($userToken !== '') return $userToken;
-    return trim((string)$envToken);
-}
-
 // Simple users store with legacy auth migration from auth.json.
-$USERS_STORE = bootstrap_users_store($USERS_FILE, $AUTH_FILE);
+$USERS_STORE = bootstrap_users_store($USERS_FILE, $AUTH_FILE, $UISP_URL, $UISP_TOKEN);
 
 // Handle login/register/logout actions early
 if(isset($_GET['action']) && $_GET['action']==='register' && $_SERVER['REQUEST_METHOD']==='POST'){
@@ -159,6 +299,7 @@ if(isset($_GET['action']) && $_GET['action']==='register' && $_SERVER['REQUEST_M
         'username' => $u,
         'password_hash' => password_hash($p, PASSWORD_DEFAULT),
         'uisp_token' => '',
+        'sources' => [],
         'created_at' => $now,
         'updated_at' => $now
     ];
@@ -347,55 +488,87 @@ function send_gotify($title,$message,$priority=5){
 if(isset($_GET['ajax'])){
     require_login_for_ajax();
     $currentUser = get_session_user($USERS_STORE);
-    $effectiveUispToken = get_effective_uisp_token($currentUser, $UISP_TOKEN);
+    $effectiveSources = get_effective_uisp_sources($currentUser, $UISP_URL, $UISP_TOKEN);
     header("Content-Type: application/json");
     // Prevent caching of AJAX responses
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
     header('Pragma: no-cache');
 
     if($_GET['ajax']==='mobile_config'){
-        $base = rtrim((string)$UISP_URL, '/');
-        if(!$effectiveUispToken || $effectiveUispToken === 'changeme'){
+        if(count($effectiveSources) === 0){
             http_response_code(503);
             echo json_encode([
-                'error' => 'uisp_token_not_configured',
-                'message' => 'UISP token has not been configured for this account.'
+                'error' => 'uisp_sources_not_configured',
+                'message' => 'No UISP source has been configured for this account.'
             ]);
             exit;
         }
+        $primary = $effectiveSources[0];
         echo json_encode([
-            'uisp_base_url' => $base,
-            'uisp_token' => $effectiveUispToken,
+            'uisp_base_url' => $primary['url'],
+            'uisp_token' => $primary['token'],
+            'sources' => $effectiveSources,
             'issued_at' => date('c')
         ]);
         exit;
     }
 
     if($_GET['ajax']==='devices'){
-        if(!$effectiveUispToken || $effectiveUispToken === 'changeme'){
+        if(count($effectiveSources) === 0){
             http_response_code(503);
             echo json_encode([
                 'devices' => [],
                 'http' => 503,
                 'api_latency' => 0,
-                'error' => 'uisp_token_not_configured',
-                'message' => 'Set your UISP API token from the dashboard header.'
+                'error' => 'uisp_sources_not_configured',
+                'message' => 'Add one or more UISP sources in Account Settings.'
             ]);
             exit;
         }
-        $ch=curl_init();
-        $start=microtime(true);
-        curl_setopt_array($ch,[
-            CURLOPT_URL=>rtrim($UISP_URL,"/")."/nms/api/v2.1/devices",
-            CURLOPT_RETURNTRANSFER=>true,
-            CURLOPT_HTTPHEADER=>["accept: application/json","x-auth-token: $effectiveUispToken"],
-            CURLOPT_TIMEOUT=>10
-        ]);
-        $resp=curl_exec($ch);
-        $api_latency=round((microtime(true)-$start)*1000);
-        $http_code=curl_getinfo($ch,CURLINFO_HTTP_CODE);
-        curl_close($ch);
-        $devices=json_decode($resp,true)?:[];
+        $deviceMap = [];
+        $api_latency_sum = 0;
+        $http_codes = [];
+        $ok_sources = 0;
+        foreach($effectiveSources as $src){
+            $ch = curl_init();
+            $start = microtime(true);
+            curl_setopt_array($ch,[
+                CURLOPT_URL=>rtrim((string)$src['url'],"/")."/nms/api/v2.1/devices",
+                CURLOPT_RETURNTRANSFER=>true,
+                CURLOPT_HTTPHEADER=>["accept: application/json","x-auth-token: ".$src['token']],
+                CURLOPT_TIMEOUT=>10
+            ]);
+            $resp = curl_exec($ch);
+            $lat = round((microtime(true)-$start)*1000);
+            $api_latency_sum += $lat;
+            $code = (int)curl_getinfo($ch,CURLINFO_HTTP_CODE);
+            $http_codes[] = $code;
+            curl_close($ch);
+
+            $rows = json_decode((string)$resp, true);
+            if(!is_array($rows)) continue;
+            if($code >= 200 && $code < 300) $ok_sources++;
+
+            foreach($rows as $d){
+                if(!is_array($d)) continue;
+                $id = device_key($d);
+                $d['_source_id'] = $src['id'];
+                $d['_source_name'] = $src['name'];
+                $existing = $deviceMap[$id] ?? null;
+                if($existing === null){
+                    $deviceMap[$id] = $d;
+                    continue;
+                }
+                // Prefer an online sample if duplicates exist across sources.
+                if(is_online($d) && !is_online($existing)){
+                    $deviceMap[$id] = $d;
+                }
+            }
+        }
+
+        $devices = array_values($deviceMap);
+        $http_code = $ok_sources > 0 ? 200 : ((count($http_codes) > 0) ? max($http_codes) : 502);
+        $api_latency = (count($effectiveSources) > 0) ? round($api_latency_sum / count($effectiveSources)) : 0;
 
         $now=time();
         $prev_cache = $cache; // snapshot to detect state transitions
@@ -740,20 +913,180 @@ if(isset($_GET['ajax'])){
         echo json_encode(['ok'=>1]); exit;
     }
 
+    if($_GET['ajax']==='sources_list'){
+        $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
+        $user = get_user_by_username($USERS_STORE, $sessionUser);
+        if(!$user){
+            echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
+        }
+        $sources = get_stored_user_sources($user);
+        $view = [];
+        foreach($sources as $src){
+            $token = (string)$src['token'];
+            $len = strlen($token);
+            $tail = $len > 4 ? substr($token, -4) : $token;
+            $view[] = [
+                'id' => $src['id'],
+                'name' => $src['name'],
+                'url' => $src['url'],
+                'enabled' => !empty($src['enabled']),
+                'token_hint' => ($len > 0 ? str_repeat('*', max(4, min($len, 12))) . $tail : ''),
+                'has_token' => ($len > 0),
+                'updated_at' => $src['updated_at'] ?? null
+            ];
+        }
+        echo json_encode([
+            'ok' => 1,
+            'username' => $sessionUser,
+            'sources' => $view
+        ]);
+        exit;
+    }
+
+    if($_GET['ajax']==='sources_save' && $_SERVER['REQUEST_METHOD']==='POST'){
+        $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
+        $user = get_user_by_username($USERS_STORE, $sessionUser);
+        if(!$user){
+            echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
+        }
+        $sources = get_stored_user_sources($user);
+        $id = trim((string)($_POST['id'] ?? ''));
+        $name = trim((string)($_POST['name'] ?? ''));
+        $url = normalize_uisp_url($_POST['url'] ?? '');
+        $token = trim((string)($_POST['token'] ?? ''));
+        $enabledRaw = $_POST['enabled'] ?? '1';
+        $enabled = !($enabledRaw === false || $enabledRaw === 0 || $enabledRaw === '0' || strtolower((string)$enabledRaw) === 'false');
+
+        if($url === '' || is_placeholder_uisp_url($url)){
+            echo json_encode(['ok'=>0,'error'=>'invalid_url','message'=>'A valid UISP URL is required.']); exit;
+        }
+        if($name === ''){
+            $parsed = parse_url($url);
+            $name = (string)($parsed['host'] ?? 'UISP Source');
+        }
+
+        $found = -1;
+        for($i=0; $i<count($sources); $i++){
+            if((string)$sources[$i]['id'] === $id){
+                $found = $i;
+                break;
+            }
+        }
+
+        if($found >= 0){
+            if($token === ''){
+                $token = (string)($sources[$found]['token'] ?? '');
+            }
+            if($token === ''){
+                echo json_encode(['ok'=>0,'error'=>'token_required']); exit;
+            }
+            $sources[$found]['name'] = $name;
+            $sources[$found]['url'] = $url;
+            $sources[$found]['token'] = $token;
+            $sources[$found]['enabled'] = $enabled;
+            $sources[$found]['updated_at'] = date('c');
+            $savedId = $sources[$found]['id'];
+        } else {
+            if($token === '' || strlen($token) < 12){
+                echo json_encode(['ok'=>0,'error'=>'token_required','message'=>'Provide a valid UISP API token.']); exit;
+            }
+            $savedId = ($id !== '' ? $id : generate_source_id());
+            $sources[] = [
+                'id' => $savedId,
+                'name' => $name,
+                'url' => $url,
+                'token' => $token,
+                'enabled' => $enabled,
+                'created_at' => date('c'),
+                'updated_at' => date('c')
+            ];
+        }
+
+        $USERS_STORE['users'][$sessionUser]['sources'] = $sources;
+        $USERS_STORE['users'][$sessionUser]['updated_at'] = date('c');
+        save_users_store($USERS_FILE, $USERS_STORE);
+        echo json_encode(['ok'=>1, 'id'=>$savedId, 'count'=>count($sources)]); exit;
+    }
+
+    if($_GET['ajax']==='sources_delete' && $_SERVER['REQUEST_METHOD']==='POST'){
+        $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
+        $user = get_user_by_username($USERS_STORE, $sessionUser);
+        if(!$user){
+            echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
+        }
+        $id = trim((string)($_POST['id'] ?? ''));
+        if($id === ''){
+            echo json_encode(['ok'=>0,'error'=>'id_required']); exit;
+        }
+        $sources = get_stored_user_sources($user);
+        $filtered = [];
+        foreach($sources as $src){
+            if((string)$src['id'] !== $id) $filtered[] = $src;
+        }
+        $USERS_STORE['users'][$sessionUser]['sources'] = $filtered;
+        $USERS_STORE['users'][$sessionUser]['updated_at'] = date('c');
+        save_users_store($USERS_FILE, $USERS_STORE);
+        echo json_encode(['ok'=>1, 'count'=>count($filtered)]); exit;
+    }
+
+    if($_GET['ajax']==='sources_test' && $_SERVER['REQUEST_METHOD']==='POST'){
+        $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
+        $user = get_user_by_username($USERS_STORE, $sessionUser);
+        if(!$user){
+            echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
+        }
+        $id = trim((string)($_POST['id'] ?? ''));
+        $sources = get_stored_user_sources($user);
+        $target = null;
+        foreach($sources as $src){
+            if((string)$src['id'] === $id){
+                $target = $src;
+                break;
+            }
+        }
+        if(!$target){
+            echo json_encode(['ok'=>0,'error'=>'source_not_found']); exit;
+        }
+        $ch = curl_init();
+        $start = microtime(true);
+        curl_setopt_array($ch,[
+            CURLOPT_URL=>rtrim((string)$target['url'],"/")."/nms/api/v2.1/devices",
+            CURLOPT_RETURNTRANSFER=>true,
+            CURLOPT_HTTPHEADER=>["accept: application/json","x-auth-token: ".$target['token']],
+            CURLOPT_TIMEOUT=>10
+        ]);
+        $resp = curl_exec($ch);
+        $code = (int)curl_getinfo($ch,CURLINFO_HTTP_CODE);
+        $lat = round((microtime(true)-$start)*1000);
+        $err = curl_error($ch);
+        curl_close($ch);
+        $rows = json_decode((string)$resp, true);
+        $count = is_array($rows) ? count($rows) : 0;
+        echo json_encode([
+            'ok' => ($code >= 200 && $code < 300),
+            'http' => $code,
+            'latency_ms' => $lat,
+            'device_count' => $count,
+            'error' => ($err ?: null)
+        ]);
+        exit;
+    }
+
     if($_GET['ajax']==='token_status'){
         $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
         $user = get_user_by_username($USERS_STORE, $sessionUser);
-        $userToken = trim((string)($user['uisp_token'] ?? ''));
-        $envToken = trim((string)$UISP_TOKEN);
+        $configuredSources = get_stored_user_sources($user);
+        $effective = get_effective_uisp_sources($user, $UISP_URL, $UISP_TOKEN);
         $source = 'none';
-        if($userToken !== ''){
-            $source = 'account';
-        } elseif($envToken !== '' && $envToken !== 'changeme'){
+        if(count($configuredSources) > 0){
+            $source = 'account_sources';
+        } elseif(count($effective) > 0){
             $source = 'server_default';
         }
         echo json_encode([
             'ok' => 1,
-            'has_token' => ($source !== 'none'),
+            'has_token' => (count($effective) > 0),
+            'source_count' => count($configuredSources),
             'source' => $source,
             'username' => $sessionUser
         ]);
@@ -770,15 +1103,51 @@ if(isset($_GET['ajax'])){
         if($token !== '' && strlen($token) < 12){
             echo json_encode(['ok'=>0,'error'=>'token_too_short']); exit;
         }
+        $base = normalize_uisp_url($UISP_URL);
+        $sources = get_stored_user_sources($user);
+        if($token !== '' && ($base === '' || is_placeholder_uisp_url($base))){
+            echo json_encode([
+                'ok'=>0,
+                'error'=>'uisp_url_required',
+                'message'=>'Server UISP_URL is not configured. Use Account Settings to add full UISP sources.'
+            ]); exit;
+        }
+
+        if($token !== ''){
+            $legacyUpdated = false;
+            for($i=0; $i<count($sources); $i++){
+                if(($sources[$i]['id'] ?? '') === 'legacy-account'){
+                    $sources[$i]['token'] = $token;
+                    $sources[$i]['url'] = $base;
+                    $sources[$i]['enabled'] = true;
+                    $sources[$i]['updated_at'] = date('c');
+                    $legacyUpdated = true;
+                    break;
+                }
+            }
+            if(!$legacyUpdated){
+                $sources[] = [
+                    'id' => 'legacy-account',
+                    'name' => 'Legacy Account UISP',
+                    'url' => $base,
+                    'token' => $token,
+                    'enabled' => true,
+                    'created_at' => date('c'),
+                    'updated_at' => date('c')
+                ];
+            }
+        }
+
+        $USERS_STORE['users'][$sessionUser]['sources'] = $sources;
         $USERS_STORE['users'][$sessionUser]['uisp_token'] = $token;
         $USERS_STORE['users'][$sessionUser]['updated_at'] = date('c');
         save_users_store($USERS_FILE, $USERS_STORE);
-        $envToken = trim((string)$UISP_TOKEN);
-        $fallbackSource = ($envToken !== '' && $envToken !== 'changeme') ? 'server_default' : 'none';
+        $effective = get_effective_uisp_sources($USERS_STORE['users'][$sessionUser], $UISP_URL, $UISP_TOKEN);
+        $fallbackSource = (count($effective) > 0) ? 'account_sources' : 'none';
         echo json_encode([
             'ok'=>1,
-            'has_token'=>($token !== '' || $fallbackSource !== 'none'),
-            'source'=>($token !== '' ? 'account' : $fallbackSource)
+            'has_token'=>($fallbackSource !== 'none'),
+            'source'=>$fallbackSource
         ]);
         exit;
     }
@@ -913,6 +1282,210 @@ if(isset($_GET['view']) && $_GET['view']==='device'){
 <?php
     exit;
 }
+
+if(isset($_GET['view']) && $_GET['view']==='settings'){
+    if(!isset($_SESSION['auth_ok']) || empty($_SESSION['auth_user'])){
+        header('Location: ./?login=1');
+        exit;
+    }
+    $authUser = htmlspecialchars((string)($_SESSION['auth_user'] ?? ''), ENT_QUOTES);
+    ?>
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Account Settings | NOCWALL-CE</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Arial,sans-serif;background:#111;color:#eee;margin:0}
+    header{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;background:#1a1a1a;border-bottom:1px solid #2b2b2b}
+    main{padding:18px;max-width:1100px;margin:0 auto}
+    .card{background:#1a1a1a;border:1px solid #2e2e2e;border-radius:10px;padding:16px;margin-bottom:14px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}
+    label{font-size:12px;color:#bdbdbd;display:block;margin-bottom:6px}
+    input[type=text],input[type=url],input[type=password]{width:100%;box-sizing:border-box;background:#0f0f0f;border:1px solid #333;color:#eee;border-radius:7px;padding:9px}
+    button{background:#2f6fef;color:#fff;border:none;border-radius:7px;padding:9px 12px;cursor:pointer}
+    button.secondary{background:#444}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:10px;border-bottom:1px solid #2b2b2b;text-align:left;font-size:13px;vertical-align:middle}
+    .status{font-size:12px;color:#9adf9a;min-height:20px}
+    .warn{color:#ffb870}
+    .error{color:#ff8f8f}
+    .row-actions{display:flex;gap:6px;flex-wrap:wrap}
+    .small{font-size:12px;color:#aaa}
+  </style>
+</head>
+<body>
+  <header>
+    <div><strong>Account Settings</strong> <span class="small">User: <?=$authUser?></span></div>
+    <button class="secondary" onclick="window.location.href='./';">Back To Dashboard</button>
+  </header>
+  <main>
+    <section class="card">
+      <h3 style="margin-top:0">Add UISP Source</h3>
+      <div class="grid">
+        <div>
+          <label for="srcName">Source Name</label>
+          <input id="srcName" type="text" placeholder="Main UISP">
+        </div>
+        <div>
+          <label for="srcUrl">UISP Base URL</label>
+          <input id="srcUrl" type="url" placeholder="https://isp.unmsapp.com" required>
+        </div>
+        <div>
+          <label for="srcToken">UISP API Token</label>
+          <input id="srcToken" type="password" placeholder="Paste API token" required>
+        </div>
+      </div>
+      <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:6px;margin:0"><input id="srcEnabled" type="checkbox" checked> Enabled</label>
+        <button onclick="saveSource()">Save Source</button>
+        <button class="secondary" id="cancelEditBtn" onclick="cancelEdit()" style="display:none">Cancel Edit</button>
+      </div>
+      <div class="small" style="margin-top:10px">Each account can store multiple UISP endpoints and tokens.</div>
+      <div id="settingsStatus" class="status"></div>
+    </section>
+
+    <section class="card">
+      <h3 style="margin-top:0">Configured UISP Sources</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>URL</th>
+            <th>Status</th>
+            <th>Token</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="sourcesBody">
+          <tr><td colspan="5" class="small">Loading...</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    let editSourceId = '';
+    let cachedSources = [];
+    function setStatus(msg, kind){
+      const el = document.getElementById('settingsStatus');
+      if(!el) return;
+      el.textContent = msg || '';
+      el.className = 'status ' + (kind || '');
+    }
+    function esc(v){
+      return String(v ?? '').replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
+    }
+    function cancelEdit(){
+      editSourceId = '';
+      document.getElementById('srcName').value = '';
+      document.getElementById('srcUrl').value = '';
+      document.getElementById('srcToken').value = '';
+      document.getElementById('srcEnabled').checked = true;
+      document.getElementById('cancelEditBtn').style.display = 'none';
+      setStatus('');
+    }
+    async function loadSources(){
+      const body = document.getElementById('sourcesBody');
+      const r = await fetch('?ajax=sources_list&t='+Date.now(), {cache:'no-store'});
+      if(r.status === 401){ location.href='./?login=1'; return; }
+      const j = await r.json().catch(()=>null);
+      if(!j || !j.ok){
+        body.innerHTML = '<tr><td colspan="5" class="small">Failed to load sources.</td></tr>';
+        return;
+      }
+      cachedSources = Array.isArray(j.sources) ? j.sources : [];
+      if(cachedSources.length === 0){
+        body.innerHTML = '<tr><td colspan="5" class="small">No UISP sources added yet.</td></tr>';
+        return;
+      }
+      body.innerHTML = cachedSources.map(s=>{
+        return `<tr>
+          <td>${esc(s.name)}</td>
+          <td>${esc(s.url)}</td>
+          <td>${s.enabled ? 'Enabled' : 'Disabled'}</td>
+          <td>${esc(s.token_hint || '(none)')}</td>
+          <td class="row-actions">
+            <button class="secondary" onclick="editSource('${esc(s.id)}')">Edit</button>
+            <button class="secondary" onclick="testSource('${esc(s.id)}')">Test</button>
+            <button class="secondary" onclick="deleteSource('${esc(s.id)}')">Delete</button>
+          </td>
+        </tr>`;
+      }).join('');
+    }
+    function editSource(id){
+      const src = cachedSources.find(x=>x.id===id);
+      if(!src) return;
+      editSourceId = id;
+      document.getElementById('srcName').value = src.name || '';
+      document.getElementById('srcUrl').value = src.url || '';
+      document.getElementById('srcToken').value = '';
+      document.getElementById('srcEnabled').checked = !!src.enabled;
+      document.getElementById('cancelEditBtn').style.display = '';
+      setStatus('Editing source "' + (src.name || id) + '". Leave token empty to keep existing token.', 'warn');
+    }
+    async function saveSource(){
+      const name = document.getElementById('srcName').value.trim();
+      const url = document.getElementById('srcUrl').value.trim();
+      const token = document.getElementById('srcToken').value.trim();
+      const enabled = document.getElementById('srcEnabled').checked ? '1' : '0';
+      if(!url){ setStatus('UISP URL is required.', 'error'); return; }
+      if(!editSourceId && !token){ setStatus('UISP API token is required for new sources.', 'error'); return; }
+      const fd = new FormData();
+      if(editSourceId) fd.append('id', editSourceId);
+      fd.append('name', name);
+      fd.append('url', url);
+      fd.append('token', token);
+      fd.append('enabled', enabled);
+      const r = await fetch('?ajax=sources_save', { method:'POST', body:fd });
+      if(r.status === 401){ location.href='./?login=1'; return; }
+      const j = await r.json().catch(()=>null);
+      if(!j || !j.ok){
+        setStatus('Save failed: ' + ((j && (j.message || j.error)) || 'unknown'), 'error');
+        return;
+      }
+      cancelEdit();
+      setStatus('Source saved.');
+      loadSources();
+    }
+    async function deleteSource(id){
+      if(!confirm('Delete this UISP source?')) return;
+      const fd = new FormData();
+      fd.append('id', id);
+      const r = await fetch('?ajax=sources_delete', { method:'POST', body:fd });
+      if(r.status === 401){ location.href='./?login=1'; return; }
+      const j = await r.json().catch(()=>null);
+      if(!j || !j.ok){
+        setStatus('Delete failed: ' + ((j && (j.error || j.message)) || 'unknown'), 'error');
+        return;
+      }
+      setStatus('Source deleted.');
+      loadSources();
+    }
+    async function testSource(id){
+      setStatus('Testing source...');
+      const fd = new FormData();
+      fd.append('id', id);
+      const r = await fetch('?ajax=sources_test', { method:'POST', body:fd });
+      if(r.status === 401){ location.href='./?login=1'; return; }
+      const j = await r.json().catch(()=>null);
+      if(!j){
+        setStatus('Test failed: bad response', 'error');
+        return;
+      }
+      if(j.ok){
+        setStatus('Test passed. HTTP ' + j.http + ', devices: ' + j.device_count + ', latency: ' + j.latency_ms + 'ms');
+      } else {
+        setStatus('Test failed. HTTP ' + j.http + (j.error ? (', err: ' + j.error) : ''), 'error');
+      }
+    }
+    loadSources();
+  </script>
+</body>
+</html>
+<?php
+    exit;
+}
 ?>
 <?php if(!isset($_SESSION['auth_ok']) || empty($_SESSION['auth_user'])): ?>
 <!doctype html>
@@ -965,7 +1538,7 @@ if(isset($_GET['view']) && $_GET['view']==='device'){
         <input type="password" name="password_confirm" minlength="8" autocomplete="new-password" required>
       </div>
       <button class="btn" type="submit">Create account</button>
-      <div class="hint">After signup, import your UISP API token from the dashboard header.</div>
+      <div class="hint">After signup, open Account Settings and add one or more UISP sources.</div>
     </form>
   </div>
 </body>
@@ -990,7 +1563,7 @@ if(isset($_GET['view']) && $_GET['view']==='device'){
     <?php if($SHOW_TLS_UI): ?>
       <button onclick="openTLS()">TLS/Certs</button>
     <?php endif; ?>
-    <button onclick="manageUispToken()">UISP Token</button>
+    <button onclick="manageUispSources()">Account Settings</button>
     <button id="enableSoundBtn" class="btn-accent" onclick="enableSound()">Enable Sound</button>
     <button onclick="clearAll()">Clear All Acks</button>
     <button onclick="changePassword()">Change Password</button>

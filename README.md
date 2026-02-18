@@ -22,7 +22,7 @@ This repository currently contains a local development stack and transitional co
   - ack / clear ack
   - outage simulation
   - station ping history modal
-  - per-account UISP token import from dashboard header (`UISP Token` button)
+  - per-account UISP source management (`Account Settings`) with multiple UISP URLs and tokens
 - New dashboard display controls:
   - persistent card density (`Normal`, `Compact`)
   - metric toggles (CPU, RAM, Temp, Latency, Uptime, Outage)
@@ -68,32 +68,34 @@ cp .env.example .env
 docker-compose up -d --build
 ```
 
-One-command multi-arch publish to local registry (`172.16.120.5:5000` default):
+One-file build command (with action overloads):
 
 ```bash
-./build_multiarch
+./NOCWALL.sh /install
+./NOCWALL.sh /build
+./NOCWALL.sh /update
 ```
 
-PowerShell equivalent:
+Defaults used by `NOCWALL.sh /build`:
+- Docker Hub user: `predheadtx`
+- Image name: `NOCWALL` (published as repository `predheadtx/nocwall`)
+- Tag: `latest`
+- Platforms: `linux/amd64,linux/arm64,linux/arm/v7`
 
-```powershell
-./build_multiarch.cmd
-```
+Custom example:
 
-Custom registry/tag example:
-
-```powershell
-./build_multiarch.cmd -Registry 172.16.120.5:5000 -Namespace nocwall -Tag v0.1.0
+```bash
+./NOCWALL.sh /build --user predheadtx --name NOCWALL --tag latest
 ```
 
 3. Open the dashboard:
 - `http://localhost`
 - Create an account from the login screen (or sign in with bootstrap `admin` / `admin`).
-- After login, click `UISP Token` in the header and paste a UISP API token.
+- After login, open `Account Settings` from the header and add one or more UISP sources (`base URL + API token`) for that user.
 
 
 Optional UISP source polling env vars:
-- `UISP_URL` and `UISP_TOKEN`
+- `UISP_URL` and `UISP_TOKEN` (optional server fallback only)
 - `UISP_DEVICES_PATH` (default `/nms/api/v2.1/devices`)
 - `UISP_POLL_INTERVAL_SEC` (0 disables background polling)
 - `UISP_POLL_RETRIES` (default `1`)
@@ -101,7 +103,7 @@ Optional UISP source polling env vars:
 - Dashboard: `http://localhost` (or your Caddy endpoint)
 - API: `http://localhost:8080`
 
-## Account + UISP Token Flow (curl)
+## Account + UISP Sources Flow (curl)
 
 Register:
 
@@ -117,17 +119,17 @@ curl -i -c cookies.txt -b cookies.txt -X POST "http://localhost/?action=login" \
   -d "username=tester1234&password=Password123"
 ```
 
-Save account token:
+Add a UISP source to the account:
 
 ```bash
-curl -c cookies.txt -b cookies.txt -X POST "http://localhost/?ajax=save_uisp_token" \
-  -d "token=demo_token_1234567890"
+curl -c cookies.txt -b cookies.txt -X POST "http://localhost/?ajax=sources_save" \
+  -d "name=MainUISP&url=https://isp.unmsapp.com&token=demo_token_1234567890&enabled=1"
 ```
 
-Verify token status:
+List configured UISP sources:
 
 ```bash
-curl -c cookies.txt -b cookies.txt "http://localhost/?ajax=token_status"
+curl -c cookies.txt -b cookies.txt "http://localhost/?ajax=sources_list"
 ```
 
 ## API Smoke Tests
