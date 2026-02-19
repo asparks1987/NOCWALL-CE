@@ -133,6 +133,20 @@ cp .env.example .env
 docker-compose up -d --build
 ```
 
+SBC/edge bootstrap (recommended for Raspberry Pi and similar devices):
+
+```bash
+chmod +x ./NOCWALL.sh
+./NOCWALL.sh /install
+./NOCWALL.sh /deploy
+```
+
+Deploy CE + API + PRO extension profile:
+
+```bash
+./NOCWALL.sh /deploy --suite --pro
+```
+
 One-file build command (with action overloads):
 
 ```bash
