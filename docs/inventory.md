@@ -19,7 +19,7 @@ Inventory of current codepaths and components.
 - `Dockerfile`: PHP 8.2 + Apache base with bundled assets and Gotify.
 - `docker-compose.yml`: Services for `uisp-noc` and `caddy`, volumes for cache/certs, env vars for UISP, Gotify, TLS.
 - `start.sh`: Boots Gotify, prepares config, then starts Apache.
-- `NOCWALL.sh`: Single command runner with `/install`, `/build`, `/update` actions for CE build/publish workflow.
+- `buildmultiarch.sh`: Single command runner with `/install`, `/build`, `/update` actions for CE build/publish workflow.
 - `Caddyfile`: Reverse proxy/TLS config; optional Gotify host.
 
 ## Embedded Gotify
