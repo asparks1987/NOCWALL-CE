@@ -1,6 +1,7 @@
 # NOCWALL-CE Burndown (Recreated)
 
 Chronological multi-phase plan to move from the current state to a fully functional, distributable, and sellable NOCWALL platform.
+Strategic connector direction: UISP is first, with long-term expansion toward comprehensive multi-vendor NMS API coverage.
 
 Legend:
 - `[ ]` pending
@@ -83,12 +84,13 @@ Legend:
 ## Phase 1 - Data Foundation and Topology
 
 ### Epic 1 - Inventory Graph and Device Identity (F01-F05)
-- [ ] R01 Define canonical schema for `device_identity`, `interface`, `neighbor`, `hardware_profile`, `source_observation`.
-- [ ] R02 Create DB migrations and backfill scripts from current device cache/API store.
-- [ ] R03 Implement identity stitching engine (fingerprint by MAC/serial/hostname/site hints).
-- [ ] R04 Add drift fingerprint generator and change-detection snapshots.
+- [x] [STUB] R01 Define canonical schema for `device_identity`, `interface`, `neighbor`, `hardware_profile`, `source_observation`.
+- [x] [STUB] R02 Create DB migrations and backfill scripts from current device cache/API store.
+- [x] [STUB] R03 Implement identity stitching engine (fingerprint by MAC/serial/hostname/site hints).
+- [x] [STUB] R04 Add drift fingerprint generator and change-detection snapshots.
 - [ ] R05 Build ingestion mappers for interface stats and LLDP/CDP neighbor facts.
 - [ ] R06 Expose APIs for identity merges, drift history, interface stats, and lifecycle score.
+- [x] [STUB] R06a Expose read APIs for inventory schema, identities, observations, and drift snapshots.
 - [ ] R07 Add UI panels for merged identity, interface breakdown, and drift badges.
 - [ ] R08 Add tests: merge correctness, false-merge guardrails, migration rollback safety.
 
@@ -167,6 +169,10 @@ Legend:
 - [ ] R62 Add integration test harness (webhook, SDK adapter, ChatOps, GraphQL).
 - [ ] R63 Add API versioning/deprecation policy docs.
 - [ ] R64 Add sample integration packs for internal QA tenants.
+- [ ] R64a Publish multi-vendor NMS connector contract (`discover`, `inventory`, `metrics`, `events`, `auth`).
+- [ ] R64b Implement connector registry with per-vendor adapter loading and health state.
+- [ ] R64c Ship first non-UISP NMS adapter and compatibility test matrix.
+- [ ] R64d Define rolling goal and tracking for broad NMS API coverage.
 
 ## Phase 5 - Trust, Operability, and Commercial Readiness
 

@@ -60,11 +60,130 @@ type TelemetryIngestRequest struct {
 	EventType string   `json:"event_type,omitempty"`
 	DeviceID  string   `json:"device_id"`
 	Device    string   `json:"device,omitempty"`
+	Hostname  string   `json:"hostname,omitempty"`
+	Mac       string   `json:"mac,omitempty"`
+	Serial    string   `json:"serial,omitempty"`
+	Model     string   `json:"model,omitempty"`
+	Vendor    string   `json:"vendor,omitempty"`
 	Role      string   `json:"role,omitempty"`
 	SiteID    string   `json:"site_id,omitempty"`
 	Online    *bool    `json:"online,omitempty"`
 	LatencyMs *float64 `json:"latency_ms,omitempty"`
 	Message   string   `json:"message,omitempty"`
+}
+
+type DeviceIdentity struct {
+	IdentityID      string   `json:"identity_id"`
+	PrimaryDeviceID string   `json:"primary_device_id"`
+	Name            string   `json:"name"`
+	Role            string   `json:"role"`
+	SiteID          string   `json:"site_id"`
+	Hostname        string   `json:"hostname,omitempty"`
+	MacAddress      string   `json:"mac_address,omitempty"`
+	SerialNumber    string   `json:"serial_number,omitempty"`
+	Vendor          string   `json:"vendor,omitempty"`
+	Model           string   `json:"model,omitempty"`
+	SourceRefs      []string `json:"source_refs,omitempty"`
+	LastSeen        int64    `json:"last_seen"`
+	CreatedAt       string   `json:"created_at"`
+	UpdatedAt       string   `json:"updated_at"`
+}
+
+type DeviceInterface struct {
+	ID         string   `json:"id"`
+	IdentityID string   `json:"identity_id"`
+	Name       string   `json:"name"`
+	AdminUp    *bool    `json:"admin_up,omitempty"`
+	OperUp     *bool    `json:"oper_up,omitempty"`
+	RxBps      *float64 `json:"rx_bps,omitempty"`
+	TxBps      *float64 `json:"tx_bps,omitempty"`
+	ErrorRate  *float64 `json:"error_rate,omitempty"`
+	Source     string   `json:"source,omitempty"`
+	UpdatedAt  string   `json:"updated_at"`
+}
+
+type NeighborLink struct {
+	ID                    string `json:"id"`
+	IdentityID            string `json:"identity_id"`
+	LocalInterface        string `json:"local_interface,omitempty"`
+	NeighborIdentityHint  string `json:"neighbor_identity_hint,omitempty"`
+	NeighborDeviceName    string `json:"neighbor_device_name,omitempty"`
+	NeighborInterfaceHint string `json:"neighbor_interface_hint,omitempty"`
+	Protocol              string `json:"protocol,omitempty"`
+	Source                string `json:"source,omitempty"`
+	UpdatedAt             string `json:"updated_at"`
+}
+
+type HardwareProfile struct {
+	IdentityID      string `json:"identity_id"`
+	Vendor          string `json:"vendor,omitempty"`
+	Model           string `json:"model,omitempty"`
+	FirmwareVersion string `json:"firmware_version,omitempty"`
+	HardwareRev     string `json:"hardware_revision,omitempty"`
+	UpdatedAt       string `json:"updated_at"`
+}
+
+type SourceObservation struct {
+	ObservationID string   `json:"observation_id"`
+	IdentityID    string   `json:"identity_id"`
+	Source        string   `json:"source"`
+	DeviceID      string   `json:"device_id"`
+	Name          string   `json:"name,omitempty"`
+	Role          string   `json:"role,omitempty"`
+	SiteID        string   `json:"site_id,omitempty"`
+	Hostname      string   `json:"hostname,omitempty"`
+	MacAddress    string   `json:"mac_address,omitempty"`
+	SerialNumber  string   `json:"serial_number,omitempty"`
+	Vendor        string   `json:"vendor,omitempty"`
+	Model         string   `json:"model,omitempty"`
+	Online        *bool    `json:"online,omitempty"`
+	LatencyMs     *float64 `json:"latency_ms,omitempty"`
+	ObservedAt    int64    `json:"observed_at"`
+}
+
+type DriftSnapshot struct {
+	SnapshotID    string            `json:"snapshot_id"`
+	IdentityID    string            `json:"identity_id"`
+	Fingerprint   string            `json:"fingerprint"`
+	Changed       bool              `json:"changed"`
+	ObservedAt    int64             `json:"observed_at"`
+	ObservedAtISO string            `json:"observed_at_iso"`
+	Attributes    map[string]string `json:"attributes,omitempty"`
+}
+
+type InventorySchemaResponse struct {
+	Version         int               `json:"version"`
+	DeviceIdentity  []string          `json:"device_identity_fields"`
+	DeviceInterface []string          `json:"device_interface_fields"`
+	NeighborLink    []string          `json:"neighbor_link_fields"`
+	HardwareProfile []string          `json:"hardware_profile_fields"`
+	Observation     []string          `json:"source_observation_fields"`
+	Notes           map[string]string `json:"notes,omitempty"`
+}
+
+type InventoryDriftResponse struct {
+	LastUpdated int64           `json:"last_updated"`
+	Count       int             `json:"count"`
+	Snapshots   []DriftSnapshot `json:"snapshots"`
+	Truncated   bool            `json:"truncated"`
+	Limit       int             `json:"limit"`
+	Stub        bool            `json:"stub"`
+}
+
+type InventoryIdentitiesResponse struct {
+	LastUpdated int64            `json:"last_updated"`
+	Count       int              `json:"count"`
+	Identities  []DeviceIdentity `json:"identities"`
+	Stub        bool             `json:"stub"`
+}
+
+type InventoryObservationsResponse struct {
+	LastUpdated  int64               `json:"last_updated"`
+	Count        int                 `json:"count"`
+	Observations []SourceObservation `json:"observations"`
+	Truncated    bool                `json:"truncated"`
+	Limit        int                 `json:"limit"`
+	Stub         bool                `json:"stub"`
 }
 
 type EventIngestRequest struct {

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"log/slog"
 	"net/http"
 	"os"
@@ -123,6 +125,48 @@ func main() {
 	app.Get("/sources/uisp/status", authMiddleware, func(c *fiber.Ctx) error {
 		status := uispConnector.Status()
 		return c.JSON(status)
+	})
+
+	app.Get("/inventory/schema", authMiddleware, func(c *fiber.Ctx) error {
+		return c.JSON(store.InventorySchema())
+	})
+
+	app.Get("/inventory/identities", authMiddleware, func(c *fiber.Ctx) error {
+		identities := store.ListDeviceIdentities()
+		return c.JSON(InventoryIdentitiesResponse{
+			LastUpdated: time.Now().UnixMilli(),
+			Count:       len(identities),
+			Identities:  identities,
+			Stub:        true,
+		})
+	})
+
+	app.Get("/inventory/observations", authMiddleware, func(c *fiber.Ctx) error {
+		limit := c.QueryInt("limit", 200)
+		identityID := c.Query("identity_id", "")
+		observations, truncated, normalizedLimit := store.ListSourceObservations(limit, identityID)
+		return c.JSON(InventoryObservationsResponse{
+			LastUpdated:  time.Now().UnixMilli(),
+			Count:        len(observations),
+			Observations: observations,
+			Truncated:    truncated,
+			Limit:        normalizedLimit,
+			Stub:         true,
+		})
+	})
+
+	app.Get("/inventory/drift", authMiddleware, func(c *fiber.Ctx) error {
+		limit := c.QueryInt("limit", 200)
+		identityID := c.Query("identity_id", "")
+		snapshots, truncated, normalizedLimit := store.ListDriftSnapshots(limit, identityID)
+		return c.JSON(InventoryDriftResponse{
+			LastUpdated: time.Now().UnixMilli(),
+			Count:       len(snapshots),
+			Snapshots:   snapshots,
+			Truncated:   truncated,
+			Limit:       normalizedLimit,
+			Stub:        true,
+		})
 	})
 
 	app.Post("/sources/uisp/poll", authMiddleware, func(c *fiber.Ctx) error {
@@ -262,5 +306,9 @@ func getenvInt(key string, def int) int {
 }
 
 func randomID() string {
-	return time.Now().Format("20060102T150405.000")
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err == nil {
+		return hex.EncodeToString(buf)
+	}
+	return strconv.FormatInt(time.Now().UnixNano(), 36)
 }
