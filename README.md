@@ -71,12 +71,12 @@ docker-compose up -d --build
 One-file build command (with action overloads):
 
 ```bash
-./NOCWALL.sh /install
-./NOCWALL.sh /build
-./NOCWALL.sh /update
+./buildmultiarch.sh /install
+./buildmultiarch.sh /build
+./buildmultiarch.sh /update
 ```
 
-Defaults used by `NOCWALL.sh /build`:
+Defaults used by `buildmultiarch.sh /build`:
 - Docker Hub user: `predheadtx`
 - Image name: `NOCWALL` (published as repository `predheadtx/nocwall`)
 - Tag: `latest`
@@ -85,7 +85,7 @@ Defaults used by `NOCWALL.sh /build`:
 Custom example:
 
 ```bash
-./NOCWALL.sh /build --user predheadtx --name NOCWALL --tag latest
+./buildmultiarch.sh /build --user predheadtx --name NOCWALL --tag latest
 ```
 
 3. Open the dashboard:
