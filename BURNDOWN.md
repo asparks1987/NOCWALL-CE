@@ -2,6 +2,7 @@
 
 Chronological multi-phase plan to move from the current state to a fully functional, distributable, and sellable NOCWALL platform.
 Strategic connector direction: UISP is first, with long-term expansion toward comprehensive multi-vendor NMS API coverage.
+Open-core product rule: CE remains a minimal wall-mounted online/offline dashboard; advanced workflows, analytics, and operations are PRO.
 
 Legend:
 - `[ ]` pending
@@ -16,28 +17,29 @@ Legend:
 - [x] Device cards, alert siren, ack/clear/simulate
 - [x] Per-account dashboard preference sync
 - [x] Dockerized local stack
+- [ ] Planned product split change: move non-minimal CE capabilities behind PRO gates.
 
 ## 50 Net-New Features (Not Previously Planned in BURNDOWN)
 
 ### Inventory and Topology
-1. `[ ]` F01 `[CE]` Multi-source device identity stitching (same device merged across UISP + agent feeds)
-2. `[ ]` F02 `[CE]` Configuration drift fingerprints per device
-3. `[ ]` F03 `[CE]` Interface-level utilization and error metrics
-4. `[ ]` F04 `[CE]` LLDP/CDP neighbor discovery inventory
+1. `[ ]` F01 `[PRO]` Multi-source device identity stitching (same device merged across UISP + agent feeds)
+2. `[ ]` F02 `[PRO]` Configuration drift fingerprints per device
+3. `[ ]` F03 `[PRO]` Interface-level utilization and error metrics
+4. `[ ]` F04 `[PRO]` LLDP/CDP neighbor discovery inventory
 5. `[ ]` F05 `[PRO]` Hardware lifecycle risk score (EOS/EOL awareness)
-6. `[ ]` F06 `[CE]` Auto-generated network topology map
+6. `[ ]` F06 `[PRO]` Auto-generated network topology map
 7. `[ ]` F07 `[PRO]` Path trace view (gateway to target device)
-8. `[ ]` F08 `[CE]` Link-health heatmap overlays
+8. `[ ]` F08 `[PRO]` Link-health heatmap overlays
 9. `[ ]` F09 `[PRO]` WAN circuit SLA tracker
 10. `[ ]` F10 `[PRO]` Redundancy/HA state monitor
 
 ### Telemetry and Signal Quality
-11. `[ ]` F11 `[CE]` Multi-tier retention (hot/warm/cold data windows)
-12. `[ ]` F12 `[CE]` Sampling-rate governor by device class
-13. `[ ]` F13 `[CE]` Telemetry gap detector with missing-data alerts
-14. `[ ]` F14 `[CE]` Agent/server clock-skew detector
-15. `[ ]` F15 `[CE]` Source data quality scorecard
-16. `[ ]` F16 `[CE]` Dynamic baseline thresholds per metric
+11. `[ ]` F11 `[PRO]` Multi-tier retention (hot/warm/cold data windows)
+12. `[ ]` F12 `[PRO]` Sampling-rate governor by device class
+13. `[ ]` F13 `[PRO]` Telemetry gap detector with missing-data alerts
+14. `[ ]` F14 `[PRO]` Agent/server clock-skew detector
+15. `[ ]` F15 `[PRO]` Source data quality scorecard
+16. `[ ]` F16 `[PRO]` Dynamic baseline thresholds per metric
 17. `[ ]` F17 `[PRO]` Seasonal anomaly detection (hour/day pattern aware)
 18. `[ ]` F18 `[PRO]` Alert confidence scoring
 19. `[ ]` F19 `[PRO]` Impact-radius estimator
@@ -46,27 +48,27 @@ Legend:
 ### Incident and Operator Workflow
 21. `[ ]` F21 `[PRO]` Incident commander mode
 22. `[ ]` F22 `[PRO]` Shift handoff auto-briefs
-23. `[ ]` F23 `[CE]` Post-incident timeline export (Markdown/PDF)
+23. `[ ]` F23 `[PRO]` Post-incident timeline export (Markdown/PDF)
 24. `[ ]` F24 `[PRO]` Root-cause hypothesis assistant panel
-25. `[ ]` F25 `[CE]` Playbook checklist runner on incident pages
+25. `[ ]` F25 `[PRO]` Playbook checklist runner on incident pages
 
 ### Dashboard and Wallboard UX
-26. `[ ]` F26 `[CE]` Micro-sparklines inside device cards
-27. `[ ]` F27 `[CE]` Per-card quick actions menu
-28. `[ ]` F28 `[CE]` Pin/focus mode for critical devices
-29. `[ ]` F29 `[CE]` Wall rotation scenes (auto-cycle filtered views)
-30. `[ ]` F30 `[CE]` Accessibility profiles (colorblind/high-contrast/large text)
+26. `[ ]` F26 `[PRO]` Micro-sparklines inside device cards
+27. `[ ]` F27 `[PRO]` Per-card quick actions menu
+28. `[ ]` F28 `[PRO]` Pin/focus mode for critical devices
+29. `[ ]` F29 `[PRO]` Wall rotation scenes (auto-cycle filtered views)
+30. `[ ]` F30 `[PRO]` Accessibility profiles (colorblind/high-contrast/large text)
 
 ### Automation and Integrations
 31. `[ ]` F31 `[PRO]` Safe remediation actions with approval queue
 32. `[ ]` F32 `[PRO]` Drift auto-remediation suggestions
-33. `[ ]` F33 `[CE]` Scheduled health audits
+33. `[ ]` F33 `[PRO]` Scheduled health audits
 34. `[ ]` F34 `[PRO]` Change-window suggestions from traffic patterns
-35. `[ ]` F35 `[CE]` Telemetry replay sandbox for testing rules
-36. `[ ]` F36 `[CE]` Signed outbound webhook templates
-37. `[ ]` F37 `[CE]` Inbound event adapter SDK
+35. `[ ]` F35 `[PRO]` Telemetry replay sandbox for testing rules
+36. `[ ]` F36 `[PRO]` Signed outbound webhook templates
+37. `[ ]` F37 `[PRO]` Inbound event adapter SDK
 38. `[ ]` F38 `[PRO]` ChatOps command interface
-39. `[ ]` F39 `[CE]` GraphQL read API for BI tools
+39. `[ ]` F39 `[PRO]` GraphQL read API for BI tools
 40. `[ ]` F40 `[PRO]` Data export pipelines to object storage
 
 ### Security, Reliability, and Commercialization
@@ -79,7 +81,17 @@ Legend:
 47. `[ ]` F47 `[PRO]` Self-serve plan limit banners/enforcement
 48. `[ ]` F48 `[PRO]` Tenant cost/performance advisor
 49. `[ ]` F49 `[PRO]` Zero-downtime hosted upgrade orchestration
-50. `[ ]` F50 `[CE]` Public reliability scorecard API
+50. `[ ]` F50 `[PRO]` Public reliability scorecard API
+
+## Phase 0 - CE Minimalization and PRO Gating
+
+### Epic 0 - Enforce Minimal CE Product Contract
+- [ ] R00 Define strict CE card contract: online/offline, device name, role, site, last-seen only.
+- [ ] R00a Add feature flags for PRO-only features with deny-by-default in CE builds.
+- [ ] R00b Move ack/escalation/suppression/automation entry points behind PRO gates.
+- [ ] R00c Remove non-essential CE dashboard controls and metrics from default CE UI.
+- [ ] R00d Keep CE focused on wallboard display-only operations and basic health checks.
+- [ ] R00e Add CI guardrails to fail CE builds when PRO-gated routes/components leak.
 
 ## Phase 1 - Data Foundation and Topology
 

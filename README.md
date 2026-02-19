@@ -9,6 +9,7 @@ Target product direction:
   - Vendor/NMS APIs (UISP first, expanding to broad NMS API coverage)
   - Local network agents (Linux/SBC daemon)
 - The wallboard UI focuses on dense, glanceable, per-device status cards with alert-first behavior.
+- CE/PRO split direction: CE is intentionally minimal wallboard functionality; advanced capabilities are PRO.
 
 This repository currently contains a local development stack and transitional code while we move from legacy UISP-NOC to NOCWALL.
 
@@ -37,6 +38,25 @@ Long description:
 - Current connector status:
   - UISP connector implemented first
   - multi-vendor NMS adapter expansion in roadmap
+- Product split status:
+  - current branch is transitional and still contains features that will be gated/moved to PRO
+  - upcoming releases prioritize reducing CE to minimal wallboard scope
+
+## CE vs PRO Contract (Updated)
+
+CE (free) target:
+- Wall-mounted dashboard view
+- Basic device list/cards
+- Online/offline state
+- Very limited card fields (name, role, site, last seen)
+- Basic account/session for accessing the wallboard
+
+PRO target:
+- Advanced telemetry analytics and baselines
+- Incident workflow, timeline, and team operations
+- Correlation/dedup/suppression/escalation logic
+- Topology intelligence, drift analysis, remediation tooling
+- Integrations, exports, automation, governance, and enterprise controls
 
 ## What Works Today
 
@@ -89,6 +109,10 @@ Long description:
 
 ## What's Coming Next (Active Burndown Focus)
 
+- Phase 0 CE minimalization:
+  - enforce strict CE card contract (online/offline + limited fields)
+  - feature-flag and gate advanced UI/API flows as PRO-only
+  - add CI checks to prevent PRO leakage into CE
 - R05: ingest mappers for interface stats and LLDP/CDP neighbor facts.
 - R06: expanded inventory APIs (identity merge operations, interface stats, lifecycle scoring paths).
 - R07: UI panels for merged identity, interface breakdown, and drift badges.
