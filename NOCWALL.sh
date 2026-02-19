@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Normalize locale on systems where LC_ALL points to a non-installed locale.
+if [[ -n "${LC_ALL:-}" ]] && command -v locale >/dev/null 2>&1; then
+  lc_all_norm="$(printf '%s' "$LC_ALL" | tr '[:upper:]' '[:lower:]')"
+  if ! locale -a 2>/dev/null | tr '[:upper:]' '[:lower:]' | grep -qx "$lc_all_norm"; then
+    unset LC_ALL
+  fi
+fi
+
 # NOCWALL SBC bootstrap/deploy script.
 # Strategy:
 # - Keep Docker Compose stack as source of truth.
@@ -152,6 +160,12 @@ parse_args() {
 
 ensure_dirs() {
   run_as_root mkdir -p "$INSTALL_DIR" "$EXT_DIR"
+  # Make install dir writable by the invoking user to avoid root-owned file errors.
+  if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+    local owner_user
+    owner_user="${SUDO_USER:-$USER}"
+    run_as_root chown -R "$owner_user":"$owner_user" "$INSTALL_DIR"
+  fi
 }
 
 write_env_file_if_missing() {
