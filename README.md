@@ -26,7 +26,8 @@ This repository currently contains a local development stack and transitional co
 - New dashboard display controls:
   - persistent card density (`Normal`, `Compact`)
   - metric toggles (CPU, RAM, Temp, Latency, Uptime, Outage)
-  - local storage persistence per browser
+  - per-account preference sync (saved server-side, loaded across browsers after login)
+  - AP card siren toggle (`Siren: On/Off`) persisted per account
 - Go API preview with in-memory/file-backed store:
   - `GET /health`
   - `POST /auth/login`

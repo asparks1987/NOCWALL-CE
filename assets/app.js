@@ -69,6 +69,9 @@ const MIN_OFFLINE_TS = 1; // guard against missing/zero offline_since
 const POLL_INTERVAL_NORMAL_MS = 5000;
 const POLL_INTERVAL_FAST_MS = 2000;
 const POLL_INTERVAL_ERROR_MS = 15000;
+const AP_SIREN_PREFS_KEY = "nocwall.ap.siren.v1";
+let userPrefsLoaded=false;
+let userPrefsSaveTimer=null;
 
 const DASH_SETTINGS_KEY = "nocwall.dashboard.settings.v1";
 const DEFAULT_DASH_SETTINGS = {
@@ -84,6 +87,51 @@ const DEFAULT_DASH_SETTINGS = {
 };
 
 let dashSettings = loadDashSettings();
+let apSirenPrefs = loadApSirenPrefs();
+
+function normalizeApSirenPrefs(input){
+  const out={};
+  if(!input || typeof input!=="object" || Array.isArray(input)) return out;
+  Object.keys(input).forEach(key=>{
+    if(!key) return;
+    out[key] = !!input[key];
+  });
+  return out;
+}
+
+function loadApSirenPrefs(){
+  try{
+    const raw = localStorage.getItem(AP_SIREN_PREFS_KEY);
+    if(!raw) return {};
+    const parsed = JSON.parse(raw);
+    return normalizeApSirenPrefs(parsed);
+  }catch(_){
+    return {};
+  }
+}
+
+function saveApSirenPrefs(){
+  try{
+    localStorage.setItem(AP_SIREN_PREFS_KEY, JSON.stringify(apSirenPrefs));
+  }catch(_){ }
+  scheduleUserPrefsSave();
+}
+
+function isApSirenEnabledById(id){
+  if(!id) return true;
+  return apSirenPrefs[id] !== false;
+}
+
+function toggleApSiren(id){
+  if(!id) return;
+  if(isApSirenEnabledById(id)){
+    apSirenPrefs[id] = false;
+  } else {
+    delete apSirenPrefs[id];
+  }
+  saveApSirenPrefs();
+  renderDevices();
+}
 
 function loadDashSettings(){
   try{
@@ -119,6 +167,7 @@ function saveDashSettings(){
   try{
     localStorage.setItem(DASH_SETTINGS_KEY, JSON.stringify(dashSettings));
   }catch(_){ }
+  scheduleUserPrefsSave();
 }
 
 function isMetricEnabled(metricName){
@@ -200,6 +249,54 @@ function bindDisplayControls(){
 function initDisplaySettings(){
   applyDashboardSettings();
   bindDisplayControls();
+}
+
+function scheduleUserPrefsSave(){
+  if(!userPrefsLoaded) return;
+  if(userPrefsSaveTimer){
+    clearTimeout(userPrefsSaveTimer);
+  }
+  userPrefsSaveTimer = setTimeout(()=>{ saveUserPrefsToServer(); }, 250);
+}
+
+async function saveUserPrefsToServer(){
+  if(!userPrefsLoaded) return;
+  userPrefsSaveTimer = null;
+  try{
+    const fd = new FormData();
+    fd.append('dashboard_settings', JSON.stringify(dashSettings));
+    fd.append('ap_siren_prefs', JSON.stringify(apSirenPrefs));
+    const resp = await fetch('?ajax=prefs_save', { method:'POST', body:fd });
+    if(resp.status===401){ location.reload(); return; }
+    const payload = await resp.json().catch(()=>null);
+    if(payload && payload.ok && payload.preferences){
+      dashSettings = normalizeDashSettings(payload.preferences.dashboard_settings);
+      apSirenPrefs = normalizeApSirenPrefs(payload.preferences.ap_siren_prefs);
+      try{
+        localStorage.setItem(DASH_SETTINGS_KEY, JSON.stringify(dashSettings));
+        localStorage.setItem(AP_SIREN_PREFS_KEY, JSON.stringify(apSirenPrefs));
+      }catch(_){ }
+    }
+  }catch(_){ }
+}
+
+async function loadUserPrefsFromServer(){
+  try{
+    const resp = await fetch('?ajax=prefs_get&t='+Date.now(), { cache:'no-store' });
+    if(resp.status===401){ location.reload(); return; }
+    const payload = await resp.json().catch(()=>null);
+    if(payload && payload.ok && payload.preferences){
+      dashSettings = normalizeDashSettings(payload.preferences.dashboard_settings);
+      apSirenPrefs = normalizeApSirenPrefs(payload.preferences.ap_siren_prefs);
+      try{
+        localStorage.setItem(DASH_SETTINGS_KEY, JSON.stringify(dashSettings));
+        localStorage.setItem(AP_SIREN_PREFS_KEY, JSON.stringify(apSirenPrefs));
+      }catch(_){ }
+      applyDashboardSettings();
+      renderDevices();
+    }
+  }catch(_){ }
+  userPrefsLoaded = true;
 }
 
 function schedulePoll(delayMs){
@@ -415,6 +512,7 @@ function renderDevices(meta, opts){
 
   const isApAlertEligible = (dev, nowSeconds) => {
     if(!dev || dev.online || !dev.ap) return false;
+    if(!isApSirenEnabledById(dev.id)) return false;
     const offlineSince = typeof dev.offline_since === 'number' ? dev.offline_since : null;
     if(!offlineSince || offlineSince < MIN_OFFLINE_TS) return false; // ignore missing/zero timestamps
     return offlineSince <= (nowSeconds - AP_ALERT_GRACE_SEC);
@@ -573,6 +671,7 @@ function showHistory(id,name){
   window.location.href='?'+params.toString();
 }
 initDisplaySettings();
+loadUserPrefsFromServer();
 schedulePoll(0);
 
 // Live counters (update once per second)
@@ -695,6 +794,7 @@ function renderApGrid(items, nowSec){
     const latencyVal = (typeof d.latency==='number' && isFinite(d.latency)) ? d.latency : d.cpe_latency;
     const badges = buildMetricBadges(d, latencyVal);
     const ackActive = d.ack_until && d.ack_until > nowSec;
+    const apSirenEnabled = isApSirenEnabledById(d.id);
     const actions = `
         ${!d.online ? `
           <div class="dropdown" style="${ackActive ? 'display:none' : ''}">
@@ -710,6 +810,7 @@ function renderApGrid(items, nowSec){
           ${ackActive ? `<button onclick="clearAck('${d.id}')">Clear Ack</button>`:''}
         `:``}
         ${d.simulate ? `<button onclick="clearSim('${d.id}')">End Test</button>` : (d.online ? `<button onclick="simulate('${d.id}')">Test Outage</button>` : '')}
+        <button onclick="toggleApSiren('${d.id}')">${apSirenEnabled ? 'Siren: On' : 'Siren: Off'}</button>
         <button onclick="showHistory('${d.id}','${d.name}')">History</button>
     `;
     return `<div class="card ${d.online?'':'offline'} ${ackActive?'acked':''}">

@@ -59,6 +59,62 @@ function normalize_username($value){
     return strtolower(trim((string)$value));
 }
 
+function default_dashboard_settings(){
+    return [
+        'density' => 'normal',
+        'metrics' => [
+            'cpu' => true,
+            'ram' => true,
+            'temp' => true,
+            'latency' => true,
+            'uptime' => true,
+            'outage' => true
+        ]
+    ];
+}
+
+function normalize_dashboard_settings($input){
+    $base = default_dashboard_settings();
+    if(!is_array($input)) return $base;
+    if(isset($input['density']) && $input['density'] === 'compact'){
+        $base['density'] = 'compact';
+    }
+    if(isset($input['metrics']) && is_array($input['metrics'])){
+        foreach(array_keys($base['metrics']) as $k){
+            if(array_key_exists($k, $input['metrics'])){
+                $base['metrics'][$k] = !!$input['metrics'][$k];
+            }
+        }
+    }
+    return $base;
+}
+
+function normalize_ap_siren_prefs($input){
+    $out = [];
+    if(!is_array($input)) return $out;
+    foreach($input as $k => $v){
+        $id = trim((string)$k);
+        if($id === '' || strlen($id) > 180) continue;
+        $out[$id] = !!$v;
+    }
+    return $out;
+}
+
+function default_user_preferences(){
+    return [
+        'dashboard_settings' => default_dashboard_settings(),
+        'ap_siren_prefs' => []
+    ];
+}
+
+function normalize_user_preferences($input){
+    $base = default_user_preferences();
+    if(!is_array($input)) return $base;
+    $base['dashboard_settings'] = normalize_dashboard_settings($input['dashboard_settings'] ?? null);
+    $base['ap_siren_prefs'] = normalize_ap_siren_prefs($input['ap_siren_prefs'] ?? null);
+    return $base;
+}
+
 function normalize_uisp_url($value){
     $url = trim((string)$value);
     if($url === '') return '';
@@ -161,6 +217,7 @@ function default_admin_user(){
         'password_hash' => password_hash('admin', PASSWORD_DEFAULT),
         'uisp_token' => '',
         'sources' => [],
+        'preferences' => default_user_preferences(),
         'created_at' => $now,
         'updated_at' => $now
     ];
@@ -175,6 +232,11 @@ function bootstrap_users_store($usersFile, $legacyAuthFile, $envUrl, $envToken){
             if(!is_array($user)) continue;
             if(!isset($store['users'][$uname]['sources']) || !is_array($store['users'][$uname]['sources'])){
                 $store['users'][$uname]['sources'] = [];
+                $didMutate = true;
+            }
+            $normalizedPrefs = normalize_user_preferences($store['users'][$uname]['preferences'] ?? null);
+            if(json_encode($normalizedPrefs) !== json_encode($store['users'][$uname]['preferences'] ?? null)){
+                $store['users'][$uname]['preferences'] = $normalizedPrefs;
                 $didMutate = true;
             }
             // One-time migration path: legacy single token -> first source using server UISP URL.
@@ -231,6 +293,7 @@ function bootstrap_users_store($usersFile, $legacyAuthFile, $envUrl, $envToken){
             'password_hash' => (string)$legacy['password_hash'],
             'uisp_token' => '',
             'sources' => $migratedSources,
+            'preferences' => default_user_preferences(),
             'created_at' => (string)($legacy['created_at'] ?? $legacy['updated_at'] ?? $now),
             'updated_at' => (string)($legacy['updated_at'] ?? $now)
         ];
@@ -300,6 +363,7 @@ if(isset($_GET['action']) && $_GET['action']==='register' && $_SERVER['REQUEST_M
         'password_hash' => password_hash($p, PASSWORD_DEFAULT),
         'uisp_token' => '',
         'sources' => [],
+        'preferences' => default_user_preferences(),
         'created_at' => $now,
         'updated_at' => $now
     ];
@@ -911,6 +975,59 @@ if(isset($_GET['ajax'])){
         $USERS_STORE['users'][$sessionUser]['updated_at'] = date('c');
         save_users_store($USERS_FILE, $USERS_STORE);
         echo json_encode(['ok'=>1]); exit;
+    }
+
+    if($_GET['ajax']==='prefs_get'){
+        $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
+        $user = get_user_by_username($USERS_STORE, $sessionUser);
+        if(!$user){
+            echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
+        }
+        $prefs = normalize_user_preferences($user['preferences'] ?? null);
+        echo json_encode([
+            'ok' => 1,
+            'username' => $sessionUser,
+            'preferences' => $prefs
+        ]);
+        exit;
+    }
+
+    if($_GET['ajax']==='prefs_save' && $_SERVER['REQUEST_METHOD']==='POST'){
+        $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
+        $user = get_user_by_username($USERS_STORE, $sessionUser);
+        if(!$user){
+            echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
+        }
+
+        $prefs = normalize_user_preferences($user['preferences'] ?? null);
+        $hadInput = false;
+
+        if(array_key_exists('dashboard_settings', $_POST)){
+            $hadInput = true;
+            $decoded = json_decode((string)$_POST['dashboard_settings'], true);
+            if(!is_array($decoded)){
+                echo json_encode(['ok'=>0,'error'=>'invalid_dashboard_settings']); exit;
+            }
+            $prefs['dashboard_settings'] = normalize_dashboard_settings($decoded);
+        }
+
+        if(array_key_exists('ap_siren_prefs', $_POST)){
+            $hadInput = true;
+            $decoded = json_decode((string)$_POST['ap_siren_prefs'], true);
+            if(!is_array($decoded)){
+                echo json_encode(['ok'=>0,'error'=>'invalid_ap_siren_prefs']); exit;
+            }
+            $prefs['ap_siren_prefs'] = normalize_ap_siren_prefs($decoded);
+        }
+
+        if(!$hadInput){
+            echo json_encode(['ok'=>0,'error'=>'no_fields']); exit;
+        }
+
+        $USERS_STORE['users'][$sessionUser]['preferences'] = $prefs;
+        $USERS_STORE['users'][$sessionUser]['updated_at'] = date('c');
+        save_users_store($USERS_FILE, $USERS_STORE);
+        echo json_encode(['ok'=>1,'preferences'=>$prefs]); exit;
     }
 
     if($_GET['ajax']==='sources_list'){
