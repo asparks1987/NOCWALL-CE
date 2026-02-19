@@ -6,11 +6,37 @@ Target product direction:
 - Users sign up at `nocwall.com`.
 - Each user gets a provisioned browser-based NOC workspace.
 - Telemetry is collected from:
-  - Vendor APIs (example: UISP API keys)
+  - Vendor/NMS APIs (UISP first, expanding to broad NMS API coverage)
   - Local network agents (Linux/SBC daemon)
 - The wallboard UI focuses on dense, glanceable, per-device status cards with alert-first behavior.
 
 This repository currently contains a local development stack and transitional code while we move from legacy UISP-NOC to NOCWALL.
+
+## Docker Hub Listing (Copy/Paste)
+
+Repository:
+- `predheadtx/nocwall`
+
+Short description:
+- NOCWALL-CE is an open-core network wallboard for dense, glanceable device monitoring with multi-vendor NMS + agent telemetry ingestion.
+
+Long description:
+- NOCWALL-CE is the Community Edition of NOCWALL, built for NOC wall displays and fast network visibility. It includes a browser dashboard, per-account NMS source configuration, account-synced dashboard preferences, basic alerting (offline/ack/siren), and a Go API with telemetry ingest and inventory foundations (identity stitching and drift snapshots). UISP is the first connector and additional NMS APIs are planned.
+- Current images are intended for development/testing while the hosted `nocwall.com` control-plane model is being completed.
+
+## Current State Snapshot (2026-02-19)
+
+- Account login/signup is functional for local CE testing.
+- UISP sources are saved per account and load across browsers after login.
+- Dashboard settings (density/metrics/AP siren mode) are account-synced.
+- API inventory foundation is live:
+  - canonical schema endpoints
+  - identity stitching (multi-source merge by key hints)
+  - source observation history
+  - drift fingerprint snapshots
+- Current connector status:
+  - UISP connector implemented first
+  - multi-vendor NMS adapter expansion in roadmap
 
 ## What Works Today
 
@@ -43,6 +69,12 @@ This repository currently contains a local development stack and transitional co
   - `POST /events/ingest` (stub)
   - `POST /sources/uisp/poll` (stub)
   - `GET /sources/uisp/status` (stub)
+  - `GET /inventory/schema` (stub)
+  - `GET /inventory/identities` (stub)
+  - `GET /inventory/observations` (stub)
+  - `GET /inventory/drift` (stub)
+  - identity stitching from telemetry fields (`mac`, `serial`, `hostname`, source/device hints)
+  - drift fingerprint snapshots per identity
 - Docker Compose builds API and web locally from source by default (no private image dependency).
 - Docker Compose wiring uses safe env placeholders (no hardcoded real keys).
 
@@ -54,6 +86,14 @@ This repository currently contains a local development stack and transitional co
 - Agent PKI/enrollment, secure long-lived channels, and fleet lifecycle management.
 - Correlation/dedup/suppression/escalation and enterprise routing.
 - Production mobile backend workflows and push delivery orchestration.
+
+## What's Coming Next (Active Burndown Focus)
+
+- R05: ingest mappers for interface stats and LLDP/CDP neighbor facts.
+- R06: expanded inventory APIs (identity merge operations, interface stats, lifecycle scoring paths).
+- R07: UI panels for merged identity, interface breakdown, and drift badges.
+- R08: merge-safety and migration rollback tests.
+- Add connector adapters beyond UISP (progressive rollout by NMS family).
 
 ## Quick Start (Local Dev)
 
@@ -100,6 +140,10 @@ Optional UISP source polling env vars:
 - `UISP_DEVICES_PATH` (default `/nms/api/v2.1/devices`)
 - `UISP_POLL_INTERVAL_SEC` (0 disables background polling)
 - `UISP_POLL_RETRIES` (default `1`)
+
+Note:
+- `UISP_*` variables are current connector-specific settings.
+- As additional NMS connectors are added, each will get equivalent connector-scoped config.
 4. Open:
 - Dashboard: `http://localhost` (or your Caddy endpoint)
 - API: `http://localhost:8080`
@@ -180,6 +224,15 @@ List incidents:
 
 ```bash
 curl http://localhost:8080/incidents
+```
+
+Inventory endpoints:
+
+```bash
+curl http://localhost:8080/inventory/schema
+curl http://localhost:8080/inventory/identities
+curl "http://localhost:8080/inventory/observations?limit=20"
+curl "http://localhost:8080/inventory/drift?limit=20"
 ```
 
 ## Documentation

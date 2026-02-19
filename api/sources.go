@@ -29,6 +29,11 @@ type uiSPDeviceRecord struct {
 	Name    string
 	Role    string
 	SiteID  string
+	Host    string
+	Mac     string
+	Serial  string
+	Model   string
+	Vendor  string
 	Online  bool
 	Latency *float64
 }
@@ -178,6 +183,11 @@ func (u *UISPConnector) Poll(ctx context.Context, req SourcePollRequest) (source
 			EventType: eventType,
 			DeviceID:  rec.ID,
 			Device:    rec.Name,
+			Hostname:  rec.Host,
+			Mac:       rec.Mac,
+			Serial:    rec.Serial,
+			Model:     rec.Model,
+			Vendor:    rec.Vendor,
 			Role:      rec.Role,
 			SiteID:    rec.SiteID,
 			Online:    &online,
@@ -347,10 +357,32 @@ func parseUISPDevices(body []byte) ([]uiSPDeviceRecord, error) {
 		)
 
 		records = append(records, uiSPDeviceRecord{
-			ID:      id,
-			Name:    name,
-			Role:    role,
-			SiteID:  siteID,
+			ID:     id,
+			Name:   name,
+			Role:   role,
+			SiteID: siteID,
+			Host: pickString(item,
+				[]string{"identification", "hostname"},
+				[]string{"hostname"},
+			),
+			Mac: pickString(item,
+				[]string{"identification", "mac"},
+				[]string{"mac"},
+			),
+			Serial: pickString(item,
+				[]string{"identification", "serialNumber"},
+				[]string{"identification", "serial"},
+				[]string{"serialNumber"},
+				[]string{"serial"},
+			),
+			Model: pickString(item,
+				[]string{"identification", "model"},
+				[]string{"model"},
+			),
+			Vendor: pickString(item,
+				[]string{"identification", "vendor"},
+				[]string{"vendor"},
+			),
 			Online:  online,
 			Latency: latency,
 		})
