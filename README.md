@@ -73,8 +73,8 @@ PRO target:
   - persistent card density (`Normal`, `Compact`)
   - metric toggles (CPU, RAM, Temp, Latency, Uptime, Outage)
   - per-account preference sync (saved server-side, loaded across browsers after login)
-  - AP card siren toggle (`Siren: On/Off`) persisted per account
-  - per-tab siren toggles for Gateways, APs, and Routers/Switches (persisted per account)
+  - per-card siren toggle (`Siren: On/Off`) on Gateways, APs, and Routers/Switches (persisted per account)
+  - per-tab siren toggles for Gateways, APs, and Routers/Switches (persisted per account; default is Gateway on, AP/Router off)
   - drag-and-drop card ordering per tab (Gateways/APs/Routers-Switches), persisted per account
   - inventory/drift badges on cards (from API inventory overview)
   - per-card Inventory modal with identity details, interface summary, neighbor links, lifecycle score, and drift snapshots

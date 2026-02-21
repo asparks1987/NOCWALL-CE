@@ -109,8 +109,8 @@ let userPrefsLoaded=false;
 let userPrefsSaveTimer=null;
 const DEFAULT_TAB_SIREN_PREFS = {
   gateways: true,
-  aps: true,
-  routers: true
+  aps: false,
+  routers: false
 };
 const DEFAULT_CARD_ORDER_PREFS = {
   gateways: [],
@@ -277,20 +277,28 @@ function saveCardOrderPrefs(){
   scheduleUserPrefsSave();
 }
 
-function isApSirenEnabledById(id){
+function isDeviceSirenEnabledById(id){
   if(!id) return true;
   return apSirenPrefs[id] !== false;
 }
 
-function toggleApSiren(id){
+function toggleDeviceSiren(id){
   if(!id) return;
-  if(isApSirenEnabledById(id)){
+  if(isDeviceSirenEnabledById(id)){
     apSirenPrefs[id] = false;
   } else {
     delete apSirenPrefs[id];
   }
   saveApSirenPrefs();
   renderDevices();
+}
+
+// Backward-compatible alias (older handlers referenced AP naming).
+function isApSirenEnabledById(id){
+  return isDeviceSirenEnabledById(id);
+}
+function toggleApSiren(id){
+  toggleDeviceSiren(id);
 }
 
 function isTabSirenEnabled(tabKey){
@@ -1835,13 +1843,14 @@ function renderDevices(meta, opts){
   const isGatewayAlertEligible = (dev, nowSeconds) => {
     if(!isTabSirenEnabled('gateways')) return false;
     if(!dev || !dev.gateway) return false;
+    if(!isDeviceSirenEnabledById(dev.id)) return false;
     return isDeviceUnackedOffline(dev, nowSeconds);
   };
   const isApAlertEligible = (dev, nowSeconds) => {
     if(!isTabSirenEnabled('aps')) return false;
     if(!dev || !dev.ap) return false;
     if(!isDeviceUnackedOffline(dev, nowSeconds)) return false;
-    if(!isApSirenEnabledById(dev.id)) return false;
+    if(!isDeviceSirenEnabledById(dev.id)) return false;
     const offlineSince = typeof dev.offline_since === 'number' ? dev.offline_since : null;
     if(!offlineSince || offlineSince < MIN_OFFLINE_TS) return false; // ignore missing/zero timestamps
     return offlineSince <= (nowSeconds - AP_ALERT_GRACE_SEC);
@@ -1849,6 +1858,7 @@ function renderDevices(meta, opts){
   const isRouterSwitchAlertEligible = (dev, nowSeconds) => {
     if(!isTabSirenEnabled('routers')) return false;
     if(!dev || dev.gateway || dev.ap || !(dev.router || dev.switch)) return false;
+    if(!isDeviceSirenEnabledById(dev.id)) return false;
     return isDeviceUnackedOffline(dev, nowSeconds);
   };
 
@@ -2110,6 +2120,7 @@ function renderGatewayGrid(gws, nowSec){
     const badges = buildMetricBadges(d, d.latency);
     const inventoryBadges = featureEnabled("inventory") ? getInventoryCardBadges(d) : "";
     const ackActive = d.ack_until && d.ack_until > nowSec;
+    const deviceSirenEnabled = isDeviceSirenEnabledById(d.id);
     const minimalMode = featureEnabled("strict_ce");
     const topMeta = renderSiteAndLastSeen(d);
     const statusColor = d.online?'#b06cff':'#f55';
@@ -2143,6 +2154,7 @@ function renderGatewayGrid(gws, nowSec){
           ${ackActive ? `<button onclick="clearAck('${d.id}')">Clear Ack</button>`:''}
         `:``}
         ${featureEnabled("simulate") ? (d.simulate ? `<button onclick="clearSim('${d.id}')">End Test</button>` : (d.online ? `<button onclick="simulate('${d.id}')">Test Outage</button>` : '')) : ''}
+        ${featureEnabled("advanced_actions") ? `<button onclick="toggleDeviceSiren('${d.id}')">${deviceSirenEnabled ? 'Siren: On' : 'Siren: Off'}</button>` : ''}
         ${featureEnabled("inventory") ? `<button onclick="openInventory('${d.id}','${d.name}')">Inventory</button>` : ''}
         ${featureEnabled("history") ? `<button onclick="showHistory('${d.id}','${d.name}')">History</button>` : ''}
       </div>
@@ -2160,7 +2172,7 @@ function renderApGrid(items, nowSec){
     const badges = buildMetricBadges(d, latencyVal);
     const inventoryBadges = featureEnabled("inventory") ? getInventoryCardBadges(d) : "";
     const ackActive = d.ack_until && d.ack_until > nowSec;
-    const apSirenEnabled = isApSirenEnabledById(d.id);
+    const deviceSirenEnabled = isDeviceSirenEnabledById(d.id);
     const minimalMode = featureEnabled("strict_ce");
     const topMeta = renderSiteAndLastSeen(d);
     const statusColor = d.online?'#b06cff':'#f55';
@@ -2187,7 +2199,7 @@ function renderApGrid(items, nowSec){
           ${ackActive ? `<button onclick="clearAck('${d.id}')">Clear Ack</button>`:''}
         `:``}
         ${featureEnabled("simulate") ? (d.simulate ? `<button onclick="clearSim('${d.id}')">End Test</button>` : (d.online ? `<button onclick="simulate('${d.id}')">Test Outage</button>` : '')) : ''}
-        ${featureEnabled("advanced_actions") ? `<button onclick="toggleApSiren('${d.id}')">${apSirenEnabled ? 'Siren: On' : 'Siren: Off'}</button>` : ''}
+        ${featureEnabled("advanced_actions") ? `<button onclick="toggleDeviceSiren('${d.id}')">${deviceSirenEnabled ? 'Siren: On' : 'Siren: Off'}</button>` : ''}
         ${featureEnabled("inventory") ? `<button onclick="openInventory('${d.id}','${d.name}')">Inventory</button>` : ''}
         ${featureEnabled("history") ? `<button onclick="showHistory('${d.id}','${d.name}')">History</button>` : ''}
     `;
@@ -2215,6 +2227,7 @@ function renderRouterSwitchGrid(backbones, nowSec){
     const badges = buildMetricBadges(d, latencyVal);
     const inventoryBadges = featureEnabled("inventory") ? getInventoryCardBadges(d) : "";
     const ackActive = d.ack_until && d.ack_until > nowSec;
+    const deviceSirenEnabled = isDeviceSirenEnabledById(d.id);
     const roleLabel = d.router ? 'Router' : 'Switch';
     const minimalMode = featureEnabled("strict_ce");
     const topMeta = renderSiteAndLastSeen(d);
@@ -2249,6 +2262,7 @@ function renderRouterSwitchGrid(backbones, nowSec){
           ${ackActive ? `<button onclick="clearAck('${d.id}')">Clear Ack</button>`:''}
         `:``}
         ${featureEnabled("simulate") ? (d.simulate ? `<button onclick="clearSim('${d.id}')">End Test</button>` : (d.online ? `<button onclick="simulate('${d.id}')">Test Outage</button>` : '')) : ''}
+        ${featureEnabled("advanced_actions") ? `<button onclick="toggleDeviceSiren('${d.id}')">${deviceSirenEnabled ? 'Siren: On' : 'Siren: Off'}</button>` : ''}
         ${featureEnabled("inventory") ? `<button onclick="openInventory('${d.id}','${d.name}')">Inventory</button>` : ''}
         ${featureEnabled("history") ? `<button onclick="showHistory('${d.id}','${d.name}')">History</button>` : ''}
       </div>

@@ -144,8 +144,8 @@ function normalize_ap_siren_prefs($input){
 function default_tab_siren_prefs(){
     return [
         'gateways' => true,
-        'aps' => true,
-        'routers' => true
+        'aps' => false,
+        'routers' => false
     ];
 }
 
