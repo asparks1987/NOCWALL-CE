@@ -169,21 +169,42 @@ One-file build command (with action overloads):
 
 ```bash
 ./buildmultiarch.sh /install
+./buildmultiarch.sh /preflight
 ./buildmultiarch.sh /build
 ./buildmultiarch.sh /update
+./buildmultiarch.sh --u predheadtx -i nocwall:latest
 ```
 
-Defaults used by `buildmultiarch.sh /build`:
+Preflight runs:
+- `scripts/ce-release-gate.sh`
+- shell syntax checks for `buildmultiarch.sh` and `NOCWALL.sh`
+- JS syntax check for `assets/app.js` (when `node` is installed)
+- `docker compose config` validation
+- `go test ./...` in `api` (when `go` is installed)
+
+Defaults used by `buildmultiarch.sh`:
 - Docker Hub user: `predheadtx`
-- Image name: `NOCWALL` (published as repository `predheadtx/nocwall`)
+- Web image repository: `nocwall` (published as `predheadtx/nocwall`)
+- API image repository: `nocwall-api` (published as `predheadtx/nocwall-api`)
 - Tag: `latest`
 - Platforms: `linux/amd64,linux/arm64,linux/arm/v7`
+- Extra publish tag: `git-<shortsha>` (enabled by default)
 
 Custom example:
 
 ```bash
-./buildmultiarch.sh /build --user predheadtx --name NOCWALL --tag latest
+./buildmultiarch.sh --u predheadtx -i nocwall:latest
+./buildmultiarch.sh /build --user predheadtx --web-repo nocwall --api-repo nocwall-api --tag latest
 ```
+
+GitHub Actions release publishing:
+- Workflow: `.github/workflows/release-images.yml`
+- Publishes multi-arch images for both:
+  - `predheadtx/nocwall`
+  - `predheadtx/nocwall-api`
+- Requires repository secrets:
+  - `DOCKERHUB_USERNAME`
+  - `DOCKERHUB_TOKEN`
 
 3. Open the dashboard:
 - `http://localhost`
