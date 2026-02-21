@@ -5,6 +5,11 @@ session_start();
 
 date_default_timezone_set('America/Chicago');
 
+$vendorAutoload = __DIR__ . '/vendor/autoload.php';
+if(is_file($vendorAutoload)){
+    require_once $vendorAutoload;
+}
+
 // Config
 $UISP_URL   = getenv("UISP_URL") ?: "https://changeme.unmsapp.com";
 $UISP_TOKEN = getenv("UISP_TOKEN") ?: "changeme";
@@ -20,25 +25,44 @@ if(in_array($NOCWALL_PRO_OVERRIDE, ['1','true','yes','on'], true)){
 }
 $NOCWALL_STRICT_CE = !$NOCWALL_PRO_FEATURES;
 $NOCWALL_STRICT_OVERRIDE = strtolower(trim((string)getenv("NOCWALL_STRICT_CE")));
+$NOCWALL_STRICT_OVERRIDE_SET = false;
 if(in_array($NOCWALL_STRICT_OVERRIDE, ['1','true','yes','on'], true)){
     $NOCWALL_STRICT_CE = true;
+    $NOCWALL_STRICT_OVERRIDE_SET = true;
 } elseif(in_array($NOCWALL_STRICT_OVERRIDE, ['0','false','no','off'], true)){
     $NOCWALL_STRICT_CE = false;
+    $NOCWALL_STRICT_OVERRIDE_SET = true;
 }
-$NOCWALL_FEATURE_FLAGS = [
-    'profile' => $NOCWALL_FEATURE_PROFILE,
-    'strict_ce' => $NOCWALL_STRICT_CE,
-    'pro_features' => $NOCWALL_PRO_FEATURES,
-    'advanced_metrics' => !$NOCWALL_STRICT_CE && $NOCWALL_PRO_FEATURES,
-    'advanced_actions' => $NOCWALL_PRO_FEATURES,
-    'display_controls' => !$NOCWALL_STRICT_CE && $NOCWALL_PRO_FEATURES,
-    'inventory' => $NOCWALL_PRO_FEATURES,
-    'topology' => $NOCWALL_PRO_FEATURES,
-    'history' => $NOCWALL_PRO_FEATURES,
-    'ack' => $NOCWALL_PRO_FEATURES,
-    'simulate' => $NOCWALL_PRO_FEATURES,
-    'cpe_history' => $NOCWALL_PRO_FEATURES
-];
+$NOCWALL_BILLING_MODE = strtolower(trim((string)(getenv("NOCWALL_BILLING_MODE") ?: "demo")));
+if(!in_array($NOCWALL_BILLING_MODE, ['off','demo','stripe'], true)){
+    $NOCWALL_BILLING_MODE = 'demo';
+}
+$NOCWALL_BILLING_SELF_ACTIVATE = ($NOCWALL_BILLING_MODE === 'demo');
+$NOCWALL_BILLING_SELF_ACTIVATE_OVERRIDE = strtolower(trim((string)(getenv("NOCWALL_BILLING_SELF_ACTIVATE") ?: "")));
+if(in_array($NOCWALL_BILLING_SELF_ACTIVATE_OVERRIDE, ['1','true','yes','on'], true)){
+    $NOCWALL_BILLING_SELF_ACTIVATE = true;
+} elseif(in_array($NOCWALL_BILLING_SELF_ACTIVATE_OVERRIDE, ['0','false','no','off'], true)){
+    $NOCWALL_BILLING_SELF_ACTIVATE = false;
+}
+$NOCWALL_PRO_MONTHLY_USD = trim((string)(getenv("NOCWALL_PRO_MONTHLY_USD") ?: "19.00"));
+if(!preg_match('/^\d+(\.\d{1,2})?$/', $NOCWALL_PRO_MONTHLY_USD)){
+    $NOCWALL_PRO_MONTHLY_USD = "19.00";
+}
+$NOCWALL_STRIPE_SECRET_KEY = trim((string)(getenv("NOCWALL_STRIPE_SECRET_KEY") ?: ""));
+$NOCWALL_STRIPE_WEBHOOK_SECRET = trim((string)(getenv("NOCWALL_STRIPE_WEBHOOK_SECRET") ?: ""));
+$NOCWALL_STRIPE_PRICE_ID = trim((string)(getenv("NOCWALL_STRIPE_PRICE_ID") ?: ""));
+$NOCWALL_STRIPE_SUCCESS_URL = trim((string)(getenv("NOCWALL_STRIPE_SUCCESS_URL") ?: ""));
+$NOCWALL_STRIPE_CANCEL_URL = trim((string)(getenv("NOCWALL_STRIPE_CANCEL_URL") ?: ""));
+$NOCWALL_STRIPE_PORTAL_RETURN_URL = trim((string)(getenv("NOCWALL_STRIPE_PORTAL_RETURN_URL") ?: ""));
+if($NOCWALL_STRIPE_SUCCESS_URL === ''){
+    $NOCWALL_STRIPE_SUCCESS_URL = "./?view=settings&billing=success";
+}
+if($NOCWALL_STRIPE_CANCEL_URL === ''){
+    $NOCWALL_STRIPE_CANCEL_URL = "./?view=settings&billing=cancel";
+}
+if($NOCWALL_STRIPE_PORTAL_RETURN_URL === ''){
+    $NOCWALL_STRIPE_PORTAL_RETURN_URL = "./?view=settings&billing=portal";
+}
 // Feature flags / UI toggles
 $SHOW_TLS_UI = in_array(strtolower((string)getenv('SHOW_TLS_UI')), ['1','true','yes'], true);
 
@@ -90,11 +114,410 @@ function normalize_username($value){
     return strtolower(trim((string)$value));
 }
 
+function default_subscription_state(){
+    $now = date('c');
+    return [
+        'status' => 'inactive', // inactive|active|trialing|past_due|canceled
+        'plan' => 'ce_free', // ce_free|pro_monthly
+        'provider' => 'none', // none|demo|stripe|manual
+        'customer_id' => '',
+        'subscription_id' => '',
+        'current_period_start' => '',
+        'current_period_end' => '',
+        'cancel_at_period_end' => false,
+        'mobile_enabled' => false,
+        'agents_enabled' => false,
+        'notes' => '',
+        'created_at' => $now,
+        'updated_at' => $now
+    ];
+}
+
+function normalize_subscription_state($input){
+    $base = default_subscription_state();
+    if(!is_array($input)) return $base;
+
+    $status = strtolower(trim((string)($input['status'] ?? '')));
+    if(in_array($status, ['inactive','active','trialing','past_due','canceled'], true)){
+        $base['status'] = $status;
+    }
+    $plan = strtolower(trim((string)($input['plan'] ?? '')));
+    if(in_array($plan, ['ce_free','pro_monthly'], true)){
+        $base['plan'] = $plan;
+    }
+    $provider = strtolower(trim((string)($input['provider'] ?? '')));
+    if(in_array($provider, ['none','demo','stripe','manual'], true)){
+        $base['provider'] = $provider;
+    }
+
+    foreach(['customer_id','subscription_id','current_period_start','current_period_end','notes','created_at','updated_at'] as $k){
+        if(array_key_exists($k, $input)){
+            $base[$k] = trim((string)$input[$k]);
+        }
+    }
+    if(array_key_exists('cancel_at_period_end', $input)){
+        $base['cancel_at_period_end'] = !!$input['cancel_at_period_end'];
+    }
+
+    $periodActive = false;
+    $periodExpired = false;
+    $endTs = 0;
+    if($base['current_period_end'] !== ''){
+        $endTs = (int)strtotime($base['current_period_end']);
+        if($endTs && $endTs >= time()){
+            $periodActive = true;
+        } elseif($endTs && $endTs < time()){
+            $periodExpired = true;
+        }
+    }
+
+    $entitled = false;
+    if(!$periodExpired && ($base['status'] === 'active' || $base['status'] === 'trialing')){
+        $entitled = true;
+    } elseif(!$periodExpired && $base['status'] === 'canceled' && $periodActive){
+        $entitled = true;
+    }
+
+    if($entitled){
+        $base['mobile_enabled'] = true;
+        $base['agents_enabled'] = true;
+    } else {
+        $base['mobile_enabled'] = false;
+        $base['agents_enabled'] = false;
+    }
+
+    if(array_key_exists('mobile_enabled', $input)){
+        $base['mobile_enabled'] = !!$input['mobile_enabled'];
+    }
+    if(array_key_exists('agents_enabled', $input)){
+        $base['agents_enabled'] = !!$input['agents_enabled'];
+    }
+
+    return $base;
+}
+
+function subscription_is_active($sub){
+    $normalized = normalize_subscription_state($sub);
+    $status = (string)$normalized['status'];
+    $end = trim((string)$normalized['current_period_end']);
+    $endTs = 0;
+    if($end !== ''){
+        $endTs = (int)strtotime($end);
+    }
+
+    if($endTs > 0 && $endTs < time()){
+        return false;
+    }
+    if(in_array($status, ['active','trialing'], true)){
+        return true;
+    }
+    if($status === 'canceled' && $endTs > 0 && $endTs >= time()){
+        return true;
+    }
+    return false;
+}
+
+function user_has_pro_entitlement($user){
+    if(!is_array($user)) return false;
+    return subscription_is_active($user['subscription'] ?? null);
+}
+
+function build_feature_flags_for_user($user){
+    global $NOCWALL_FEATURE_PROFILE, $NOCWALL_PRO_FEATURES, $NOCWALL_STRICT_CE, $NOCWALL_STRICT_OVERRIDE_SET;
+
+    $hasUserPro = user_has_pro_entitlement($user);
+    $proEnabled = ($NOCWALL_PRO_FEATURES || $hasUserPro);
+
+    // If strict override wasn't explicitly forced, strict mode follows entitlement.
+    $strictCe = $NOCWALL_STRICT_OVERRIDE_SET ? $NOCWALL_STRICT_CE : !$proEnabled;
+
+    return [
+        'profile' => $NOCWALL_FEATURE_PROFILE,
+        'strict_ce' => $strictCe,
+        'pro_features' => $proEnabled,
+        'advanced_metrics' => !$strictCe && $proEnabled,
+        'advanced_actions' => $proEnabled,
+        'display_controls' => !$strictCe && $proEnabled,
+        'inventory' => $proEnabled,
+        'topology' => $proEnabled,
+        'history' => $proEnabled,
+        'ack' => $proEnabled,
+        'simulate' => $proEnabled,
+        'cpe_history' => $proEnabled,
+        'mobile' => $proEnabled,
+        'agents' => $proEnabled
+    ];
+}
+
+function get_user_subscription($user){
+    if(!is_array($user)) return default_subscription_state();
+    return normalize_subscription_state($user['subscription'] ?? null);
+}
+
+function subscription_public_view($sub){
+    $s = normalize_subscription_state($sub);
+    return [
+        'status' => $s['status'],
+        'plan' => $s['plan'],
+        'provider' => $s['provider'],
+        'current_period_start' => $s['current_period_start'],
+        'current_period_end' => $s['current_period_end'],
+        'cancel_at_period_end' => $s['cancel_at_period_end'],
+        'mobile_enabled' => !empty($s['mobile_enabled']),
+        'agents_enabled' => !empty($s['agents_enabled']),
+        'updated_at' => $s['updated_at']
+    ];
+}
+
+function activate_user_pro_subscription(&$store, $username, $provider = 'demo'){
+    $u = normalize_username($username);
+    if($u === '' || !isset($store['users'][$u]) || !is_array($store['users'][$u])){
+        return null;
+    }
+    $nowTs = time();
+    $now = date('c', $nowTs);
+    $sub = normalize_subscription_state($store['users'][$u]['subscription'] ?? null);
+    $sub['status'] = 'active';
+    $sub['plan'] = 'pro_monthly';
+    $sub['provider'] = in_array($provider, ['demo','stripe','manual'], true) ? $provider : 'manual';
+    $sub['current_period_start'] = $now;
+    $sub['current_period_end'] = date('c', $nowTs + 30 * 24 * 3600);
+    $sub['cancel_at_period_end'] = false;
+    $sub['mobile_enabled'] = true;
+    $sub['agents_enabled'] = true;
+    if(trim((string)$sub['created_at']) === ''){
+        $sub['created_at'] = $now;
+    }
+    $sub['updated_at'] = $now;
+    $store['users'][$u]['subscription'] = $sub;
+    $store['users'][$u]['updated_at'] = $now;
+    return $sub;
+}
+
+function cancel_user_subscription_at_period_end(&$store, $username){
+    $u = normalize_username($username);
+    if($u === '' || !isset($store['users'][$u]) || !is_array($store['users'][$u])){
+        return null;
+    }
+    $now = date('c');
+    $sub = normalize_subscription_state($store['users'][$u]['subscription'] ?? null);
+    $sub['cancel_at_period_end'] = true;
+    if($sub['status'] === 'inactive'){
+        $sub['status'] = 'canceled';
+    }
+    $sub['updated_at'] = $now;
+    $store['users'][$u]['subscription'] = $sub;
+    $store['users'][$u]['updated_at'] = $now;
+    return $sub;
+}
+
+function resume_user_subscription(&$store, $username){
+    $u = normalize_username($username);
+    if($u === '' || !isset($store['users'][$u]) || !is_array($store['users'][$u])){
+        return null;
+    }
+    $now = date('c');
+    $sub = normalize_subscription_state($store['users'][$u]['subscription'] ?? null);
+    if(subscription_is_active($sub)){
+        $sub['status'] = 'active';
+    }
+    $sub['cancel_at_period_end'] = false;
+    $sub['updated_at'] = $now;
+    $store['users'][$u]['subscription'] = $sub;
+    $store['users'][$u]['updated_at'] = $now;
+    return $sub;
+}
+
+function stripe_map_subscription_status($stripeStatus){
+    $s = strtolower(trim((string)$stripeStatus));
+    if($s === 'active') return 'active';
+    if($s === 'trialing') return 'trialing';
+    if(in_array($s, ['past_due','unpaid','incomplete'], true)) return 'past_due';
+    if(in_array($s, ['canceled','incomplete_expired'], true)) return 'canceled';
+    return 'inactive';
+}
+
+function iso8601_from_unix($value){
+    $ts = (int)$value;
+    if($ts <= 0) return '';
+    return date('c', $ts);
+}
+
+function find_username_by_stripe_refs($store, $customerId = '', $subscriptionId = '', $fallbackUsername = ''){
+    $fallback = normalize_username($fallbackUsername);
+    if($fallback !== '' && get_user_by_username($store, $fallback)){
+        return $fallback;
+    }
+    $cust = trim((string)$customerId);
+    $subId = trim((string)$subscriptionId);
+    if(!isset($store['users']) || !is_array($store['users'])) return '';
+    foreach($store['users'] as $uname => $user){
+        if(!is_array($user)) continue;
+        $sub = normalize_subscription_state($user['subscription'] ?? null);
+        if($subId !== '' && trim((string)$sub['subscription_id']) === $subId){
+            return normalize_username($uname);
+        }
+        if($cust !== '' && trim((string)$sub['customer_id']) === $cust){
+            return normalize_username($uname);
+        }
+    }
+    return '';
+}
+
+function apply_stripe_subscription_state(&$store, $username, $data){
+    $u = normalize_username($username);
+    if($u === '' || !isset($store['users'][$u]) || !is_array($store['users'][$u])){
+        return false;
+    }
+    $now = date('c');
+    $sub = normalize_subscription_state($store['users'][$u]['subscription'] ?? null);
+    $sub['provider'] = 'stripe';
+    $sub['plan'] = 'pro_monthly';
+    if(array_key_exists('status', $data)){
+        $sub['status'] = stripe_map_subscription_status((string)$data['status']);
+    }
+    if(array_key_exists('customer_id', $data)){
+        $sub['customer_id'] = trim((string)$data['customer_id']);
+    }
+    if(array_key_exists('subscription_id', $data)){
+        $sub['subscription_id'] = trim((string)$data['subscription_id']);
+    }
+    if(array_key_exists('current_period_start', $data)){
+        $sub['current_period_start'] = iso8601_from_unix($data['current_period_start']);
+    }
+    if(array_key_exists('current_period_end', $data)){
+        $sub['current_period_end'] = iso8601_from_unix($data['current_period_end']);
+    }
+    if(array_key_exists('cancel_at_period_end', $data)){
+        $sub['cancel_at_period_end'] = !!$data['cancel_at_period_end'];
+    }
+    if(array_key_exists('notes', $data)){
+        $sub['notes'] = trim((string)$data['notes']);
+    }
+    $sub['updated_at'] = $now;
+    if(trim((string)$sub['created_at']) === ''){
+        $sub['created_at'] = $now;
+    }
+    $sub = normalize_subscription_state($sub);
+    $store['users'][$u]['subscription'] = $sub;
+    $store['users'][$u]['updated_at'] = $now;
+    return true;
+}
+
+function stripe_sdk_is_available(){
+    return class_exists('\\Stripe\\Stripe')
+        && class_exists('\\Stripe\\Webhook')
+        && class_exists('\\Stripe\\Subscription')
+        && class_exists('\\Stripe\\Checkout\\Session')
+        && class_exists('\\Stripe\\BillingPortal\\Session');
+}
+
+function stripe_bootstrap_sdk($secretKey){
+    $secret = trim((string)$secretKey);
+    if($secret === '' || !stripe_sdk_is_available()){
+        return false;
+    }
+    \Stripe\Stripe::setApiKey($secret);
+    return true;
+}
+
+function stripe_object_to_array($obj){
+    if(is_array($obj)){
+        return $obj;
+    }
+    if(is_object($obj) && method_exists($obj, 'toArray')){
+        $arr = $obj->toArray();
+        if(is_array($arr)){
+            return $arr;
+        }
+    }
+    $json = json_decode(json_encode($obj), true);
+    return is_array($json) ? $json : [];
+}
+
+function stripe_parse_webhook_event($payload, $signatureHeader, $webhookSecret, &$error = ''){
+    $error = '';
+    if(!stripe_sdk_is_available()){
+        $error = 'stripe_sdk_unavailable';
+        return null;
+    }
+    try{
+        $event = \Stripe\Webhook::constructEvent(
+            (string)$payload,
+            (string)$signatureHeader,
+            (string)$webhookSecret
+        );
+        return stripe_object_to_array($event);
+    } catch(\Stripe\Exception\SignatureVerificationException $e){
+        $error = 'invalid_signature';
+        return null;
+    } catch(\Throwable $e){
+        $error = 'invalid_payload';
+        return null;
+    }
+}
+
+function stripe_fetch_subscription($secretKey, $subscriptionId){
+    $subId = trim((string)$subscriptionId);
+    if($subId === '' || !stripe_bootstrap_sdk($secretKey)){
+        return null;
+    }
+    try{
+        $sub = \Stripe\Subscription::retrieve($subId, []);
+        return stripe_object_to_array($sub);
+    } catch(\Throwable $e){
+        return null;
+    }
+}
+
+function stripe_create_checkout_session($secretKey, $params, &$error = ''){
+    $error = '';
+    if(!stripe_bootstrap_sdk($secretKey)){
+        $error = 'stripe_sdk_unavailable_or_unconfigured';
+        return null;
+    }
+    try{
+        $session = \Stripe\Checkout\Session::create($params);
+        return stripe_object_to_array($session);
+    } catch(\Throwable $e){
+        $error = trim((string)$e->getMessage());
+        return null;
+    }
+}
+
+function stripe_create_billing_portal_session($secretKey, $params, &$error = ''){
+    $error = '';
+    if(!stripe_bootstrap_sdk($secretKey)){
+        $error = 'stripe_sdk_unavailable_or_unconfigured';
+        return null;
+    }
+    try{
+        $session = \Stripe\BillingPortal\Session::create($params);
+        return stripe_object_to_array($session);
+    } catch(\Throwable $e){
+        $error = trim((string)$e->getMessage());
+        return null;
+    }
+}
+
+function to_absolute_url($url){
+    $u = trim((string)$url);
+    if($u === '') return '';
+    if(preg_match('#^https?://#i', $u)) return $u;
+    $host = (string)($_SERVER['HTTP_HOST'] ?? 'localhost');
+    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    if(strpos($u, '//') === 0) return $scheme . ':' . $u;
+    if(strpos($u, '/') === 0) return $scheme . '://' . $host . $u;
+    return $scheme . '://' . $host . '/' . ltrim($u, './');
+}
+
 function default_dashboard_settings(){
     return [
         'density' => 'normal',
         'default_tab' => 'gateways',
         'sort_mode' => 'manual',
+        'group_mode' => 'none',
+        'refresh_interval' => 'normal',
         'metrics' => [
             'cpu' => true,
             'ram' => true,
@@ -119,6 +542,14 @@ function normalize_dashboard_settings($input){
     $sortMode = trim((string)($input['sort_mode'] ?? ''));
     if(in_array($sortMode, ['manual','status_name','name_asc','last_seen_desc'], true)){
         $base['sort_mode'] = $sortMode;
+    }
+    $groupMode = trim((string)($input['group_mode'] ?? ''));
+    if(in_array($groupMode, ['none','role','site'], true)){
+        $base['group_mode'] = $groupMode;
+    }
+    $refreshInterval = trim((string)($input['refresh_interval'] ?? ''));
+    if(in_array($refreshInterval, ['fast','normal','slow'], true)){
+        $base['refresh_interval'] = $refreshInterval;
     }
     if(isset($input['metrics']) && is_array($input['metrics'])){
         foreach(array_keys($base['metrics']) as $k){
@@ -434,6 +865,7 @@ function default_admin_user(){
         'sources' => [],
         'source_status' => [],
         'preferences' => default_user_preferences(),
+        'subscription' => default_subscription_state(),
         'created_at' => $now,
         'updated_at' => $now
     ];
@@ -458,6 +890,11 @@ function bootstrap_users_store($usersFile, $legacyAuthFile, $envUrl, $envToken){
             $normalizedPrefs = normalize_user_preferences($store['users'][$uname]['preferences'] ?? null);
             if(json_encode($normalizedPrefs) !== json_encode($store['users'][$uname]['preferences'] ?? null)){
                 $store['users'][$uname]['preferences'] = $normalizedPrefs;
+                $didMutate = true;
+            }
+            $normalizedSub = normalize_subscription_state($store['users'][$uname]['subscription'] ?? null);
+            if(json_encode($normalizedSub) !== json_encode($store['users'][$uname]['subscription'] ?? null)){
+                $store['users'][$uname]['subscription'] = $normalizedSub;
                 $didMutate = true;
             }
             // One-time migration path: legacy single token -> first source using server UISP URL.
@@ -516,6 +953,7 @@ function bootstrap_users_store($usersFile, $legacyAuthFile, $envUrl, $envToken){
             'sources' => $migratedSources,
             'source_status' => [],
             'preferences' => default_user_preferences(),
+            'subscription' => default_subscription_state(),
             'created_at' => (string)($legacy['created_at'] ?? $legacy['updated_at'] ?? $now),
             'updated_at' => (string)($legacy['updated_at'] ?? $now)
         ];
@@ -554,6 +992,144 @@ function get_session_user($store){
 // Simple users store with legacy auth migration from auth.json.
 $USERS_STORE = bootstrap_users_store($USERS_FILE, $AUTH_FILE, $UISP_URL, $UISP_TOKEN);
 
+// Stripe webhook (no session auth; signature-verified).
+if(isset($_GET['webhook']) && $_GET['webhook']==='stripe' && $_SERVER['REQUEST_METHOD']==='POST'){
+    header('Content-Type: application/json');
+    if($NOCWALL_BILLING_MODE !== 'stripe'){
+        http_response_code(503);
+        echo json_encode(['ok'=>0,'error'=>'stripe_mode_disabled']);
+        exit;
+    }
+    if($NOCWALL_STRIPE_WEBHOOK_SECRET === ''){
+        http_response_code(500);
+        echo json_encode(['ok'=>0,'error'=>'stripe_webhook_secret_missing']);
+        exit;
+    }
+    if(!stripe_sdk_is_available()){
+        http_response_code(500);
+        echo json_encode(['ok'=>0,'error'=>'stripe_sdk_missing']);
+        exit;
+    }
+
+    $payload = file_get_contents('php://input');
+    if(!is_string($payload)) $payload = '';
+    $sigHeader = (string)($_SERVER['HTTP_STRIPE_SIGNATURE'] ?? '');
+    $parseErr = '';
+    $event = stripe_parse_webhook_event($payload, $sigHeader, $NOCWALL_STRIPE_WEBHOOK_SECRET, $parseErr);
+    if(!is_array($event)){
+        http_response_code(($parseErr === 'invalid_signature') ? 400 : 422);
+        echo json_encode(['ok'=>0,'error'=>($parseErr !== '' ? $parseErr : 'invalid_payload')]);
+        exit;
+    }
+
+    $type = trim((string)($event['type'] ?? ''));
+    $obj = (is_array($event['data'] ?? null) && is_array($event['data']['object'] ?? null))
+        ? $event['data']['object']
+        : [];
+    $handled = false;
+    $sessionUser = '';
+
+    if($type === 'checkout.session.completed'){
+        $customerId = trim((string)($obj['customer'] ?? ''));
+        $subscriptionId = trim((string)($obj['subscription'] ?? ''));
+        $metaUser = normalize_username((string)($obj['metadata']['username'] ?? ''));
+        $clientRef = normalize_username((string)($obj['client_reference_id'] ?? ''));
+        $sessionUser = find_username_by_stripe_refs($USERS_STORE, $customerId, $subscriptionId, ($metaUser !== '' ? $metaUser : $clientRef));
+
+        if($sessionUser !== ''){
+            $subData = [
+                'status' => 'active',
+                'customer_id' => $customerId,
+                'subscription_id' => $subscriptionId,
+                'cancel_at_period_end' => false
+            ];
+            $stripeSub = stripe_fetch_subscription($NOCWALL_STRIPE_SECRET_KEY, $subscriptionId);
+            if(is_array($stripeSub)){
+                $subData['status'] = (string)($stripeSub['status'] ?? 'active');
+                $subData['current_period_start'] = (int)($stripeSub['current_period_start'] ?? 0);
+                $subData['current_period_end'] = (int)($stripeSub['current_period_end'] ?? 0);
+                $subData['cancel_at_period_end'] = !empty($stripeSub['cancel_at_period_end']);
+            } else {
+                $subData['current_period_start'] = time();
+                $subData['current_period_end'] = time() + (30 * 24 * 3600);
+            }
+            $handled = apply_stripe_subscription_state($USERS_STORE, $sessionUser, $subData);
+        }
+    } elseif($type === 'customer.subscription.created' || $type === 'customer.subscription.updated'){
+        $customerId = trim((string)($obj['customer'] ?? ''));
+        $subscriptionId = trim((string)($obj['id'] ?? ''));
+        $metaUser = normalize_username((string)($obj['metadata']['username'] ?? ''));
+        $sessionUser = find_username_by_stripe_refs($USERS_STORE, $customerId, $subscriptionId, $metaUser);
+        if($sessionUser !== ''){
+            $handled = apply_stripe_subscription_state($USERS_STORE, $sessionUser, [
+                'status' => (string)($obj['status'] ?? ''),
+                'customer_id' => $customerId,
+                'subscription_id' => $subscriptionId,
+                'current_period_start' => (int)($obj['current_period_start'] ?? 0),
+                'current_period_end' => (int)($obj['current_period_end'] ?? 0),
+                'cancel_at_period_end' => !empty($obj['cancel_at_period_end'])
+            ]);
+        }
+    } elseif($type === 'customer.subscription.deleted'){
+        $customerId = trim((string)($obj['customer'] ?? ''));
+        $subscriptionId = trim((string)($obj['id'] ?? ''));
+        $metaUser = normalize_username((string)($obj['metadata']['username'] ?? ''));
+        $sessionUser = find_username_by_stripe_refs($USERS_STORE, $customerId, $subscriptionId, $metaUser);
+        if($sessionUser !== ''){
+            $handled = apply_stripe_subscription_state($USERS_STORE, $sessionUser, [
+                'status' => 'canceled',
+                'customer_id' => $customerId,
+                'subscription_id' => $subscriptionId,
+                'current_period_start' => (int)($obj['current_period_start'] ?? 0),
+                'current_period_end' => (int)($obj['current_period_end'] ?? 0),
+                'cancel_at_period_end' => true
+            ]);
+        }
+    } elseif($type === 'invoice.payment_failed'){
+        $customerId = trim((string)($obj['customer'] ?? ''));
+        $subscriptionId = trim((string)($obj['subscription'] ?? ''));
+        $sessionUser = find_username_by_stripe_refs($USERS_STORE, $customerId, $subscriptionId, '');
+        if($sessionUser !== ''){
+            $handled = apply_stripe_subscription_state($USERS_STORE, $sessionUser, [
+                'status' => 'past_due',
+                'customer_id' => $customerId,
+                'subscription_id' => $subscriptionId
+            ]);
+        }
+    } elseif($type === 'invoice.paid'){
+        $customerId = trim((string)($obj['customer'] ?? ''));
+        $subscriptionId = trim((string)($obj['subscription'] ?? ''));
+        $sessionUser = find_username_by_stripe_refs($USERS_STORE, $customerId, $subscriptionId, '');
+        if($sessionUser !== ''){
+            $subData = [
+                'status' => 'active',
+                'customer_id' => $customerId,
+                'subscription_id' => $subscriptionId
+            ];
+            $stripeSub = stripe_fetch_subscription($NOCWALL_STRIPE_SECRET_KEY, $subscriptionId);
+            if(is_array($stripeSub)){
+                $subData['status'] = (string)($stripeSub['status'] ?? 'active');
+                $subData['current_period_start'] = (int)($stripeSub['current_period_start'] ?? 0);
+                $subData['current_period_end'] = (int)($stripeSub['current_period_end'] ?? 0);
+                $subData['cancel_at_period_end'] = !empty($stripeSub['cancel_at_period_end']);
+            }
+            $handled = apply_stripe_subscription_state($USERS_STORE, $sessionUser, $subData);
+        }
+    }
+
+    if($handled){
+        save_users_store($USERS_FILE, $USERS_STORE);
+    }
+
+    echo json_encode([
+        'ok' => 1,
+        'received' => true,
+        'type' => $type,
+        'handled' => $handled ? 1 : 0
+    ]);
+    exit;
+}
+
 // Handle login/register/logout actions early
 if(isset($_GET['action']) && $_GET['action']==='register' && $_SERVER['REQUEST_METHOD']==='POST'){
     $u = normalize_username($_POST['username'] ?? '');
@@ -587,6 +1163,7 @@ if(isset($_GET['action']) && $_GET['action']==='register' && $_SERVER['REQUEST_M
         'sources' => [],
         'source_status' => [],
         'preferences' => default_user_preferences(),
+        'subscription' => default_subscription_state(),
         'created_at' => $now,
         'updated_at' => $now
     ];
@@ -626,6 +1203,8 @@ if(isset($_SESSION['auth_ok']) && empty($_SESSION['auth_user'])){
     }
 }
 
+$NOCWALL_FEATURE_FLAGS = build_feature_flags_for_user(get_session_user($USERS_STORE));
+
 // For AJAX endpoints, require login except for a health or login check
 function require_login_for_ajax(){
     global $USERS_STORE;
@@ -645,8 +1224,11 @@ function require_login_for_ajax(){
 }
 
 function require_pro_feature($featureKey){
-    global $NOCWALL_FEATURE_FLAGS;
-    $enabled = !empty($NOCWALL_FEATURE_FLAGS[$featureKey]);
+    global $USERS_STORE, $NOCWALL_FEATURE_FLAGS;
+    $user = get_session_user($USERS_STORE);
+    $flags = build_feature_flags_for_user($user);
+    $NOCWALL_FEATURE_FLAGS = $flags;
+    $enabled = !empty($flags[$featureKey]);
     if($enabled){
         return;
     }
@@ -655,7 +1237,7 @@ function require_pro_feature($featureKey){
     echo json_encode([
         'ok' => 0,
         'error' => 'pro_feature_required',
-        'message' => 'This feature is available in NOCWALL PRO.',
+        'message' => 'This feature requires an active NOCWALL PRO subscription. Upgrade in Account Settings.',
         'feature' => (string)$featureKey
     ]);
     exit;
@@ -832,6 +1414,7 @@ if(isset($_GET['ajax'])){
     header('Pragma: no-cache');
 
     if($_GET['ajax']==='mobile_config'){
+        require_pro_feature('mobile');
         if(count($effectiveSources) === 0){
             http_response_code(503);
             echo json_encode([
@@ -845,6 +1428,20 @@ if(isset($_GET['ajax'])){
             'uisp_base_url' => $primary['url'],
             'uisp_token' => $primary['token'],
             'sources' => $effectiveSources,
+            'issued_at' => date('c')
+        ]);
+        exit;
+    }
+
+    if($_GET['ajax']==='agent_config'){
+        require_pro_feature('agents');
+        echo json_encode([
+            'ok' => 1,
+            'api_base_url' => $NOCWALL_API_URL,
+            'auth_token' => $NOCWALL_API_TOKEN,
+            'auth_header' => ($NOCWALL_API_TOKEN !== '' ? ('Bearer ' . $NOCWALL_API_TOKEN) : ''),
+            'agents_register_endpoint' => rtrim($NOCWALL_API_URL, '/') . '/agents/register',
+            'telemetry_ingest_endpoint' => rtrim($NOCWALL_API_URL, '/') . '/telemetry/ingest',
             'issued_at' => date('c')
         ]);
         exit;
@@ -1868,6 +2465,254 @@ if(isset($_GET['ajax'])){
         exit;
     }
 
+    if($_GET['ajax']==='billing_status'){
+        $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
+        $user = get_user_by_username($USERS_STORE, $sessionUser);
+        if(!$user){
+            echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
+        }
+        $subscription = get_user_subscription($user);
+        $flags = build_feature_flags_for_user($user);
+        echo json_encode([
+            'ok' => 1,
+            'username' => $sessionUser,
+            'billing_mode' => $NOCWALL_BILLING_MODE,
+            'self_activate_enabled' => !empty($NOCWALL_BILLING_SELF_ACTIVATE),
+            'stripe_configured' => ($NOCWALL_STRIPE_SECRET_KEY !== '' && $NOCWALL_STRIPE_PRICE_ID !== '' && $NOCWALL_STRIPE_WEBHOOK_SECRET !== ''),
+            'stripe_customer_linked' => (trim((string)($subscription['customer_id'] ?? '')) !== ''),
+            'price_monthly_usd' => $NOCWALL_PRO_MONTHLY_USD,
+            'pro_enabled' => !empty($flags['pro_features']),
+            'features' => $flags,
+            'subscription' => subscription_public_view($subscription)
+        ]);
+        exit;
+    }
+
+    if($_GET['ajax']==='billing_subscribe' && $_SERVER['REQUEST_METHOD']==='POST'){
+        $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
+        $user = get_user_by_username($USERS_STORE, $sessionUser);
+        if(!$user){
+            echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
+        }
+
+        if($NOCWALL_BILLING_MODE === 'off'){
+            http_response_code(403);
+            echo json_encode([
+                'ok' => 0,
+                'error' => 'billing_unavailable',
+                'message' => 'Billing is currently disabled on this server.'
+            ]);
+            exit;
+        }
+
+        if($NOCWALL_BILLING_MODE === 'demo'){
+            $sub = activate_user_pro_subscription($USERS_STORE, $sessionUser, 'demo');
+            save_users_store($USERS_FILE, $USERS_STORE);
+            $flags = build_feature_flags_for_user($USERS_STORE['users'][$sessionUser]);
+            $NOCWALL_FEATURE_FLAGS = $flags;
+            echo json_encode([
+                'ok' => 1,
+                'provider' => 'demo',
+                'message' => 'Demo Pro subscription activated.',
+                'pro_enabled' => !empty($flags['pro_features']),
+                'features' => $flags,
+                'subscription' => subscription_public_view($sub)
+            ]);
+            exit;
+        }
+
+        if($NOCWALL_BILLING_MODE === 'stripe'){
+            if($NOCWALL_STRIPE_SECRET_KEY === '' || $NOCWALL_STRIPE_PRICE_ID === ''){
+                http_response_code(500);
+                echo json_encode([
+                    'ok' => 0,
+                    'error' => 'stripe_not_configured',
+                    'message' => 'Stripe billing keys are missing on server.'
+                ]);
+                exit;
+            }
+            if(!stripe_sdk_is_available()){
+                http_response_code(500);
+                echo json_encode([
+                    'ok' => 0,
+                    'error' => 'stripe_sdk_missing',
+                    'message' => 'Stripe SDK is not installed on server.'
+                ]);
+                exit;
+            }
+
+            $successUrl = to_absolute_url($NOCWALL_STRIPE_SUCCESS_URL);
+            $cancelUrl = to_absolute_url($NOCWALL_STRIPE_CANCEL_URL);
+            $err = '';
+            $parsed = stripe_create_checkout_session($NOCWALL_STRIPE_SECRET_KEY, [
+                'mode' => 'subscription',
+                'success_url' => $successUrl,
+                'cancel_url' => $cancelUrl,
+                'client_reference_id' => $sessionUser,
+                'metadata' => ['username' => $sessionUser],
+                'subscription_data' => ['metadata' => ['username' => $sessionUser]],
+                'line_items' => [[
+                    'price' => $NOCWALL_STRIPE_PRICE_ID,
+                    'quantity' => 1
+                ]]
+            ], $err);
+            if(!is_array($parsed) || empty($parsed['url'])){
+                http_response_code(502);
+                echo json_encode([
+                    'ok' => 0,
+                    'error' => 'stripe_checkout_failed',
+                    'message' => 'Unable to create Stripe checkout session.',
+                    'details' => ($err !== '' ? $err : 'sdk_error')
+                ]);
+                exit;
+            }
+
+            echo json_encode([
+                'ok' => 1,
+                'provider' => 'stripe',
+                'checkout_url' => (string)$parsed['url'],
+                'session_id' => (string)($parsed['id'] ?? ''),
+                'message' => 'Stripe checkout session created. Complete payment to activate Pro.'
+            ]);
+            exit;
+        }
+    }
+
+    if($_GET['ajax']==='billing_portal' && $_SERVER['REQUEST_METHOD']==='POST'){
+        $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
+        $user = get_user_by_username($USERS_STORE, $sessionUser);
+        if(!$user){
+            echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
+        }
+        if($NOCWALL_BILLING_MODE !== 'stripe'){
+            http_response_code(400);
+            echo json_encode([
+                'ok' => 0,
+                'error' => 'portal_requires_stripe_mode',
+                'message' => 'Customer portal is only available in Stripe billing mode.'
+            ]);
+            exit;
+        }
+        if($NOCWALL_STRIPE_SECRET_KEY === ''){
+            http_response_code(500);
+            echo json_encode([
+                'ok' => 0,
+                'error' => 'stripe_not_configured',
+                'message' => 'Stripe secret key is missing on server.'
+            ]);
+            exit;
+        }
+        if(!stripe_sdk_is_available()){
+            http_response_code(500);
+            echo json_encode([
+                'ok' => 0,
+                'error' => 'stripe_sdk_missing',
+                'message' => 'Stripe SDK is not installed on server.'
+            ]);
+            exit;
+        }
+        $sub = get_user_subscription($user);
+        $customerId = trim((string)($sub['customer_id'] ?? ''));
+        if($customerId === ''){
+            http_response_code(400);
+            echo json_encode([
+                'ok' => 0,
+                'error' => 'customer_not_found',
+                'message' => 'No Stripe customer is linked to this account yet. Complete checkout first.'
+            ]);
+            exit;
+        }
+        $returnUrl = to_absolute_url($NOCWALL_STRIPE_PORTAL_RETURN_URL);
+        $err = '';
+        $parsed = stripe_create_billing_portal_session($NOCWALL_STRIPE_SECRET_KEY, [
+            'customer' => $customerId,
+            'return_url' => $returnUrl
+        ], $err);
+        if(!is_array($parsed) || empty($parsed['url'])){
+            http_response_code(502);
+            echo json_encode([
+                'ok' => 0,
+                'error' => 'stripe_portal_failed',
+                'message' => 'Unable to create Stripe customer portal session.',
+                'details' => ($err !== '' ? $err : 'sdk_error')
+            ]);
+            exit;
+        }
+
+        echo json_encode([
+            'ok' => 1,
+            'portal_url' => (string)$parsed['url'],
+            'message' => 'Stripe customer portal session created.'
+        ]);
+        exit;
+    }
+
+    if($_GET['ajax']==='billing_cancel' && $_SERVER['REQUEST_METHOD']==='POST'){
+        $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
+        $user = get_user_by_username($USERS_STORE, $sessionUser);
+        if(!$user){
+            echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
+        }
+        $sub = cancel_user_subscription_at_period_end($USERS_STORE, $sessionUser);
+        save_users_store($USERS_FILE, $USERS_STORE);
+        echo json_encode([
+            'ok' => 1,
+            'message' => 'Subscription will cancel at period end.',
+            'subscription' => subscription_public_view($sub)
+        ]);
+        exit;
+    }
+
+    if($_GET['ajax']==='billing_resume' && $_SERVER['REQUEST_METHOD']==='POST'){
+        $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
+        $user = get_user_by_username($USERS_STORE, $sessionUser);
+        if(!$user){
+            echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
+        }
+        $sub = resume_user_subscription($USERS_STORE, $sessionUser);
+        save_users_store($USERS_FILE, $USERS_STORE);
+        echo json_encode([
+            'ok' => 1,
+            'message' => 'Subscription cancellation removed.',
+            'subscription' => subscription_public_view($sub)
+        ]);
+        exit;
+    }
+
+    if($_GET['ajax']==='billing_activate' && $_SERVER['REQUEST_METHOD']==='POST'){
+        $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
+        $user = get_user_by_username($USERS_STORE, $sessionUser);
+        if(!$user){
+            echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
+        }
+        if($NOCWALL_BILLING_MODE === 'off'){
+            http_response_code(403);
+            echo json_encode(['ok'=>0,'error'=>'billing_unavailable']); exit;
+        }
+        if(!$NOCWALL_BILLING_SELF_ACTIVATE){
+            http_response_code(403);
+            echo json_encode([
+                'ok' => 0,
+                'error' => 'self_activate_disabled',
+                'message' => 'Self-activation is disabled. Complete provider billing flow.'
+            ]);
+            exit;
+        }
+        $provider = ($NOCWALL_BILLING_MODE === 'stripe') ? 'manual' : $NOCWALL_BILLING_MODE;
+        $sub = activate_user_pro_subscription($USERS_STORE, $sessionUser, $provider);
+        save_users_store($USERS_FILE, $USERS_STORE);
+        $flags = build_feature_flags_for_user($USERS_STORE['users'][$sessionUser]);
+        $NOCWALL_FEATURE_FLAGS = $flags;
+        echo json_encode([
+            'ok' => 1,
+            'message' => 'Pro subscription activated.',
+            'pro_enabled' => !empty($flags['pro_features']),
+            'features' => $flags,
+            'subscription' => subscription_public_view($sub)
+        ]);
+        exit;
+    }
+
     if($_GET['ajax']==='save_uisp_token' && $_SERVER['REQUEST_METHOD']==='POST'){
         $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
         $user = get_user_by_username($USERS_STORE, $sessionUser);
@@ -2096,6 +2941,10 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
     .error{color:#ff8f8f}
     .row-actions{display:flex;gap:6px;flex-wrap:wrap}
     .small{font-size:12px;color:#aaa}
+    .pill{display:inline-block;padding:3px 8px;border-radius:999px;border:1px solid #3a3a3a;background:#151515;font-size:12px}
+    .pill.good{border-color:#2f7f47;color:#99e2ac}
+    .pill.warn{border-color:#8b6a2a;color:#ffd88e}
+    .pill.bad{border-color:#8a3b3b;color:#ffb5b5}
   </style>
 </head>
 <body>
@@ -2104,6 +2953,31 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
     <button class="secondary" onclick="window.location.href='./';">Back To Dashboard</button>
   </header>
   <main>
+    <section class="card">
+      <h3 style="margin-top:0">Subscription & Licensing</h3>
+      <div id="billingSummary" class="small">Loading subscription status...</div>
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+        <span id="billingPlanPill" class="pill">Plan: CE</span>
+        <span id="billingMobilePill" class="pill">Mobile App: Disabled</span>
+        <span id="billingAgentsPill" class="pill">Local Agents: Disabled</span>
+      </div>
+      <div class="row-actions" style="margin-top:10px">
+        <button id="billingUpgradeBtn" onclick="startSubscription()">Start Monthly Pro</button>
+        <button id="billingActivateBtn" class="secondary" onclick="activateSubscription()" style="display:none">Activate Pro</button>
+        <button id="billingCancelBtn" class="secondary" onclick="cancelSubscription()" style="display:none">Cancel At Period End</button>
+        <button id="billingResumeBtn" class="secondary" onclick="resumeSubscription()" style="display:none">Resume Subscription</button>
+        <button id="billingPortalBtn" class="secondary" onclick="openBillingPortal()" style="display:none">Open Stripe Billing Portal</button>
+        <button id="billingMobileConfigBtn" class="secondary" onclick="loadMobileConfig()" style="display:none">Show Mobile App Config</button>
+        <button id="billingAgentConfigBtn" class="secondary" onclick="loadAgentConfig()" style="display:none">Show Agent Bootstrap Config</button>
+      </div>
+      <div class="small" style="margin-top:10px">
+        Pro unlocks advanced features, phone companion app access, and local agent enrollment.
+      </div>
+      <pre id="mobileConfigPreview" class="small" style="display:none;margin-top:10px;background:#0f0f0f;border:1px solid #2c2c2c;border-radius:8px;padding:10px;white-space:pre-wrap"></pre>
+      <pre id="agentConfigPreview" class="small" style="display:none;margin-top:10px;background:#0f0f0f;border:1px solid #2c2c2c;border-radius:8px;padding:10px;white-space:pre-wrap"></pre>
+      <div id="billingStatus" class="status"></div>
+    </section>
+
     <section class="card">
       <h3 style="margin-top:0">Add UISP Source</h3>
       <div class="grid">
@@ -2151,14 +3025,244 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
   <script>
     let editSourceId = '';
     let cachedSources = [];
+    let billingState = null;
     function setStatus(msg, kind){
       const el = document.getElementById('settingsStatus');
       if(!el) return;
       el.textContent = msg || '';
       el.className = 'status ' + (kind || '');
     }
+    function setBillingStatus(msg, kind){
+      const el = document.getElementById('billingStatus');
+      if(!el) return;
+      el.textContent = msg || '';
+      el.className = 'status ' + (kind || '');
+    }
     function esc(v){
       return String(v ?? '').replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
+    }
+    function billingPillClass(ok){
+      return ok ? 'pill good' : 'pill bad';
+    }
+    async function loadBillingStatus(){
+      const summary = document.getElementById('billingSummary');
+      const planPill = document.getElementById('billingPlanPill');
+      const mobilePill = document.getElementById('billingMobilePill');
+      const agentsPill = document.getElementById('billingAgentsPill');
+      const upgradeBtn = document.getElementById('billingUpgradeBtn');
+      const activateBtn = document.getElementById('billingActivateBtn');
+      const cancelBtn = document.getElementById('billingCancelBtn');
+      const resumeBtn = document.getElementById('billingResumeBtn');
+      const portalBtn = document.getElementById('billingPortalBtn');
+      const mobileCfgBtn = document.getElementById('billingMobileConfigBtn');
+      const agentCfgBtn = document.getElementById('billingAgentConfigBtn');
+      try{
+        const r = await fetch('?ajax=billing_status&t='+Date.now(), { cache:'no-store' });
+        if(r.status === 401){ location.href='./?login=1'; return; }
+        const j = await r.json().catch(()=>null);
+        if(!j || !j.ok){
+          if(summary) summary.textContent = 'Unable to load subscription state.';
+          return;
+        }
+        billingState = j;
+        const sub = j.subscription || {};
+        const status = String(sub.status || 'inactive');
+        const pro = !!j.pro_enabled;
+        const cancelAtPeriodEnd = !!sub.cancel_at_period_end;
+        const periodEnd = String(sub.current_period_end || '').trim();
+        const periodTxt = periodEnd ? (' Current period ends: ' + periodEnd + '.') : '';
+        const stripeNote = (String(j.billing_mode) === 'stripe' && !j.stripe_configured) ? ' Stripe is not fully configured on server.' : '';
+        if(summary){
+          summary.textContent = `Mode: ${j.billing_mode}. Status: ${status}. ${pro ? 'Pro is active.' : 'Pro is not active.'}${periodTxt}${stripeNote}`;
+        }
+        if(planPill){
+          planPill.className = billingPillClass(pro);
+          planPill.textContent = pro ? 'Plan: PRO Monthly' : 'Plan: CE Free';
+        }
+        if(mobilePill){
+          const enabled = !!sub.mobile_enabled;
+          mobilePill.className = billingPillClass(enabled);
+          mobilePill.textContent = `Mobile App: ${enabled ? 'Enabled' : 'Disabled'}`;
+        }
+        if(agentsPill){
+          const enabled = !!sub.agents_enabled;
+          agentsPill.className = billingPillClass(enabled);
+          agentsPill.textContent = `Local Agents: ${enabled ? 'Enabled' : 'Disabled'}`;
+        }
+        if(upgradeBtn){
+          upgradeBtn.textContent = `Start Monthly Pro ($${j.price_monthly_usd}/mo)`;
+          const billingEnabled = String(j.billing_mode || '') !== 'off';
+          upgradeBtn.style.display = (!pro && billingEnabled) ? '' : 'none';
+        }
+        if(activateBtn){
+          const canActivate = !!j.self_activate_enabled;
+          activateBtn.style.display = (!pro && canActivate) ? '' : 'none';
+        }
+        if(cancelBtn){
+          cancelBtn.style.display = (pro && !cancelAtPeriodEnd) ? '' : 'none';
+        }
+        if(resumeBtn){
+          resumeBtn.style.display = (pro && cancelAtPeriodEnd) ? '' : 'none';
+        }
+        if(portalBtn){
+          const portalAllowed = (String(j.billing_mode) === 'stripe') && !!j.stripe_customer_linked;
+          portalBtn.style.display = portalAllowed ? '' : 'none';
+        }
+        if(agentCfgBtn){
+          agentCfgBtn.style.display = pro ? '' : 'none';
+        }
+        if(mobileCfgBtn){
+          mobileCfgBtn.style.display = pro ? '' : 'none';
+        }
+      }catch(_){
+        if(summary) summary.textContent = 'Subscription status request failed.';
+      }
+    }
+    async function startSubscription(){
+      setBillingStatus('Starting subscription...');
+      try{
+        const r = await fetch('?ajax=billing_subscribe', { method:'POST' });
+        if(r.status === 401){ location.href='./?login=1'; return; }
+        const j = await r.json().catch(()=>null);
+        if(!j || !j.ok){
+          setBillingStatus('Subscription failed: ' + ((j && (j.message || j.error)) || 'unknown'), 'error');
+          return;
+        }
+        if(j.checkout_url){
+          setBillingStatus('Redirecting to checkout...');
+          window.location.href = j.checkout_url;
+          return;
+        }
+        setBillingStatus(j.message || 'Subscription updated.');
+        await loadBillingStatus();
+      }catch(_){
+        setBillingStatus('Subscription request failed.', 'error');
+      }
+    }
+    async function activateSubscription(){
+      setBillingStatus('Activating subscription...');
+      try{
+        const r = await fetch('?ajax=billing_activate', { method:'POST' });
+        if(r.status === 401){ location.href='./?login=1'; return; }
+        const j = await r.json().catch(()=>null);
+        if(!j || !j.ok){
+          setBillingStatus('Activation failed: ' + ((j && (j.message || j.error)) || 'unknown'), 'error');
+          return;
+        }
+        setBillingStatus(j.message || 'Subscription activated.');
+        await loadBillingStatus();
+      }catch(_){
+        setBillingStatus('Activation request failed.', 'error');
+      }
+    }
+    async function cancelSubscription(){
+      if(!confirm('Cancel Pro at period end?')) return;
+      setBillingStatus('Canceling subscription...');
+      try{
+        const r = await fetch('?ajax=billing_cancel', { method:'POST' });
+        if(r.status === 401){ location.href='./?login=1'; return; }
+        const j = await r.json().catch(()=>null);
+        if(!j || !j.ok){
+          setBillingStatus('Cancel failed: ' + ((j && (j.message || j.error)) || 'unknown'), 'error');
+          return;
+        }
+        setBillingStatus(j.message || 'Subscription updated.');
+        await loadBillingStatus();
+      }catch(_){
+        setBillingStatus('Cancel request failed.', 'error');
+      }
+    }
+    async function resumeSubscription(){
+      setBillingStatus('Resuming subscription...');
+      try{
+        const r = await fetch('?ajax=billing_resume', { method:'POST' });
+        if(r.status === 401){ location.href='./?login=1'; return; }
+        const j = await r.json().catch(()=>null);
+        if(!j || !j.ok){
+          setBillingStatus('Resume failed: ' + ((j && (j.message || j.error)) || 'unknown'), 'error');
+          return;
+        }
+        setBillingStatus(j.message || 'Subscription resumed.');
+        await loadBillingStatus();
+      }catch(_){
+        setBillingStatus('Resume request failed.', 'error');
+      }
+    }
+    async function openBillingPortal(){
+      setBillingStatus('Opening Stripe billing portal...');
+      try{
+        const r = await fetch('?ajax=billing_portal', { method:'POST' });
+        if(r.status === 401){ location.href='./?login=1'; return; }
+        const j = await r.json().catch(()=>null);
+        if(!j || !j.ok || !j.portal_url){
+          setBillingStatus('Unable to open portal: ' + ((j && (j.message || j.error)) || 'unknown'), 'error');
+          return;
+        }
+        window.location.href = j.portal_url;
+      }catch(_){
+        setBillingStatus('Portal request failed.', 'error');
+      }
+    }
+    async function loadAgentConfig(){
+      const preview = document.getElementById('agentConfigPreview');
+      if(preview){
+        preview.style.display = 'none';
+        preview.textContent = '';
+      }
+      setBillingStatus('Loading agent bootstrap config...');
+      try{
+        const r = await fetch('?ajax=agent_config&t='+Date.now(), { cache:'no-store' });
+        if(r.status === 401){ location.href='./?login=1'; return; }
+        const j = await r.json().catch(()=>null);
+        if(!j || !j.ok){
+          setBillingStatus('Unable to load agent config: ' + ((j && (j.message || j.error)) || 'unknown'), 'error');
+          return;
+        }
+        const lines = [
+          '# NOCWALL Agent Bootstrap',
+          `NOCWALL_API_BASE_URL=${j.api_base_url || ''}`,
+          `NOCWALL_API_TOKEN=${j.auth_token || ''}`,
+          `NOCWALL_AGENTS_REGISTER=${j.agents_register_endpoint || ''}`,
+          `NOCWALL_TELEMETRY_INGEST=${j.telemetry_ingest_endpoint || ''}`
+        ];
+        if(preview){
+          preview.textContent = lines.join('\n');
+          preview.style.display = 'block';
+        }
+        setBillingStatus('Agent bootstrap config loaded.');
+      }catch(_){
+        setBillingStatus('Agent config request failed.', 'error');
+      }
+    }
+    async function loadMobileConfig(){
+      const preview = document.getElementById('mobileConfigPreview');
+      if(preview){
+        preview.style.display = 'none';
+        preview.textContent = '';
+      }
+      setBillingStatus('Loading mobile config...');
+      try{
+        const r = await fetch('?ajax=mobile_config&t='+Date.now(), { cache:'no-store' });
+        if(r.status === 401){ location.href='./?login=1'; return; }
+        const j = await r.json().catch(()=>null);
+        if(!j || j.error){
+          setBillingStatus('Unable to load mobile config: ' + ((j && (j.message || j.error)) || 'unknown'), 'error');
+          return;
+        }
+        const lines = [
+          '# NOCWALL Mobile Config',
+          `UISP_BASE_URL=${j.uisp_base_url || ''}`,
+          `UISP_TOKEN=${j.uisp_token || ''}`,
+          `SOURCES=${Array.isArray(j.sources) ? j.sources.length : 0}`
+        ];
+        if(preview){
+          preview.textContent = lines.join('\n');
+          preview.style.display = 'block';
+        }
+        setBillingStatus('Mobile config loaded.');
+      }catch(_){
+        setBillingStatus('Mobile config request failed.', 'error');
+      }
     }
     function cancelEdit(){
       editSourceId = '';
@@ -2264,6 +3368,7 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
       }
     }
     loadSources();
+    loadBillingStatus();
   </script>
 </body>
 </html>
@@ -2338,17 +3443,26 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
 <body>
 <header>
   <?php $AUTH_USER = htmlspecialchars((string)($_SESSION['auth_user'] ?? ''), ENT_QUOTES); ?>
+  <?php
+    $AUTH_SESSION_USER = get_session_user($USERS_STORE);
+    $AUTH_PLAN = user_has_pro_entitlement($AUTH_SESSION_USER) ? 'PRO' : 'CE';
+  ?>
   <div class="brand">
     <span class="brand-title">NOCWALL-CE<?=!empty($NOCWALL_FEATURE_FLAGS['strict_ce']) ? ' <small style="font-size:12px;color:#f5b87c;">(Strict CE Mode)</small>' : ''?></span>
     <span id="overallSummary"></span>
   </div>
   <div class="header-actions">
-    <span class="header-user">User: <?=$AUTH_USER?></span>
+    <span class="header-user">User: <?=$AUTH_USER?> (<?=$AUTH_PLAN?>)</span>
     <?php if($SHOW_TLS_UI): ?>
       <button onclick="openTLS()">TLS/Certs</button>
     <?php endif; ?>
+    <?php if($AUTH_PLAN !== 'PRO'): ?>
+      <button onclick="manageUispSources()">Upgrade</button>
+    <?php endif; ?>
     <button onclick="manageUispSources()">Account Settings</button>
     <button id="enableSoundBtn" class="btn-accent" onclick="enableSound()">Enable Sound</button>
+    <button type="button" onclick="openShortcuts()">Shortcuts</button>
+    <button type="button" onclick="toggleKioskMode()">Kiosk</button>
     <?php if(!empty($NOCWALL_FEATURE_FLAGS['ack'])): ?>
       <button onclick="clearAll()">Clear All Acks</button>
     <?php endif; ?>
@@ -2390,9 +3504,29 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
       <option value="name_asc">Name (A-Z)</option>
       <option value="last_seen_desc">Last Seen (Newest)</option>
     </select>
+    <label for="groupModeSelect" class="view-controls-label">Group</label>
+    <select id="groupModeSelect">
+      <option value="none">None</option>
+      <option value="role">Role</option>
+      <option value="site">Site</option>
+    </select>
   </div>
   <div id="viewControlsSummary" class="view-controls-summary"></div>
 </section>
+<section id="dataHealthBanner" class="data-health-banner" style="display:none;" aria-live="polite"></section>
+<details class="legend-panel">
+  <summary>Dashboard Legend</summary>
+  <div class="legend-grid">
+    <div><span class="badge good">Good</span> healthy state / nominal metrics</div>
+    <div><span class="badge warn">Warn</span> elevated metric or acknowledged issue</div>
+    <div><span class="badge bad">Bad</span> offline/error/critical threshold</div>
+    <div><span class="legend-chip legend-online">ONLINE</span> device currently reachable</div>
+    <div><span class="legend-chip legend-offline">OFFLINE</span> device currently unreachable</div>
+    <div><span class="legend-chip legend-change-up">RECENT ONLINE</span> recovered recently</div>
+    <div><span class="legend-chip legend-change-down">RECENT OFFLINE</span> changed offline recently</div>
+    <div><span class="legend-chip legend-siren">SIREN ON</span> siren enabled for tab/device</div>
+  </div>
+</details>
 <?php if(!empty($NOCWALL_FEATURE_FLAGS['display_controls'])): ?>
   <section class="display-controls" aria-label="Dashboard display controls">
     <div class="display-controls-title">Display Controls</div>
@@ -2401,6 +3535,12 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
       <select id="settingDensity">
         <option value="normal">Normal</option>
         <option value="compact">Compact</option>
+      </select>
+      <label for="settingRefreshInterval">Refresh Interval</label>
+      <select id="settingRefreshInterval">
+        <option value="fast">Fast (2s)</option>
+        <option value="normal">Normal (5s)</option>
+        <option value="slow">Slow (10s)</option>
       </select>
       <button id="settingReset" type="button" class="btn-outline">Reset</button>
     </div>
@@ -2551,6 +3691,22 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
       </div>
       <div id="setupWizardStatus" class="wizard-status"></div>
     </form>
+  </div>
+</div>
+
+<div id="shortcutsModal" class="modal" style="display:none;" onclick="if(event.target===this) closeShortcuts();">
+  <div class="modal-content shortcuts-modal">
+    <button class="modal-close" onclick="closeShortcuts()" aria-label="Close">&times;</button>
+    <h3 style="margin-top:0;">Keyboard Shortcuts</h3>
+    <div class="shortcuts-grid">
+      <div><kbd>?</kbd> Open shortcuts help</div>
+      <div><kbd>k</kbd> Toggle kiosk mode</div>
+      <div><kbd>g</kbd> Open Gateways tab</div>
+      <div><kbd>a</kbd> Open APs tab</div>
+      <div><kbd>r</kbd> Open Routers/Switches tab</div>
+      <div><kbd>/</kbd> Focus search</div>
+      <div><kbd>Escape</kbd> Close dialogs</div>
+    </div>
   </div>
 </div>
 

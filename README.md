@@ -62,6 +62,7 @@ PRO target:
 
 - Legacy dashboard (PHP + JS) with:
   - account creation + login (demo/local JSON-backed user store)
+  - per-account subscription state and license-aware feature gating (CE vs PRO)
   - live device cards
   - flashing offline behavior
   - siren audio alerts
@@ -79,6 +80,11 @@ PRO target:
   - inventory/drift badges on cards (from API inventory overview)
   - per-card Inventory modal with identity details, interface summary, neighbor links, lifecycle score, and drift snapshots
   - CE strict-profile defaults (minimal card contract) with PRO-only feature gating
+  - account subscription controls in `Account Settings`:
+    - start monthly PRO subscription
+    - cancel/resume subscription
+    - mobile and local-agent entitlement indicators
+    - agent bootstrap config preview for licensed users
 - Go API preview with in-memory/file-backed store:
   - `GET /health`
   - `POST /auth/login`
@@ -119,6 +125,7 @@ PRO target:
 - True hosted multi-tenant SaaS control plane.
 - Production auth/session model (JWT/refresh/RBAC/SSO).
 - Production persistence for API services (currently demo-level store).
+- Production-grade payment processing lifecycle (Stripe webhooks, retries, dispute handling, dunning automation).
 - Agent PKI/enrollment, secure long-lived channels, and fleet lifecycle management.
 - Correlation/dedup/suppression/escalation and enterprise routing.
 - Production mobile backend workflows and push delivery orchestration.
@@ -227,6 +234,30 @@ Feature profile vars:
 - `NOCWALL_PRO_FEATURES` (optional explicit `true/false` override)
 - `NOCWALL_STRICT_CE` (optional explicit `true/false` override)
 
+Billing + licensing vars:
+- `NOCWALL_BILLING_MODE` (`stripe`, `demo`, `off`)
+- `NOCWALL_BILLING_SELF_ACTIVATE` (`true/false`, should be `false` for Stripe production)
+- `NOCWALL_PRO_MONTHLY_USD` (display price for monthly PRO)
+- `NOCWALL_STRIPE_SECRET_KEY` (required for Stripe mode)
+- `NOCWALL_STRIPE_WEBHOOK_SECRET` (required for Stripe webhook signature validation)
+- `NOCWALL_STRIPE_PRICE_ID` (required for Stripe mode)
+- `NOCWALL_STRIPE_SUCCESS_URL` (optional, defaults to settings page callback)
+- `NOCWALL_STRIPE_CANCEL_URL` (optional, defaults to settings page callback)
+- `NOCWALL_STRIPE_PORTAL_RETURN_URL` (optional, defaults to settings page callback)
+
+Stripe integration implementation:
+- Uses official `stripe/stripe-php` (Composer dependency) for checkout, portal sessions, webhook signature verification, and subscription retrieval.
+
+Stripe webhook endpoint:
+- `POST /?webhook=stripe`
+- Configure this endpoint in Stripe and subscribe to:
+  - `checkout.session.completed`
+  - `customer.subscription.created`
+  - `customer.subscription.updated`
+  - `customer.subscription.deleted`
+  - `invoice.payment_failed`
+  - `invoice.paid`
+
 CE release gate:
 
 ```bash
@@ -267,6 +298,24 @@ List configured UISP sources:
 
 ```bash
 curl -c cookies.txt -b cookies.txt "http://localhost/?ajax=sources_list"
+```
+
+Check subscription + license status:
+
+```bash
+curl -c cookies.txt -b cookies.txt "http://localhost/?ajax=billing_status"
+```
+
+Activate monthly PRO subscription (demo mode):
+
+```bash
+curl -c cookies.txt -b cookies.txt -X POST "http://localhost/?ajax=billing_subscribe"
+```
+
+Stripe CLI webhook test (local):
+
+```bash
+stripe listen --forward-to "http://localhost/?webhook=stripe"
 ```
 
 ## API Smoke Tests

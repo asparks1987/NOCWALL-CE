@@ -16,6 +16,8 @@ Legend:
 - [x] Per-account UISP source storage
 - [x] Device cards, alert siren, ack/clear/simulate
 - [x] Per-account dashboard preference sync
+- [x] Per-account subscription licensing with CE/PRO feature entitlement checks
+- [x] Stripe billing wired through official `stripe-php` SDK (checkout, portal, webhook verify)
 - [x] Dockerized local stack
 - [ ] Planned product split change: move non-minimal CE capabilities behind PRO gates.
 
@@ -32,16 +34,16 @@ They avoid PRO-only domains (team workflows, correlation, automation, enterprise
 6. `[x]` CEF06 `[CE]` Global search box for device name/MAC/hostname
 7. `[x]` CEF07 `[CE]` Quick filters (all/offline/online by tab)
 8. `[x]` CEF08 `[CE]` Sort controls (status, name, last-seen)
-9. `[ ]` CEF09 `[CE]` Group-by mode (role/site) for card layout
+9. `[x]` CEF09 `[CE]` Group-by mode (role/site) for card layout
 10. `[x]` CEF10 `[CE]` Saved default tab per account
-11. `[ ]` CEF11 `[CE]` Saved refresh interval preset per account
-12. `[ ]` CEF12 `[CE]` Kiosk mode hotkey + URL flag (hide controls/chrome)
-13. `[ ]` CEF13 `[CE]` Keyboard shortcuts overlay (`?` help modal)
-14. `[ ]` CEF14 `[CE]` Dashboard legend panel (status colors/icons meanings)
-15. `[ ]` CEF15 `[CE]` Card status-change highlight (recently changed online/offline)
-16. `[ ]` CEF16 `[CE]` "Last updated" stale-data warning banner
-17. `[ ]` CEF17 `[CE]` API degraded banner with retry backoff indicator
-18. `[ ]` CEF18 `[CE]` Read-only fallback rendering from last known cache snapshot
+11. `[x]` CEF11 `[CE]` Saved refresh interval preset per account
+12. `[x]` CEF12 `[CE]` Kiosk mode hotkey + URL flag (hide controls/chrome)
+13. `[x]` CEF13 `[CE]` Keyboard shortcuts overlay (`?` help modal)
+14. `[x]` CEF14 `[CE]` Dashboard legend panel (status colors/icons meanings)
+15. `[x]` CEF15 `[CE]` Card status-change highlight (recently changed online/offline)
+16. `[x]` CEF16 `[CE]` "Last updated" stale-data warning banner
+17. `[x]` CEF17 `[CE]` API degraded banner with retry backoff indicator
+18. `[x]` CEF18 `[CE]` Read-only fallback rendering from last known cache snapshot
 19. `[ ]` CEF19 `[CE]` Local browser notification option for new offline events
 20. `[ ]` CEF20 `[CE]` Optional soft chime mode (lower-volume alert profile)
 21. `[ ]` CEF21 `[CE]` Theme presets (classic/high-contrast/light) with persistence
@@ -59,18 +61,18 @@ They avoid PRO-only domains (team workflows, correlation, automation, enterprise
 - [x] RCE04 Add per-source "Poll Now" actions and status strip.
 - [x] RCE05 Add search + quick filters across tabs.
 - [x] RCE06 Add sort modes and account-persisted defaults.
-- [ ] RCE07 Implement group-by layout mode (role/site).
+- [x] RCE07 Implement group-by layout mode (role/site).
 - [x] RCE08 Add default-tab persistence.
 
 ### Epic CE-A2 - CE Feature Pack 2 (CEF11-CEF18)
-- [ ] RCE09 Add refresh interval presets and persistence.
-- [ ] RCE10 Add kiosk mode (hotkey + query flag).
-- [ ] RCE11 Add keyboard shortcuts help modal.
-- [ ] RCE12 Add dashboard legend panel.
-- [ ] RCE13 Add recent state-change highlights on cards.
-- [ ] RCE14 Add stale-data warning banner.
-- [ ] RCE15 Add API degraded/retry backoff banner.
-- [ ] RCE16 Add read-only cached snapshot fallback path.
+- [x] RCE09 Add refresh interval presets and persistence.
+- [x] RCE10 Add kiosk mode (hotkey + query flag).
+- [x] RCE11 Add keyboard shortcuts help modal.
+- [x] RCE12 Add dashboard legend panel.
+- [x] RCE13 Add recent state-change highlights on cards.
+- [x] RCE14 Add stale-data warning banner.
+- [x] RCE15 Add API degraded/retry backoff banner.
+- [x] RCE16 Add read-only cached snapshot fallback path.
 
 ### Epic CE-A3 - CE Feature Pack 3 (CEF19-CEF25)
 - [ ] RCE17 Add browser notifications option for offline events.

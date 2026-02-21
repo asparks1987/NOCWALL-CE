@@ -1,6 +1,9 @@
 # Use the official PHP-Apache image
 FROM php:8.2-apache
 
+# Copy composer from official image for dependency install
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+
 # Install required packages and extensions
 RUN apt-get update && apt-get install -y \
     libsqlite3-dev \
@@ -16,6 +19,10 @@ RUN a2enmod rewrite
 
 # Set working directory
 WORKDIR /var/www/html
+
+# Install PHP dependencies
+COPY composer.json /var/www/html/composer.json
+RUN composer install --no-dev --prefer-dist --no-interaction --no-progress --optimize-autoloader
 
 # Copy application files
 COPY index.php /var/www/html/
