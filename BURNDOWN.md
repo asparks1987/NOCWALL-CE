@@ -29,9 +29,9 @@ They avoid PRO-only domains (team workflows, correlation, automation, enterprise
 3. `[ ]` CEF03 `[CE]` Source connectivity diagnostics panel (DNS/TLS/API reachability)
 4. `[x]` CEF04 `[CE]` Manual "Poll Now" button per source
 5. `[x]` CEF05 `[CE]` Source status strip (last poll time, success/fail, latency)
-6. `[ ]` CEF06 `[CE]` Global search box for device name/MAC/hostname
-7. `[ ]` CEF07 `[CE]` Quick filters (all/offline/online by tab)
-8. `[ ]` CEF08 `[CE]` Sort controls (status, name, last-seen)
+6. `[x]` CEF06 `[CE]` Global search box for device name/MAC/hostname
+7. `[x]` CEF07 `[CE]` Quick filters (all/offline/online by tab)
+8. `[x]` CEF08 `[CE]` Sort controls (status, name, last-seen)
 9. `[ ]` CEF09 `[CE]` Group-by mode (role/site) for card layout
 10. `[x]` CEF10 `[CE]` Saved default tab per account
 11. `[ ]` CEF11 `[CE]` Saved refresh interval preset per account
@@ -57,8 +57,8 @@ They avoid PRO-only domains (team workflows, correlation, automation, enterprise
 - [ ] RCE02 Add demo data UI toggle and API wiring.
 - [ ] RCE03 Build source diagnostics panel and health probes.
 - [x] RCE04 Add per-source "Poll Now" actions and status strip.
-- [ ] RCE05 Add search + quick filters across tabs.
-- [ ] RCE06 Add sort modes and account-persisted defaults.
+- [x] RCE05 Add search + quick filters across tabs.
+- [x] RCE06 Add sort modes and account-persisted defaults.
 - [ ] RCE07 Implement group-by layout mode (role/site).
 - [x] RCE08 Add default-tab persistence.
 
@@ -268,7 +268,7 @@ They avoid PRO-only domains (team workflows, correlation, automation, enterprise
 - [ ] R75 Build tenant sizing advisor from usage and performance telemetry.
 - [ ] R76 Build orchestrated zero-downtime upgrade workflow for hosted clusters.
 - [ ] R77 Publish reliability scorecard API and status computation service.
-- [ ] R78 Add CI release matrix for CE images, SBOM, signatures, and provenance.
+- [x] [STUB] R78 Add CI release matrix for CE images, SBOM, signatures, and provenance.
 - [ ] R79 Execute production-grade soak/load/failover drills and capture SLO metrics.
 - [ ] R80 Finalize launch gate checklist: docs, support runbooks, legal, billing ops.
 

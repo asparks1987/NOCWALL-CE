@@ -94,6 +94,7 @@ function default_dashboard_settings(){
     return [
         'density' => 'normal',
         'default_tab' => 'gateways',
+        'sort_mode' => 'manual',
         'metrics' => [
             'cpu' => true,
             'ram' => true,
@@ -114,6 +115,10 @@ function normalize_dashboard_settings($input){
     $defaultTab = trim((string)($input['default_tab'] ?? ''));
     if(in_array($defaultTab, ['gateways','aps','routers','topology'], true)){
         $base['default_tab'] = $defaultTab;
+    }
+    $sortMode = trim((string)($input['sort_mode'] ?? ''));
+    if(in_array($sortMode, ['manual','status_name','name_asc','last_seen_desc'], true)){
+        $base['sort_mode'] = $sortMode;
     }
     if(isset($input['metrics']) && is_array($input['metrics'])){
         foreach(array_keys($base['metrics']) as $k){
@@ -2366,6 +2371,27 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
   </div>
   <div id="sourceStatusList" class="source-status-list"></div>
   <div id="sourceStatusNotice" class="source-status-notice"></div>
+</section>
+<section class="view-controls" aria-label="Device search and filter controls">
+  <div class="view-controls-row">
+    <label for="deviceSearchInput">Search Devices</label>
+    <input id="deviceSearchInput" type="search" placeholder="Name, hostname, MAC, serial, site...">
+    <button id="deviceSearchClearBtn" type="button" class="btn-outline">Clear</button>
+  </div>
+  <div class="view-controls-row">
+    <span class="view-controls-label">Quick Filter</span>
+    <button id="filterAllBtn" type="button" class="btn-outline filter-btn active" data-filter="all">All</button>
+    <button id="filterOnlineBtn" type="button" class="btn-outline filter-btn" data-filter="online">Online</button>
+    <button id="filterOfflineBtn" type="button" class="btn-outline filter-btn" data-filter="offline">Offline</button>
+    <label for="sortModeSelect" class="view-controls-label">Sort</label>
+    <select id="sortModeSelect">
+      <option value="manual">Manual</option>
+      <option value="status_name">Status + Name</option>
+      <option value="name_asc">Name (A-Z)</option>
+      <option value="last_seen_desc">Last Seen (Newest)</option>
+    </select>
+  </div>
+  <div id="viewControlsSummary" class="view-controls-summary"></div>
 </section>
 <?php if(!empty($NOCWALL_FEATURE_FLAGS['display_controls'])): ?>
   <section class="display-controls" aria-label="Dashboard display controls">

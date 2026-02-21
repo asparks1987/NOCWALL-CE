@@ -25,5 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Docker build
-        run: docker build . -t uisp-noc:ci
+      - name: Build web image
+        run: docker build -f Dockerfile . -t nocwall-ce-web:ci
+      - name: Build API image
+        run: docker build -f api/Dockerfile . -t nocwall-ce-api:ci

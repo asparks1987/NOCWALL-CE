@@ -133,6 +133,51 @@ header button { margin: 0; }
 .source-status-notice.ok {
   color: #99e29c;
 }
+.view-controls {
+  margin: 10px 12px 0;
+  padding: 10px 12px;
+  border: 1px solid #303030;
+  border-radius: 10px;
+  background: #141414;
+  display: grid;
+  gap: 8px;
+}
+.view-controls-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.view-controls-row label,
+.view-controls-label {
+  font-size: 12px;
+  color: #bebebe;
+}
+.view-controls-row input[type="search"] {
+  min-width: 260px;
+  flex: 1 1 360px;
+  background: #111;
+  color: #e9e9e9;
+  border: 1px solid #3a3a3a;
+  border-radius: 7px;
+  padding: 8px 10px;
+}
+.view-controls-row select {
+  background: #151515;
+  color: #eee;
+  border: 1px solid #555;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+.filter-btn.active {
+  background: rgba(176,108,255,0.2);
+  border-color: #b06cff;
+  color: #fff;
+}
+.view-controls-summary {
+  font-size: 12px;
+  color: #98c8ff;
+}
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));

@@ -146,6 +146,7 @@ const DASH_SETTINGS_KEY = "nocwall.dashboard.settings.v1";
 const DEFAULT_DASH_SETTINGS = {
   density: "normal",
   default_tab: "gateways",
+  sort_mode: "manual",
   metrics: {
     cpu: true,
     ram: true,
@@ -174,6 +175,8 @@ let topologyLoading = false;
 let topologyLastFetchMs = 0;
 let topologyTrace = null;
 const TOPOLOGY_REFRESH_MS = 30000;
+let deviceSearchQuery = "";
+let deviceQuickFilter = "all";
 
 function normalizeApSirenPrefs(input){
   const out={};
@@ -464,6 +467,9 @@ function normalizeDashSettings(input){
   if(typeof input.default_tab === "string"){
     normalized.default_tab = normalizeTabId(input.default_tab);
   }
+  if(typeof input.sort_mode === "string"){
+    normalized.sort_mode = normalizeSortMode(input.sort_mode);
+  }
   const metricKeys = Object.keys(normalized.metrics);
   metricKeys.forEach(key=>{
     if(input.metrics && Object.prototype.hasOwnProperty.call(input.metrics,key)){
@@ -471,6 +477,149 @@ function normalizeDashSettings(input){
     }
   });
   return normalized;
+}
+
+function normalizeSortMode(mode){
+  const raw = String(mode || "").trim().toLowerCase();
+  if(raw === "status_name" || raw === "name_asc" || raw === "last_seen_desc"){
+    return raw;
+  }
+  return "manual";
+}
+
+function normalizeQuickFilter(mode){
+  const raw = String(mode || "").trim().toLowerCase();
+  if(raw === "online" || raw === "offline"){
+    return raw;
+  }
+  return "all";
+}
+
+function deviceSortLabel(mode){
+  const m = normalizeSortMode(mode);
+  if(m === "status_name") return "status + name";
+  if(m === "name_asc") return "name";
+  if(m === "last_seen_desc") return "last seen";
+  return "manual";
+}
+
+function compareDevicesBySortMode(a, b, mode){
+  const m = normalizeSortMode(mode);
+  const an = String((a && a.name) || "").toLowerCase();
+  const bn = String((b && b.name) || "").toLowerCase();
+  const aid = String((a && a.id) || "");
+  const bid = String((b && b.id) || "");
+
+  if(m === "status_name"){
+    const ao = a && a.online ? 1 : 0;
+    const bo = b && b.online ? 1 : 0;
+    if(ao !== bo) return ao - bo;
+  } else if(m === "name_asc"){
+    // handled by name tie-break below
+  } else if(m === "last_seen_desc"){
+    const ats = Number((a && a.last_seen) || 0);
+    const bts = Number((b && b.last_seen) || 0);
+    if(ats !== bts) return bts - ats;
+  } else {
+    return 0;
+  }
+
+  const ncmp = an.localeCompare(bn);
+  if(ncmp !== 0) return ncmp;
+  return aid.localeCompare(bid);
+}
+
+function sortDevicesForDisplay(items){
+  const list = Array.isArray(items) ? items.slice() : [];
+  const mode = normalizeSortMode(dashSettings && dashSettings.sort_mode);
+  if(mode === "manual") return list;
+  list.sort((a,b)=>compareDevicesBySortMode(a,b,mode));
+  return list;
+}
+
+function deviceMatchesQuickFilter(device){
+  const mode = normalizeQuickFilter(deviceQuickFilter);
+  if(mode === "online") return !!(device && device.online);
+  if(mode === "offline") return !!(device && !device.online);
+  return true;
+}
+
+function deviceMatchesSearch(device){
+  const q = String(deviceSearchQuery || "").trim().toLowerCase();
+  if(!q) return true;
+  if(!device || typeof device !== "object") return false;
+  const fields = [
+    device.name,
+    device.id,
+    device.hostname,
+    device.mac,
+    device.serial,
+    device.site,
+    device.site_id,
+    device.vendor,
+    device.model,
+    device.source_name,
+    device.role
+  ];
+  const hay = fields.map(v=>String(v || "").toLowerCase()).join(" ");
+  return hay.includes(q);
+}
+
+function applyViewQuery(devices){
+  const list = Array.isArray(devices) ? devices : [];
+  return list.filter(d=>deviceMatchesQuickFilter(d)).filter(d=>deviceMatchesSearch(d));
+}
+
+function syncViewControls(){
+  const searchInput = document.getElementById("deviceSearchInput");
+  if(searchInput){
+    searchInput.value = deviceSearchQuery;
+  }
+  const sortEl = document.getElementById("sortModeSelect");
+  if(sortEl){
+    sortEl.value = normalizeSortMode(dashSettings && dashSettings.sort_mode);
+  }
+  const mode = normalizeQuickFilter(deviceQuickFilter);
+  document.querySelectorAll(".filter-btn[data-filter]").forEach(btn=>{
+    const value = String(btn.getAttribute("data-filter") || "").trim().toLowerCase();
+    btn.classList.toggle("active", value === mode);
+  });
+}
+
+function bindViewControls(){
+  const searchInput = document.getElementById("deviceSearchInput");
+  if(searchInput){
+    searchInput.addEventListener("input", ()=>{
+      deviceSearchQuery = String(searchInput.value || "");
+      renderDevices();
+    });
+  }
+  const clearBtn = document.getElementById("deviceSearchClearBtn");
+  if(clearBtn){
+    clearBtn.addEventListener("click", ()=>{
+      deviceSearchQuery = "";
+      syncViewControls();
+      renderDevices();
+    });
+  }
+  const sortEl = document.getElementById("sortModeSelect");
+  if(sortEl){
+    sortEl.addEventListener("change", ()=>{
+      dashSettings.sort_mode = normalizeSortMode(sortEl.value);
+      saveDashSettings();
+      renderDevices();
+    });
+  }
+  document.querySelectorAll(".filter-btn[data-filter]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const next = normalizeQuickFilter(btn.getAttribute("data-filter"));
+      if(deviceQuickFilter === next) return;
+      deviceQuickFilter = next;
+      syncViewControls();
+      renderDevices();
+    });
+  });
+  syncViewControls();
 }
 
 function saveDashSettings(){
@@ -513,6 +662,7 @@ function syncDisplayControls(){
 function applyDashboardSettings(){
   applyDisplayDensity();
   syncDisplayControls();
+  syncViewControls();
 }
 
 function bindDisplayControls(){
@@ -578,6 +728,7 @@ function initDisplaySettings(){
   bindTopologyControls();
   bindSetupWizard();
   bindSourceStatusControls();
+  bindViewControls();
   setActiveTab(dashSettings.default_tab, { persist: false });
 }
 
@@ -635,6 +786,7 @@ async function loadUserPrefsFromServer(){
       }catch(_){ }
       applyDashboardSettings();
       syncTabSirenButtons();
+      syncViewControls();
       setActiveTab(dashSettings.default_tab, { persist: false });
       renderDevices();
     }
@@ -1585,13 +1737,21 @@ function renderDevices(meta, opts){
     }
   });
 
-  const gateways = applyCardOrder('gateways', devices.filter(d=>d.gateway).sort((a,b)=>a.online-b.online||a.name.localeCompare(b.name)));
-  const aps = applyCardOrder('aps', devices
-    .filter(d=>!d.gateway && d.ap)
-    .sort((a,b)=> (a.online - b.online) || a.name.localeCompare(b.name)));
-  const routersSwitches = applyCardOrder('routers', devices
-    .filter(d=>!d.gateway && !d.ap && (d.router || d.switch))
-    .sort((a,b)=> (a.online - b.online) || a.name.localeCompare(b.name)));
+  const allGateways = devices.filter(d=>d.gateway);
+  const allAps = devices.filter(d=>!d.gateway && d.ap);
+  const allRoutersSwitches = devices.filter(d=>!d.gateway && !d.ap && (d.router || d.switch));
+
+  const visibleDevices = applyViewQuery(devices);
+  const visibleGatewaysBase = visibleDevices.filter(d=>d.gateway);
+  const visibleApsBase = visibleDevices.filter(d=>!d.gateway && d.ap);
+  const visibleRoutersBase = visibleDevices.filter(d=>!d.gateway && !d.ap && (d.router || d.switch));
+  const sortMode = normalizeSortMode(dashSettings && dashSettings.sort_mode);
+  const sortedGateways = sortDevicesForDisplay(visibleGatewaysBase);
+  const sortedAps = sortDevicesForDisplay(visibleApsBase);
+  const sortedRouters = sortDevicesForDisplay(visibleRoutersBase);
+  const gateways = (sortMode === "manual") ? applyCardOrder('gateways', sortedGateways) : sortedGateways;
+  const aps = (sortMode === "manual") ? applyCardOrder('aps', sortedAps) : sortedAps;
+  const routersSwitches = (sortMode === "manual") ? applyCardOrder('routers', sortedRouters) : sortedRouters;
 
   renderGatewayGrid(gateways, nowSec);
   requestAnimationFrame(()=> {
@@ -1610,16 +1770,16 @@ function renderDevices(meta, opts){
   const total=devices.length;
   const online=devices.filter(d=>d.online).length;
   const health = total>0 ? Math.round((online/total)*100) : null;
-  const offlineGw=gateways.filter(d=>!d.online).length;
-  const unacked=gateways.filter(d=>!d.online && !(d.ack_until && d.ack_until>nowSec)).length;
-  const latVals=gateways.map(d=>{
+  const offlineGw=allGateways.filter(d=>!d.online).length;
+  const unacked=allGateways.filter(d=>!d.online && !(d.ack_until && d.ack_until>nowSec)).length;
+  const latVals=allGateways.map(d=>{
     if(typeof d.latency==='number' && isFinite(d.latency)) return d.latency;
     if(typeof d.cpe_latency==='number' && isFinite(d.cpe_latency)) return d.cpe_latency;
     return null;
   }).filter(v=>v!==null);
   const avgLat = latVals.length ? Math.round(latVals.reduce((a,b)=>a+b,0)/latVals.length) : null;
-  const highCpu=gateways.filter(d=>typeof d.cpu==='number' && d.cpu>90).length;
-  const highRam=gateways.filter(d=>typeof d.ram==='number' && d.ram>90).length;
+  const highCpu=allGateways.filter(d=>typeof d.cpu==='number' && d.cpu>90).length;
+  const highRam=allGateways.filter(d=>typeof d.ram==='number' && d.ram>90).length;
 
   const healthClass = health==null ? 'good' : (health>=95?'good':(health>=80?'warn':'bad'));
   const latClass = avgLat==null ? 'good' : (avgLat>500?'bad':(avgLat>100?'warn':'good'));
@@ -1628,13 +1788,13 @@ function renderDevices(meta, opts){
   const cpuClass = highCpu>0 ? 'bad' : 'good';
   const ramClass = highRam>0 ? 'bad' : 'good';
 
-  const gwOnline = gateways.filter(d=>d.online).length;
-  const gwTotal = gateways.length;
-  const apItems = devices.filter(d=>d.ap && !d.gateway);
+  const gwOnline = allGateways.filter(d=>d.online).length;
+  const gwTotal = allGateways.length;
+  const apItems = allAps;
   const apOnline = apItems.filter(d=>d.online).length;
-  const routerItems = devices.filter(d=>d.router && !d.gateway);
+  const routerItems = allRoutersSwitches.filter(d=>d.router);
   const routerOnline = routerItems.filter(d=>d.online).length;
-  const switchItems = devices.filter(d=>d.switch && !d.gateway);
+  const switchItems = allRoutersSwitches.filter(d=>d.switch);
   const switchOnline = switchItems.filter(d=>d.online).length;
 
   const summaryHTML = featureEnabled("advanced_metrics") && !featureEnabled("strict_ce")
@@ -1657,6 +1817,15 @@ function renderDevices(meta, opts){
     ].join(' ');
   const overallEl=document.getElementById('overallSummary');
   if(overallEl) overallEl.innerHTML=summaryHTML;
+
+  const viewSummaryEl = document.getElementById("viewControlsSummary");
+  if(viewSummaryEl){
+    const mode = normalizeQuickFilter(deviceQuickFilter);
+    const modeLabel = (mode === "online") ? "online only" : ((mode === "offline") ? "offline only" : "all devices");
+    const q = String(deviceSearchQuery || "").trim();
+    const searchLabel = q ? `search: "${q}"` : "search: none";
+    viewSummaryEl.textContent = `Showing ${visibleDevices.length}/${devices.length} devices (${modeLabel}, ${searchLabel}, sort: ${deviceSortLabel(sortMode)}).`;
+  }
 
   const isDeviceUnackedOffline = (dev, nowSeconds) => {
     if(!dev || dev.online) return false;
