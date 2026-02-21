@@ -1,0 +1,12 @@
+{
+  "name": "predheadtx/nocwall-ce",
+  "description": "NOCWALL-CE web app",
+  "type": "project",
+  "require": {
+    "php": "^8.2",
+    "stripe/stripe-php": "^14.0"
+  },
+  "config": {
+    "sort-packages": true
+  }
+}

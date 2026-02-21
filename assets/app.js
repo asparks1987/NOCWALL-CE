@@ -36,6 +36,51 @@ function setActiveTab(id, opts){
 function openTab(id, ev){
   setActiveTab(id, { event: ev, persist: true });
 }
+
+let kioskMode = false;
+
+function isTypingContext(target){
+  const el = target || document.activeElement;
+  if(!el || !el.tagName) return false;
+  const tag = String(el.tagName).toLowerCase();
+  if(tag === "input" || tag === "textarea" || tag === "select") return true;
+  if(el.isContentEditable) return true;
+  return false;
+}
+
+function setKioskMode(enabled){
+  kioskMode = !!enabled;
+  if(document.body){
+    document.body.classList.toggle("kiosk-mode", kioskMode);
+  }
+}
+
+function toggleKioskMode(){
+  setKioskMode(!kioskMode);
+}
+
+function initKioskModeFromUrl(){
+  try{
+    const params = new URLSearchParams(window.location.search || "");
+    const raw = String(params.get("kiosk") || "").trim().toLowerCase();
+    if(raw === "1" || raw === "true" || raw === "yes" || raw === "on"){
+      setKioskMode(true);
+    }
+  }catch(_){ }
+}
+
+function openShortcuts(){
+  const modal = document.getElementById("shortcutsModal");
+  if(!modal) return;
+  modal.style.display = "block";
+}
+
+function closeShortcuts(){
+  const modal = document.getElementById("shortcutsModal");
+  if(!modal) return;
+  modal.style.display = "none";
+}
+
 function badgeVal(v,label,suf){if(v==null)return'';let cls='good';if(v>90)cls='bad';else if(v>75)cls='warn';return `<span class="badge ${cls}">${label}: ${v}${suf}</span>`;}
 function badgeLatency(v){if(v==null)return'';let cls='good';if(v>500)cls='bad';else if(v>100)cls='warn';return `<span class="badge ${cls}">Latency: ${v} ms</span>`;}
 
@@ -100,13 +145,27 @@ const MIN_OFFLINE_TS = 1; // guard against missing/zero offline_since
 
 const POLL_INTERVAL_NORMAL_MS = 5000;
 const POLL_INTERVAL_FAST_MS = 2000;
-const POLL_INTERVAL_ERROR_MS = 15000;
+const POLL_INTERVAL_SLOW_MS = 10000;
+const POLL_INTERVAL_ERROR_BASE_MS = 15000;
+const POLL_INTERVAL_ERROR_MAX_MS = 120000;
+const DATA_STALE_MIN_MS = 60000;
+const DEVICE_CHANGE_HIGHLIGHT_MS = 120000;
 const SOURCE_STATUS_REFRESH_MS = 60000;
 const AP_SIREN_PREFS_KEY = "nocwall.ap.siren.v1";
 const TAB_SIREN_PREFS_KEY = "nocwall.tab.siren.v1";
 const CARD_ORDER_PREFS_KEY = "nocwall.card.order.v1";
+const DEVICE_SNAPSHOT_KEY = "nocwall.devices.snapshot.v1";
 let userPrefsLoaded=false;
 let userPrefsSaveTimer=null;
+let pollErrorCount=0;
+let pollLastErrorMessage="";
+let pollLastSuccessAtMs=0;
+let pollLastFailureAtMs=0;
+let pollNextRetryAtMs=0;
+let pollBannerTickTimer=null;
+const deviceStatusMemory = new Map();
+let usingSnapshotFallback=false;
+let snapshotFallbackSavedAtMs=0;
 const DEFAULT_TAB_SIREN_PREFS = {
   gateways: true,
   aps: false,
@@ -147,6 +206,8 @@ const DEFAULT_DASH_SETTINGS = {
   density: "normal",
   default_tab: "gateways",
   sort_mode: "manual",
+  group_mode: "none",
+  refresh_interval: "normal",
   metrics: {
     cpu: true,
     ram: true,
@@ -253,6 +314,33 @@ function loadCardOrderPrefs(){
     return normalizeCardOrderPrefs(parsed);
   }catch(_){
     return normalizeCardOrderPrefs(DEFAULT_CARD_ORDER_PREFS);
+  }
+}
+
+function saveDeviceSnapshot(devices){
+  try{
+    const list = Array.isArray(devices) ? devices : [];
+    const payload = {
+      saved_at: Date.now(),
+      devices: list
+    };
+    localStorage.setItem(DEVICE_SNAPSHOT_KEY, JSON.stringify(payload));
+  }catch(_){ }
+}
+
+function loadDeviceSnapshot(){
+  try{
+    const raw = localStorage.getItem(DEVICE_SNAPSHOT_KEY);
+    if(!raw) return null;
+    const parsed = JSON.parse(raw);
+    if(!parsed || typeof parsed !== "object" || !Array.isArray(parsed.devices)) return null;
+    const savedAt = Number(parsed.saved_at || 0);
+    return {
+      savedAtMs: Number.isFinite(savedAt) && savedAt > 0 ? savedAt : 0,
+      devices: parsed.devices
+    };
+  }catch(_){
+    return null;
   }
 }
 
@@ -478,6 +566,12 @@ function normalizeDashSettings(input){
   if(typeof input.sort_mode === "string"){
     normalized.sort_mode = normalizeSortMode(input.sort_mode);
   }
+  if(typeof input.group_mode === "string"){
+    normalized.group_mode = normalizeGroupMode(input.group_mode);
+  }
+  if(typeof input.refresh_interval === "string"){
+    normalized.refresh_interval = normalizeRefreshInterval(input.refresh_interval);
+  }
   const metricKeys = Object.keys(normalized.metrics);
   metricKeys.forEach(key=>{
     if(input.metrics && Object.prototype.hasOwnProperty.call(input.metrics,key)){
@@ -495,6 +589,22 @@ function normalizeSortMode(mode){
   return "manual";
 }
 
+function normalizeGroupMode(mode){
+  const raw = String(mode || "").trim().toLowerCase();
+  if(raw === "role" || raw === "site"){
+    return raw;
+  }
+  return "none";
+}
+
+function normalizeRefreshInterval(mode){
+  const raw = String(mode || "").trim().toLowerCase();
+  if(raw === "fast" || raw === "slow"){
+    return raw;
+  }
+  return "normal";
+}
+
 function normalizeQuickFilter(mode){
   const raw = String(mode || "").trim().toLowerCase();
   if(raw === "online" || raw === "offline"){
@@ -509,6 +619,49 @@ function deviceSortLabel(mode){
   if(m === "name_asc") return "name";
   if(m === "last_seen_desc") return "last seen";
   return "manual";
+}
+
+function deviceGroupLabel(mode){
+  const m = normalizeGroupMode(mode);
+  if(m === "role") return "role";
+  if(m === "site") return "site";
+  return "none";
+}
+
+function refreshIntervalLabel(mode){
+  const m = normalizeRefreshInterval(mode);
+  if(m === "fast") return "2s";
+  if(m === "slow") return "10s";
+  return "5s";
+}
+
+function getSuccessPollIntervalMs(){
+  const mode = normalizeRefreshInterval(dashSettings && dashSettings.refresh_interval);
+  if(mode === "fast") return POLL_INTERVAL_FAST_MS;
+  if(mode === "slow") return POLL_INTERVAL_SLOW_MS;
+  return POLL_INTERVAL_NORMAL_MS;
+}
+
+function getErrorPollBackoffMs(){
+  const exponent = Math.max(0, pollErrorCount - 1);
+  const delay = POLL_INTERVAL_ERROR_BASE_MS * Math.pow(2, exponent);
+  return Math.min(POLL_INTERVAL_ERROR_MAX_MS, delay);
+}
+
+function getStaleThresholdMs(){
+  return Math.max(DATA_STALE_MIN_MS, getSuccessPollIntervalMs() * 3);
+}
+
+function formatRelativeAge(ms){
+  if(typeof ms !== "number" || !isFinite(ms) || ms <= 0){
+    return "just now";
+  }
+  const sec = Math.max(0, Math.floor(ms / 1000));
+  if(sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  if(min < 60) return `${min}m ${sec % 60}s`;
+  const hr = Math.floor(min / 60);
+  return `${hr}h ${min % 60}m`;
 }
 
 function compareDevicesBySortMode(a, b, mode){
@@ -587,6 +740,10 @@ function syncViewControls(){
   if(sortEl){
     sortEl.value = normalizeSortMode(dashSettings && dashSettings.sort_mode);
   }
+  const groupEl = document.getElementById("groupModeSelect");
+  if(groupEl){
+    groupEl.value = normalizeGroupMode(dashSettings && dashSettings.group_mode);
+  }
   const mode = normalizeQuickFilter(deviceQuickFilter);
   document.querySelectorAll(".filter-btn[data-filter]").forEach(btn=>{
     const value = String(btn.getAttribute("data-filter") || "").trim().toLowerCase();
@@ -614,6 +771,14 @@ function bindViewControls(){
   if(sortEl){
     sortEl.addEventListener("change", ()=>{
       dashSettings.sort_mode = normalizeSortMode(sortEl.value);
+      saveDashSettings();
+      renderDevices();
+    });
+  }
+  const groupEl = document.getElementById("groupModeSelect");
+  if(groupEl){
+    groupEl.addEventListener("change", ()=>{
+      dashSettings.group_mode = normalizeGroupMode(groupEl.value);
       saveDashSettings();
       renderDevices();
     });
@@ -651,6 +816,10 @@ function syncDisplayControls(){
   if(density){
     density.value = dashSettings.density;
   }
+  const refresh = document.getElementById("settingRefreshInterval");
+  if(refresh){
+    refresh.value = normalizeRefreshInterval(dashSettings && dashSettings.refresh_interval);
+  }
   const controlMap = {
     settingMetricCpu: "cpu",
     settingMetricRam: "ram",
@@ -683,6 +852,15 @@ function bindDisplayControls(){
       renderDevices();
     });
   }
+  const refresh = document.getElementById("settingRefreshInterval");
+  if(refresh){
+    refresh.addEventListener("change",()=>{
+      dashSettings.refresh_interval = normalizeRefreshInterval(refresh.value);
+      saveDashSettings();
+      schedulePoll(0, "refresh-change");
+      renderDevices();
+    });
+  }
 
   const metricMap = {
     settingMetricCpu: "cpu",
@@ -709,6 +887,7 @@ function bindDisplayControls(){
       dashSettings = JSON.parse(JSON.stringify(DEFAULT_DASH_SETTINGS));
       applyDashboardSettings();
       saveDashSettings();
+      schedulePoll(0, "settings-reset");
       renderDevices();
     });
   }
@@ -737,7 +916,10 @@ function initDisplaySettings(){
   bindSetupWizard();
   bindSourceStatusControls();
   bindViewControls();
+  initKioskModeFromUrl();
+  ensurePollBannerTicker();
   setActiveTab(dashSettings.default_tab, { persist: false });
+  updateDataHealthBanner();
 }
 
 function scheduleUserPrefsSave(){
@@ -1596,12 +1778,94 @@ function bindTopologyControls(){
   if(clear) clear.addEventListener("click", ()=>clearTopologyTrace());
 }
 
-function schedulePoll(delayMs){
+function setDataHealthBanner(message, level){
+  const banner = document.getElementById("dataHealthBanner");
+  if(!banner) return;
+  const msg = String(message || "").trim();
+  if(!msg){
+    banner.textContent = "";
+    banner.className = "data-health-banner";
+    banner.style.display = "none";
+    return;
+  }
+  banner.textContent = msg;
+  banner.className = `data-health-banner ${level || ""}`.trim();
+  banner.style.display = "block";
+}
+
+function updateDataHealthBanner(){
+  if(pollErrorCount > 0){
+    const nextMs = Math.max(0, pollNextRetryAtMs - Date.now());
+    const retryIn = formatRelativeAge(nextMs);
+    const attempts = pollErrorCount;
+    const errText = pollLastErrorMessage ? ` Last error: ${pollLastErrorMessage}.` : "";
+    const fallbackAgeMs = snapshotFallbackSavedAtMs > 0 ? Math.max(0, Date.now() - snapshotFallbackSavedAtMs) : 0;
+    const fallbackText = usingSnapshotFallback ? ` Showing cached snapshot (${formatRelativeAge(fallbackAgeMs)} old).` : "";
+    setDataHealthBanner(`API degraded: retry #${attempts} in ${retryIn}.${errText}${fallbackText}`, "bad");
+    return;
+  }
+  if(pollLastSuccessAtMs > 0){
+    const ageMs = Date.now() - pollLastSuccessAtMs;
+    if(ageMs >= getStaleThresholdMs()){
+      setDataHealthBanner(`Data is stale: last successful update ${formatRelativeAge(ageMs)} ago.`, "warn");
+      return;
+    }
+  }
+  setDataHealthBanner("", "");
+}
+
+function ensurePollBannerTicker(){
+  if(pollBannerTickTimer) return;
+  pollBannerTickTimer = setInterval(()=>updateDataHealthBanner(), 1000);
+}
+
+function updateDeviceStatusMemory(devices, nowMs){
+  const list = Array.isArray(devices) ? devices : [];
+  const seen = new Set();
+  list.forEach(device=>{
+    const id = String((device && device.id) || "").trim();
+    if(!id) return;
+    seen.add(id);
+    const online = !!(device && device.online);
+    const record = deviceStatusMemory.get(id);
+    if(!record){
+      deviceStatusMemory.set(id, { online, changedAtMs: 0, seenAtMs: nowMs });
+      return;
+    }
+    if(record.online !== online){
+      record.online = online;
+      record.changedAtMs = nowMs;
+    }
+    record.seenAtMs = nowMs;
+  });
+  deviceStatusMemory.forEach((record, id)=>{
+    if(seen.has(id)) return;
+    if(nowMs - (record.seenAtMs || 0) > 3600000){
+      deviceStatusMemory.delete(id);
+    }
+  });
+}
+
+function getDeviceTransitionClass(device, nowMs){
+  const id = String((device && device.id) || "").trim();
+  if(!id) return "";
+  const record = deviceStatusMemory.get(id);
+  if(!record || !record.changedAtMs) return "";
+  if(nowMs - record.changedAtMs > DEVICE_CHANGE_HIGHLIGHT_MS){
+    return "";
+  }
+  return record.online ? "status-changed-online" : "status-changed-offline";
+}
+
+function schedulePoll(delayMs, reason){
   if(pollTimer){
     clearTimeout(pollTimer);
   }
-  const ms = (typeof delayMs === 'number' && isFinite(delayMs)) ? Math.max(0, delayMs) : POLL_INTERVAL_NORMAL_MS;
-  pollTimer = setTimeout(()=>{ fetchDevices({ reason:'scheduled' }); }, ms);
+  const fallback = (reason === "error") ? getErrorPollBackoffMs() : getSuccessPollIntervalMs();
+  const ms = (typeof delayMs === "number" && isFinite(delayMs)) ? Math.max(0, delayMs) : fallback;
+  pollNextRetryAtMs = Date.now() + ms;
+  updateDataHealthBanner();
+  pollTimer = setTimeout(()=>{ fetchDevices({ reason: reason || "scheduled" }); }, ms);
 }
 
 async function fetchDevices(opts={}){
@@ -1609,8 +1873,7 @@ async function fetchDevices(opts={}){
   const startMutation = mutationVersion;
   const startedAt = Date.now();
   const metaBase = { updated: new Date().toLocaleTimeString() };
-  const nextDelaySuccess = opts.nextDelaySuccess ?? POLL_INTERVAL_NORMAL_MS;
-  const nextDelayError = opts.nextDelayError ?? POLL_INTERVAL_ERROR_MS;
+  const nextDelaySuccess = opts.nextDelaySuccess ?? getSuccessPollIntervalMs();
 
   try{
     const resp = await fetch(`?ajax=devices&t=${Date.now()}`, { cache:'no-store' });
@@ -1628,15 +1891,36 @@ async function fetchDevices(opts={}){
       updated: metaBase.updated
     };
 
-    if(parseFailed || !payload || !Array.isArray(payload.devices)){
+    if(parseFailed || !payload || !Array.isArray(payload.devices) || resp.status < 200 || resp.status >= 300){
+      pollErrorCount += 1;
+      pollLastFailureAtMs = Date.now();
+      pollLastErrorMessage = parseFailed ? "invalid JSON payload" : `HTTP ${resp.status}`;
       const metaErr = Object.assign({}, meta, {
         http: parseFailed ? 'ERR' : meta.http,
         api_latency: parseFailed ? '--' : meta.api_latency
       });
-      renderDevices(metaErr);
-      schedulePoll(nextDelayError);
+      const snapshot = loadDeviceSnapshot();
+      if(snapshot && Array.isArray(snapshot.devices) && snapshot.devices.length){
+        usingSnapshotFallback = true;
+        snapshotFallbackSavedAtMs = snapshot.savedAtMs > 0 ? snapshot.savedAtMs : Date.now();
+        devicesCache = snapshot.devices;
+        const metaCache = Object.assign({}, metaErr, {
+          updated: snapshot.savedAtMs > 0 ? new Date(snapshot.savedAtMs).toLocaleTimeString() : metaErr.updated
+        });
+        renderDevices(metaCache, { fromServer:false });
+      } else {
+        usingSnapshotFallback = false;
+        snapshotFallbackSavedAtMs = 0;
+        renderDevices(metaErr);
+      }
+      schedulePoll(undefined, "error");
       return;
     }
+    pollErrorCount = 0;
+    pollLastErrorMessage = "";
+    pollLastSuccessAtMs = Date.now();
+    usingSnapshotFallback = false;
+    snapshotFallbackSavedAtMs = 0;
 
     if(!opts.force && startMutation !== mutationVersion){
       renderDevices(meta);
@@ -1645,17 +1929,34 @@ async function fetchDevices(opts={}){
     }
 
     devicesCache = payload.devices;
+    saveDeviceSnapshot(devicesCache);
     renderDevices(meta, {fromServer:true});
-    schedulePoll(nextDelaySuccess);
+    schedulePoll(nextDelaySuccess, "success");
   }catch(_){
     if(requestId !== fetchRequestId) return;
+    pollErrorCount += 1;
+    pollLastFailureAtMs = Date.now();
+    pollLastErrorMessage = "request failed";
     const meta={
       http:'ERR',
       api_latency:'--',
       updated: metaBase.updated
     };
-    renderDevices(meta);
-    schedulePoll(nextDelayError);
+    const snapshot = loadDeviceSnapshot();
+    if(snapshot && Array.isArray(snapshot.devices) && snapshot.devices.length){
+      usingSnapshotFallback = true;
+      snapshotFallbackSavedAtMs = snapshot.savedAtMs > 0 ? snapshot.savedAtMs : Date.now();
+      devicesCache = snapshot.devices;
+      const metaCache = Object.assign({}, meta, {
+        updated: snapshot.savedAtMs > 0 ? new Date(snapshot.savedAtMs).toLocaleTimeString() : meta.updated
+      });
+      renderDevices(metaCache, { fromServer:false });
+    } else {
+      usingSnapshotFallback = false;
+      snapshotFallbackSavedAtMs = 0;
+      renderDevices(meta);
+    }
+    schedulePoll(undefined, "error");
   }
 }
 
@@ -1744,6 +2045,7 @@ function renderDevices(meta, opts){
       pending.expires = nowMs + SIM_OVERRIDE_TTL_MS;
     }
   });
+  updateDeviceStatusMemory(devices, nowMs);
 
   const allGateways = devices.filter(d=>d.gateway);
   const allAps = devices.filter(d=>!d.gateway && d.ap);
@@ -1761,10 +2063,10 @@ function renderDevices(meta, opts){
   const aps = (sortMode === "manual") ? applyCardOrder('aps', sortedAps) : sortedAps;
   const routersSwitches = (sortMode === "manual") ? applyCardOrder('routers', sortedRouters) : sortedRouters;
 
-  renderGatewayGrid(gateways, nowSec);
+  renderGatewayGrid(gateways, nowSec, nowMs);
   requestAnimationFrame(()=> {
-    renderApGrid(aps, nowSec);
-    requestAnimationFrame(()=> renderRouterSwitchGrid(routersSwitches, nowSec));
+    renderApGrid(aps, nowSec, nowMs);
+    requestAnimationFrame(()=> renderRouterSwitchGrid(routersSwitches, nowSec, nowMs));
   });
 
   const footer=document.getElementById('footer');
@@ -1832,7 +2134,9 @@ function renderDevices(meta, opts){
     const modeLabel = (mode === "online") ? "online only" : ((mode === "offline") ? "offline only" : "all devices");
     const q = String(deviceSearchQuery || "").trim();
     const searchLabel = q ? `search: "${q}"` : "search: none";
-    viewSummaryEl.textContent = `Showing ${visibleDevices.length}/${devices.length} devices (${modeLabel}, ${searchLabel}, sort: ${deviceSortLabel(sortMode)}).`;
+    const groupMode = normalizeGroupMode(dashSettings && dashSettings.group_mode);
+    const refreshMode = normalizeRefreshInterval(dashSettings && dashSettings.refresh_interval);
+    viewSummaryEl.textContent = `Showing ${visibleDevices.length}/${devices.length} devices (${modeLabel}, ${searchLabel}, sort: ${deviceSortLabel(sortMode)}, group: ${deviceGroupLabel(groupMode)}, refresh: ${refreshIntervalLabel(refreshMode)}).`;
   }
 
   const isDeviceUnackedOffline = (dev, nowSeconds) => {
@@ -1900,6 +2204,7 @@ function renderDevices(meta, opts){
     if(a){ a.pause(); a.currentTime=0; }
   }
   sirenShouldAlertPrev = shouldAlert;
+  updateDataHealthBanner();
 }
 function toggleAckMenu(id){
   const el=document.getElementById('ack-'+id);
@@ -2112,10 +2417,73 @@ function buildLiveStateBadges(device){
   }
   return html;
 }
-function renderGatewayGrid(gws, nowSec){
+
+function titleCaseLabel(value){
+  const raw = String(value || "").trim();
+  if(!raw) return "";
+  return raw
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .split(" ")
+    .map(part => part ? (part[0].toUpperCase() + part.slice(1).toLowerCase()) : "")
+    .join(" ");
+}
+
+function getRoleGroupLabel(device, tabKey){
+  if(tabKey === "gateways") return "Gateway";
+  if(tabKey === "aps") return "Access Point";
+  if(device && device.router) return "Router";
+  if(device && device.switch) return "Switch";
+  const fallback = titleCaseLabel(device && device.role);
+  return fallback || "Other";
+}
+
+function getDeviceGroupLabel(device, tabKey, mode){
+  const groupMode = normalizeGroupMode(mode);
+  if(groupMode === "role"){
+    return getRoleGroupLabel(device, tabKey);
+  }
+  if(groupMode === "site"){
+    const site = String(
+      (device && (device.site || device.site_name || device.site_id)) || "Unassigned Site"
+    ).trim();
+    return site || "Unassigned Site";
+  }
+  return "All Devices";
+}
+
+function renderGroupedCards(items, tabKey, renderCard){
+  const list = Array.isArray(items) ? items : [];
+  if(!list.length){
+    return "";
+  }
+  const groupMode = normalizeGroupMode(dashSettings && dashSettings.group_mode);
+  if(groupMode === "none"){
+    return list.map(renderCard).join("");
+  }
+  const groups = [];
+  const byKey = new Map();
+  list.forEach(device=>{
+    const label = getDeviceGroupLabel(device, tabKey, groupMode);
+    const key = String(label || "").toLowerCase();
+    if(!byKey.has(key)){
+      const group = { label: label || "Other", items: [] };
+      byKey.set(key, group);
+      groups.push(group);
+    }
+    byKey.get(key).items.push(device);
+  });
+  groups.sort((a,b)=>String(a.label).localeCompare(String(b.label), undefined, { sensitivity: "base" }));
+  return groups.map(group=>`<section class="device-group" data-group-mode="${groupMode}">
+      <div class="device-group-header">${escapeHtml(group.label)}</div>
+      <div class="device-group-grid">${group.items.map(renderCard).join("")}</div>
+    </section>`).join("");
+}
+
+function renderGatewayGrid(gws, nowSec, nowMs){
   const gateGrid=document.getElementById('gateGrid');
   if(!gateGrid) return;
-  const html=gws.map(d=>{
+  const renderCard = d=>{
     const draggable = featureEnabled("advanced_actions") ? "true" : "false";
     const badges = buildMetricBadges(d, d.latency);
     const inventoryBadges = featureEnabled("inventory") ? getInventoryCardBadges(d) : "";
@@ -2124,15 +2492,16 @@ function renderGatewayGrid(gws, nowSec){
     const minimalMode = featureEnabled("strict_ce");
     const topMeta = renderSiteAndLastSeen(d);
     const statusColor = d.online?'#b06cff':'#f55';
+    const transitionClass = getDeviceTransitionClass(d, nowMs);
     if(minimalMode){
-      return `<div class="card ${d.online?'':'offline'}" draggable="${draggable}" data-card-id="${d.id}" data-card-tab="gateways">
+      return `<div class="card ${d.online?'':'offline'} ${transitionClass}" draggable="${draggable}" data-card-id="${d.id}" data-card-tab="gateways">
         <h2>${d.name}</h2>
         <div class="role-label">Gateway</div>
         <div class="status" style="color:${statusColor}">${d.online?'ONLINE':'OFFLINE'}</div>
         ${topMeta}
       </div>`;
     }
-    return `<div class="card ${d.online?'':'offline'} ${ackActive?'acked':''}" draggable="${draggable}" data-card-id="${d.id}" data-card-tab="gateways">
+    return `<div class="card ${d.online?'':'offline'} ${ackActive?'acked':''} ${transitionClass}" draggable="${draggable}" data-card-id="${d.id}" data-card-tab="gateways">
       <div class="ack-badge">${badgeAck(d.ack_until)}${buildLiveStateBadges(d)}</div>
       <h2>${d.name}</h2>
       <div class="role-label">Gateway</div>
@@ -2159,14 +2528,15 @@ function renderGatewayGrid(gws, nowSec){
         ${featureEnabled("history") ? `<button onclick="showHistory('${d.id}','${d.name}')">History</button>` : ''}
       </div>
     </div>`;
-  }).join('');
+  };
+  const html = renderGroupedCards(gws, "gateways", renderCard);
   gateGrid.innerHTML = html;
 }
 
-function renderApGrid(items, nowSec){
+function renderApGrid(items, nowSec, nowMs){
   const apGrid=document.getElementById('apGrid');
   if(!apGrid) return;
-  const html=items.map(d=>{
+  const renderCard = d=>{
     const draggable = featureEnabled("advanced_actions") ? "true" : "false";
     const latencyVal = (typeof d.latency==='number' && isFinite(d.latency)) ? d.latency : d.cpe_latency;
     const badges = buildMetricBadges(d, latencyVal);
@@ -2176,8 +2546,9 @@ function renderApGrid(items, nowSec){
     const minimalMode = featureEnabled("strict_ce");
     const topMeta = renderSiteAndLastSeen(d);
     const statusColor = d.online?'#b06cff':'#f55';
+    const transitionClass = getDeviceTransitionClass(d, nowMs);
     if(minimalMode){
-      return `<div class="card ${d.online?'':'offline'}" draggable="${draggable}" data-card-id="${d.id}" data-card-tab="aps">
+      return `<div class="card ${d.online?'':'offline'} ${transitionClass}" draggable="${draggable}" data-card-id="${d.id}" data-card-tab="aps">
         <h2>${d.name}</h2>
         <div class="role-label">Access Point</div>
         <div class="status" style="color:${statusColor}">${d.online?'ONLINE':'OFFLINE'}</div>
@@ -2203,7 +2574,7 @@ function renderApGrid(items, nowSec){
         ${featureEnabled("inventory") ? `<button onclick="openInventory('${d.id}','${d.name}')">Inventory</button>` : ''}
         ${featureEnabled("history") ? `<button onclick="showHistory('${d.id}','${d.name}')">History</button>` : ''}
     `;
-    return `<div class="card ${d.online?'':'offline'} ${ackActive?'acked':''}" draggable="${draggable}" data-card-id="${d.id}" data-card-tab="aps">
+    return `<div class="card ${d.online?'':'offline'} ${ackActive?'acked':''} ${transitionClass}" draggable="${draggable}" data-card-id="${d.id}" data-card-tab="aps">
       <div class="ack-badge">${badgeAck(d.ack_until)}${buildLiveStateBadges(d)}</div>
       <h2>${d.name}</h2>
       <div class="role-label">Access Point</div>
@@ -2214,14 +2585,15 @@ function renderApGrid(items, nowSec){
         ${actions}
       </div>
     </div>`;
-  }).join('');
+  };
+  const html = renderGroupedCards(items, "aps", renderCard);
   apGrid.innerHTML = html;
 }
 
-function renderRouterSwitchGrid(backbones, nowSec){
+function renderRouterSwitchGrid(backbones, nowSec, nowMs){
   const routerGrid=document.getElementById('routerGrid');
   if(!routerGrid) return;
-  const html=backbones.map(d=>{
+  const renderCard = d=>{
     const draggable = featureEnabled("advanced_actions") ? "true" : "false";
     const latencyVal = (typeof d.latency==='number' && isFinite(d.latency)) ? d.latency : d.cpe_latency;
     const badges = buildMetricBadges(d, latencyVal);
@@ -2232,15 +2604,16 @@ function renderRouterSwitchGrid(backbones, nowSec){
     const minimalMode = featureEnabled("strict_ce");
     const topMeta = renderSiteAndLastSeen(d);
     const statusColor = d.online?'#b06cff':'#f55';
+    const transitionClass = getDeviceTransitionClass(d, nowMs);
     if(minimalMode){
-      return `<div class="card ${d.online?'':'offline'}" draggable="${draggable}" data-card-id="${d.id}" data-card-tab="routers">
+      return `<div class="card ${d.online?'':'offline'} ${transitionClass}" draggable="${draggable}" data-card-id="${d.id}" data-card-tab="routers">
         <h2>${d.name}</h2>
         <div class="role-label">${roleLabel}</div>
         <div class="status" style="color:${statusColor}">${d.online?'ONLINE':'OFFLINE'}</div>
         ${topMeta}
       </div>`;
     }
-    return `<div class="card ${d.online?'':'offline'} ${ackActive?'acked':''}" draggable="${draggable}" data-card-id="${d.id}" data-card-tab="routers">
+    return `<div class="card ${d.online?'':'offline'} ${ackActive?'acked':''} ${transitionClass}" draggable="${draggable}" data-card-id="${d.id}" data-card-tab="routers">
       <div class="ack-badge">${badgeAck(d.ack_until)}${buildLiveStateBadges(d)}</div>
       <h2>${d.name}</h2>
       <div class="role-label">${roleLabel}</div>
@@ -2267,7 +2640,8 @@ function renderRouterSwitchGrid(backbones, nowSec){
         ${featureEnabled("history") ? `<button onclick="showHistory('${d.id}','${d.name}')">History</button>` : ''}
       </div>
     </div>`;
-  }).join('');
+  };
+  const html = renderGroupedCards(backbones, "routers", renderCard);
   routerGrid.innerHTML = html;
 }
 
@@ -2510,7 +2884,8 @@ function closeCpeHistory(){
 }
 
 document.addEventListener('keydown',ev=>{
-  if(ev.key==='Escape'){
+  const key = String(ev.key || "").toLowerCase();
+  if(key === 'escape'){
     const modal=document.getElementById('cpeHistoryModal');
     if(modal && modal.style.display==='block'){
       closeCpeHistory();
@@ -2519,6 +2894,46 @@ document.addEventListener('keydown',ev=>{
     if(invModal && invModal.style.display==='block'){
       closeInventory();
     }
+    const wizardModal=document.getElementById('setupWizardModal');
+    if(wizardModal && wizardModal.style.display==='block'){
+      hideSetupWizard();
+    }
+    closeShortcuts();
+    return;
+  }
+  if(isTypingContext(ev.target)){
+    return;
+  }
+  if(key === '?' || (key === '/' && ev.shiftKey)){
+    ev.preventDefault();
+    openShortcuts();
+    return;
+  }
+  if(key === 'k'){
+    ev.preventDefault();
+    toggleKioskMode();
+    return;
+  }
+  if(key === '/'){
+    ev.preventDefault();
+    const search = document.getElementById("deviceSearchInput");
+    if(search){
+      search.focus();
+      search.select();
+    }
+    return;
+  }
+  if(key === 'g'){
+    setActiveTab("gateways", { persist: true });
+    return;
+  }
+  if(key === 'a'){
+    setActiveTab("aps", { persist: true });
+    return;
+  }
+  if(key === 'r'){
+    setActiveTab("routers", { persist: true });
+    return;
   }
 });
 

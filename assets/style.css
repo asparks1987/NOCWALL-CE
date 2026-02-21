@@ -178,11 +178,100 @@ header button { margin: 0; }
   font-size: 12px;
   color: #98c8ff;
 }
+.data-health-banner {
+  margin: 10px 12px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #3a3a3a;
+  background: #161616;
+  color: #d7d7d7;
+  font-size: 13px;
+}
+.data-health-banner.warn {
+  border-color: #7a5a20;
+  background: rgba(122, 90, 32, 0.24);
+  color: #f3d68b;
+}
+.data-health-banner.bad {
+  border-color: #7f2f2f;
+  background: rgba(127, 47, 47, 0.24);
+  color: #ffb3b3;
+}
+.legend-panel {
+  margin: 10px 12px 0;
+  border: 1px solid #2f2f2f;
+  border-radius: 10px;
+  background: #131313;
+}
+.legend-panel > summary {
+  cursor: pointer;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: #cfcfcf;
+  font-weight: 600;
+}
+.legend-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+  padding: 0 12px 12px;
+  font-size: 12px;
+  color: #bdbdbd;
+}
+.legend-chip {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 5px;
+  border: 1px solid #4a4a4a;
+  margin-right: 6px;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+.legend-online {
+  border-color: #3b8f4d;
+  color: #96e6a5;
+}
+.legend-offline {
+  border-color: #a64a4a;
+  color: #ffb0b0;
+}
+.legend-change-up {
+  border-color: #2f6aa0;
+  color: #9bcaff;
+}
+.legend-change-down {
+  border-color: #a0532f;
+  color: #ffc49b;
+}
+.legend-siren {
+  border-color: #6d54ba;
+  color: #ccb9ff;
+}
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 16px;
   margin-top: 15px;
+}
+.device-group {
+  grid-column: 1 / -1;
+  border: 1px solid #2e2e2e;
+  border-radius: 10px;
+  background: #101010;
+  padding: 10px;
+  margin-bottom: 12px;
+}
+.device-group-header {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #9ecbff;
+  margin-bottom: 10px;
+}
+.device-group-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
 }
 .card {
   background: #222;
@@ -210,6 +299,14 @@ header button { margin: 0; }
 .card.offline {
   border: 1px solid #f55;
   box-shadow: 0 0 12px rgba(255, 0, 0, 0.4);
+}
+.card.status-changed-online {
+  outline: 2px solid #4ea7ff;
+  box-shadow: 0 0 14px rgba(78, 167, 255, 0.55);
+}
+.card.status-changed-offline {
+  outline: 2px solid #ff9a54;
+  box-shadow: 0 0 14px rgba(255, 154, 84, 0.55);
 }
 .role-label {
   font-size: 12px;
@@ -320,6 +417,28 @@ footer {
 }
 .wizard-modal {
   max-width: 760px;
+}
+.shortcuts-modal {
+  max-width: 680px;
+}
+.shortcuts-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+  color: #d2d2d2;
+  font-size: 13px;
+}
+.shortcuts-grid kbd {
+  display: inline-block;
+  min-width: 20px;
+  text-align: center;
+  padding: 2px 6px;
+  border: 1px solid #545454;
+  border-radius: 5px;
+  background: #131313;
+  color: #f0f0f0;
+  margin-right: 6px;
 }
 .wizard-subtitle {
   margin: 0 0 14px 0;
@@ -891,4 +1010,17 @@ body.density-compact .actions button {
   margin: 1px;
   padding: 4px 6px;
   font-size: 11px;
+}
+
+body.kiosk-mode header .header-actions,
+body.kiosk-mode .tabs,
+body.kiosk-mode .source-status-strip,
+body.kiosk-mode .view-controls,
+body.kiosk-mode .display-controls,
+body.kiosk-mode .legend-panel,
+body.kiosk-mode #footer {
+  display: none !important;
+}
+body.kiosk-mode .tabcontent {
+  padding-top: 8px;
 }
