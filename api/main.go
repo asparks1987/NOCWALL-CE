@@ -76,6 +76,8 @@ func main() {
 				"agent_ingest":               true,
 				"events_ingest":              true,
 				"source_uisp_poll":           true,
+				"topology_api":               true,
+				"topology_path_trace":        true,
 				"source_poll_background":     pollSec > 0,
 				"cloud_multi_tenant_stub":    true,
 				"connector_multivendor_stub": true,
@@ -166,6 +168,139 @@ func main() {
 			Truncated:   truncated,
 			Limit:       normalizedLimit,
 			Stub:        true,
+		})
+	})
+
+	app.Get("/inventory/interfaces", authMiddleware, func(c *fiber.Ctx) error {
+		limit := c.QueryInt("limit", 200)
+		identityID := c.Query("identity_id", "")
+		items, truncated, normalizedLimit := store.ListDeviceInterfaces(limit, identityID)
+		return c.JSON(InventoryInterfacesResponse{
+			LastUpdated: time.Now().UnixMilli(),
+			Count:       len(items),
+			Interfaces:  items,
+			Truncated:   truncated,
+			Limit:       normalizedLimit,
+			Stub:        true,
+		})
+	})
+
+	app.Get("/inventory/neighbors", authMiddleware, func(c *fiber.Ctx) error {
+		limit := c.QueryInt("limit", 200)
+		identityID := c.Query("identity_id", "")
+		items, truncated, normalizedLimit := store.ListNeighborLinks(limit, identityID)
+		return c.JSON(InventoryNeighborsResponse{
+			LastUpdated: time.Now().UnixMilli(),
+			Count:       len(items),
+			Neighbors:   items,
+			Truncated:   truncated,
+			Limit:       normalizedLimit,
+			Stub:        true,
+		})
+	})
+
+	app.Get("/inventory/lifecycle", authMiddleware, func(c *fiber.Ctx) error {
+		limit := c.QueryInt("limit", 200)
+		identityID := c.Query("identity_id", "")
+		items, truncated, normalizedLimit := store.ListLifecycleScores(limit, identityID)
+		return c.JSON(InventoryLifecycleResponse{
+			LastUpdated: time.Now().UnixMilli(),
+			Count:       len(items),
+			Scores:      items,
+			Truncated:   truncated,
+			Limit:       normalizedLimit,
+			Stub:        true,
+		})
+	})
+
+	app.Get("/topology/nodes", authMiddleware, func(c *fiber.Ctx) error {
+		limit := c.QueryInt("limit", 300)
+		siteID := c.Query("site_id", "")
+		items, truncated, normalizedLimit := store.ListTopologyNodes(limit, siteID)
+		return c.JSON(TopologyNodesResponse{
+			LastUpdated: time.Now().UnixMilli(),
+			Count:       len(items),
+			Nodes:       items,
+			Truncated:   truncated,
+			Limit:       normalizedLimit,
+			Stub:        true,
+		})
+	})
+
+	app.Get("/topology/edges", authMiddleware, func(c *fiber.Ctx) error {
+		limit := c.QueryInt("limit", 300)
+		identityID := c.Query("identity_id", "")
+		items, truncated, normalizedLimit := store.ListTopologyEdges(limit, identityID)
+		return c.JSON(TopologyEdgesResponse{
+			LastUpdated: time.Now().UnixMilli(),
+			Count:       len(items),
+			Edges:       items,
+			Truncated:   truncated,
+			Limit:       normalizedLimit,
+			Stub:        true,
+		})
+	})
+
+	app.Get("/topology/health", authMiddleware, func(c *fiber.Ctx) error {
+		health := store.TopologyHealth()
+		return c.JSON(TopologyHealthResponse{
+			LastUpdated: time.Now().UnixMilli(),
+			Health:      health,
+			Stub:        true,
+		})
+	})
+
+	app.Get("/topology/path", authMiddleware, func(c *fiber.Ctx) error {
+		sourceIdentityID := strings.TrimSpace(c.Query("source_identity_id", ""))
+		targetIdentityID := strings.TrimSpace(c.Query("target_identity_id", ""))
+		sourceNodeID := strings.TrimSpace(c.Query("source_node_id", ""))
+		targetNodeID := strings.TrimSpace(c.Query("target_node_id", ""))
+
+		nodes, edges, found, message := store.TraceTopologyPath(sourceIdentityID, targetIdentityID, sourceNodeID, targetNodeID)
+		return c.JSON(TopologyPathResponse{
+			LastUpdated:      time.Now().UnixMilli(),
+			Found:            found,
+			SourceNodeID:     sourceNodeID,
+			TargetNodeID:     targetNodeID,
+			SourceIdentityID: sourceIdentityID,
+			TargetIdentityID: targetIdentityID,
+			Hops:             max(0, len(nodes)-1),
+			Nodes:            nodes,
+			Edges:            edges,
+			Message:          message,
+			Stub:             true,
+		})
+	})
+
+	app.Post("/inventory/identities/merge", authMiddleware, func(c *fiber.Ctx) error {
+		var req IdentityMergeRequest
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(http.StatusBadRequest).JSON(fiber.Map{"code": "invalid_body", "message": "Invalid request body"})
+		}
+		secondary := make([]string, 0, len(req.SecondaryIDs)+1)
+		if strings.TrimSpace(req.SecondaryID) != "" {
+			secondary = append(secondary, req.SecondaryID)
+		}
+		secondary = append(secondary, req.SecondaryIDs...)
+
+		primary, merged, err := store.MergeIdentities(req.PrimaryID, secondary)
+		if err != nil {
+			switch err {
+			case ErrInvalidPrimary, ErrNoSecondary:
+				return c.Status(http.StatusBadRequest).JSON(fiber.Map{"code": err.Error(), "message": err.Error()})
+			case ErrPrimaryNotFound:
+				return c.Status(http.StatusNotFound).JSON(fiber.Map{"code": err.Error(), "message": err.Error()})
+			default:
+				return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"code": "merge_failed", "message": err.Error()})
+			}
+		}
+
+		return c.JSON(IdentityMergeResponse{
+			OK:      true,
+			Primary: primary,
+			Merged:  merged,
+			Stub:    true,
+			Message: "identities merged",
 		})
 	})
 

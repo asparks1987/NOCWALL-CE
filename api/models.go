@@ -55,21 +55,40 @@ type AgentRegisterRequest struct {
 }
 
 type TelemetryIngestRequest struct {
-	Source    string   `json:"source,omitempty"`
-	AgentID   string   `json:"agent_id,omitempty"`
-	EventType string   `json:"event_type,omitempty"`
-	DeviceID  string   `json:"device_id"`
-	Device    string   `json:"device,omitempty"`
-	Hostname  string   `json:"hostname,omitempty"`
-	Mac       string   `json:"mac,omitempty"`
-	Serial    string   `json:"serial,omitempty"`
-	Model     string   `json:"model,omitempty"`
-	Vendor    string   `json:"vendor,omitempty"`
-	Role      string   `json:"role,omitempty"`
-	SiteID    string   `json:"site_id,omitempty"`
-	Online    *bool    `json:"online,omitempty"`
-	LatencyMs *float64 `json:"latency_ms,omitempty"`
-	Message   string   `json:"message,omitempty"`
+	Source     string                   `json:"source,omitempty"`
+	AgentID    string                   `json:"agent_id,omitempty"`
+	EventType  string                   `json:"event_type,omitempty"`
+	DeviceID   string                   `json:"device_id"`
+	Device     string                   `json:"device,omitempty"`
+	Hostname   string                   `json:"hostname,omitempty"`
+	Mac        string                   `json:"mac,omitempty"`
+	Serial     string                   `json:"serial,omitempty"`
+	Model      string                   `json:"model,omitempty"`
+	Vendor     string                   `json:"vendor,omitempty"`
+	Role       string                   `json:"role,omitempty"`
+	SiteID     string                   `json:"site_id,omitempty"`
+	Online     *bool                    `json:"online,omitempty"`
+	LatencyMs  *float64                 `json:"latency_ms,omitempty"`
+	Message    string                   `json:"message,omitempty"`
+	Interfaces []TelemetryInterfaceFact `json:"interfaces,omitempty"`
+	Neighbors  []TelemetryNeighborFact  `json:"neighbors,omitempty"`
+}
+
+type TelemetryInterfaceFact struct {
+	Name      string   `json:"name"`
+	AdminUp   *bool    `json:"admin_up,omitempty"`
+	OperUp    *bool    `json:"oper_up,omitempty"`
+	RxBps     *float64 `json:"rx_bps,omitempty"`
+	TxBps     *float64 `json:"tx_bps,omitempty"`
+	ErrorRate *float64 `json:"error_rate,omitempty"`
+}
+
+type TelemetryNeighborFact struct {
+	LocalInterface       string `json:"local_interface,omitempty"`
+	NeighborIdentityHint string `json:"neighbor_identity_hint,omitempty"`
+	NeighborDeviceName   string `json:"neighbor_device_name,omitempty"`
+	NeighborInterface    string `json:"neighbor_interface,omitempty"`
+	Protocol             string `json:"protocol,omitempty"`
 }
 
 type DeviceIdentity struct {
@@ -184,6 +203,127 @@ type InventoryObservationsResponse struct {
 	Truncated    bool                `json:"truncated"`
 	Limit        int                 `json:"limit"`
 	Stub         bool                `json:"stub"`
+}
+
+type InventoryInterfacesResponse struct {
+	LastUpdated int64             `json:"last_updated"`
+	Count       int               `json:"count"`
+	Interfaces  []DeviceInterface `json:"interfaces"`
+	Truncated   bool              `json:"truncated"`
+	Limit       int               `json:"limit"`
+	Stub        bool              `json:"stub"`
+}
+
+type InventoryNeighborsResponse struct {
+	LastUpdated int64          `json:"last_updated"`
+	Count       int            `json:"count"`
+	Neighbors   []NeighborLink `json:"neighbors"`
+	Truncated   bool           `json:"truncated"`
+	Limit       int            `json:"limit"`
+	Stub        bool           `json:"stub"`
+}
+
+type LifecycleScore struct {
+	IdentityID string   `json:"identity_id"`
+	Score      int      `json:"score"`
+	Level      string   `json:"level"`
+	Reasons    []string `json:"reasons,omitempty"`
+}
+
+type InventoryLifecycleResponse struct {
+	LastUpdated int64            `json:"last_updated"`
+	Count       int              `json:"count"`
+	Scores      []LifecycleScore `json:"scores"`
+	Truncated   bool             `json:"truncated"`
+	Limit       int              `json:"limit"`
+	Stub        bool             `json:"stub"`
+}
+
+type TopologyNode struct {
+	NodeID          string `json:"node_id"`
+	IdentityID      string `json:"identity_id,omitempty"`
+	Label           string `json:"label"`
+	Role            string `json:"role,omitempty"`
+	SiteID          string `json:"site_id,omitempty"`
+	LastSeen        int64  `json:"last_seen,omitempty"`
+	Kind            string `json:"kind"` // managed | external
+	SourceRefsCount int    `json:"source_refs_count,omitempty"`
+}
+
+type TopologyEdge struct {
+	EdgeID             string `json:"edge_id"`
+	FromNodeID         string `json:"from_node_id"`
+	ToNodeID           string `json:"to_node_id"`
+	SourceIdentityID   string `json:"source_identity_id,omitempty"`
+	TargetIdentityHint string `json:"target_identity_hint,omitempty"`
+	LocalInterface     string `json:"local_interface,omitempty"`
+	NeighborInterface  string `json:"neighbor_interface,omitempty"`
+	Protocol           string `json:"protocol,omitempty"`
+	Source             string `json:"source,omitempty"`
+	UpdatedAt          string `json:"updated_at,omitempty"`
+	Resolved           bool   `json:"resolved"`
+}
+
+type TopologyHealth struct {
+	NodeCount            int `json:"node_count"`
+	ManagedNodeCount     int `json:"managed_node_count"`
+	EdgeCount            int `json:"edge_count"`
+	UnknownNeighborEdges int `json:"unknown_neighbor_edges"`
+	IsolatedManagedNodes int `json:"isolated_managed_nodes"`
+	StaleManagedNodes24h int `json:"stale_managed_nodes_24h"`
+	ConnectedComponents  int `json:"connected_components"`
+}
+
+type TopologyNodesResponse struct {
+	LastUpdated int64          `json:"last_updated"`
+	Count       int            `json:"count"`
+	Nodes       []TopologyNode `json:"nodes"`
+	Truncated   bool           `json:"truncated"`
+	Limit       int            `json:"limit"`
+	Stub        bool           `json:"stub"`
+}
+
+type TopologyEdgesResponse struct {
+	LastUpdated int64          `json:"last_updated"`
+	Count       int            `json:"count"`
+	Edges       []TopologyEdge `json:"edges"`
+	Truncated   bool           `json:"truncated"`
+	Limit       int            `json:"limit"`
+	Stub        bool           `json:"stub"`
+}
+
+type TopologyHealthResponse struct {
+	LastUpdated int64          `json:"last_updated"`
+	Health      TopologyHealth `json:"health"`
+	Stub        bool           `json:"stub"`
+}
+
+type TopologyPathResponse struct {
+	LastUpdated      int64          `json:"last_updated"`
+	Found            bool           `json:"found"`
+	SourceNodeID     string         `json:"source_node_id,omitempty"`
+	TargetNodeID     string         `json:"target_node_id,omitempty"`
+	SourceIdentityID string         `json:"source_identity_id,omitempty"`
+	TargetIdentityID string         `json:"target_identity_id,omitempty"`
+	Hops             int            `json:"hops"`
+	Nodes            []TopologyNode `json:"nodes,omitempty"`
+	Edges            []TopologyEdge `json:"edges,omitempty"`
+	Message          string         `json:"message,omitempty"`
+	Stub             bool           `json:"stub"`
+}
+
+type IdentityMergeRequest struct {
+	PrimaryID    string   `json:"primary_id"`
+	SecondaryID  string   `json:"secondary_id,omitempty"`
+	SecondaryIDs []string `json:"secondary_ids,omitempty"`
+}
+
+type IdentityMergeResponse struct {
+	OK      bool           `json:"ok"`
+	Primary DeviceIdentity `json:"primary"`
+	Merged  []string       `json:"merged"`
+	Stub    bool           `json:"stub"`
+	Message string         `json:"message,omitempty"`
 }
 
 type EventIngestRequest struct {
