@@ -8,6 +8,37 @@ date_default_timezone_set('America/Chicago');
 // Config
 $UISP_URL   = getenv("UISP_URL") ?: "https://changeme.unmsapp.com";
 $UISP_TOKEN = getenv("UISP_TOKEN") ?: "changeme";
+$NOCWALL_API_URL = rtrim((string)(getenv("NOCWALL_API_URL") ?: getenv("API_BASE_URL") ?: "http://api:8080"), "/");
+$NOCWALL_API_TOKEN = (string)(getenv("API_TOKEN") ?: "");
+$NOCWALL_FEATURE_PROFILE = strtolower(trim((string)(getenv("NOCWALL_FEATURE_PROFILE") ?: "ce")));
+$NOCWALL_PRO_FEATURES = in_array($NOCWALL_FEATURE_PROFILE, ['pro','full','dev'], true);
+$NOCWALL_PRO_OVERRIDE = strtolower(trim((string)getenv("NOCWALL_PRO_FEATURES")));
+if(in_array($NOCWALL_PRO_OVERRIDE, ['1','true','yes','on'], true)){
+    $NOCWALL_PRO_FEATURES = true;
+} elseif(in_array($NOCWALL_PRO_OVERRIDE, ['0','false','no','off'], true)){
+    $NOCWALL_PRO_FEATURES = false;
+}
+$NOCWALL_STRICT_CE = !$NOCWALL_PRO_FEATURES;
+$NOCWALL_STRICT_OVERRIDE = strtolower(trim((string)getenv("NOCWALL_STRICT_CE")));
+if(in_array($NOCWALL_STRICT_OVERRIDE, ['1','true','yes','on'], true)){
+    $NOCWALL_STRICT_CE = true;
+} elseif(in_array($NOCWALL_STRICT_OVERRIDE, ['0','false','no','off'], true)){
+    $NOCWALL_STRICT_CE = false;
+}
+$NOCWALL_FEATURE_FLAGS = [
+    'profile' => $NOCWALL_FEATURE_PROFILE,
+    'strict_ce' => $NOCWALL_STRICT_CE,
+    'pro_features' => $NOCWALL_PRO_FEATURES,
+    'advanced_metrics' => !$NOCWALL_STRICT_CE && $NOCWALL_PRO_FEATURES,
+    'advanced_actions' => $NOCWALL_PRO_FEATURES,
+    'display_controls' => !$NOCWALL_STRICT_CE && $NOCWALL_PRO_FEATURES,
+    'inventory' => $NOCWALL_PRO_FEATURES,
+    'topology' => $NOCWALL_PRO_FEATURES,
+    'history' => $NOCWALL_PRO_FEATURES,
+    'ack' => $NOCWALL_PRO_FEATURES,
+    'simulate' => $NOCWALL_PRO_FEATURES,
+    'cpe_history' => $NOCWALL_PRO_FEATURES
+];
 // Feature flags / UI toggles
 $SHOW_TLS_UI = in_array(strtolower((string)getenv('SHOW_TLS_UI')), ['1','true','yes'], true);
 
@@ -62,6 +93,7 @@ function normalize_username($value){
 function default_dashboard_settings(){
     return [
         'density' => 'normal',
+        'default_tab' => 'gateways',
         'metrics' => [
             'cpu' => true,
             'ram' => true,
@@ -78,6 +110,10 @@ function normalize_dashboard_settings($input){
     if(!is_array($input)) return $base;
     if(isset($input['density']) && $input['density'] === 'compact'){
         $base['density'] = 'compact';
+    }
+    $defaultTab = trim((string)($input['default_tab'] ?? ''));
+    if(in_array($defaultTab, ['gateways','aps','routers','topology'], true)){
+        $base['default_tab'] = $defaultTab;
     }
     if(isset($input['metrics']) && is_array($input['metrics'])){
         foreach(array_keys($base['metrics']) as $k){
@@ -100,10 +136,59 @@ function normalize_ap_siren_prefs($input){
     return $out;
 }
 
+function default_tab_siren_prefs(){
+    return [
+        'gateways' => true,
+        'aps' => true,
+        'routers' => true
+    ];
+}
+
+function normalize_tab_siren_prefs($input){
+    $base = default_tab_siren_prefs();
+    if(!is_array($input)) return $base;
+    foreach(array_keys($base) as $k){
+        if(array_key_exists($k, $input)){
+            $base[$k] = !!$input[$k];
+        }
+    }
+    return $base;
+}
+
+function default_card_order_prefs(){
+    return [
+        'gateways' => [],
+        'aps' => [],
+        'routers' => []
+    ];
+}
+
+function normalize_card_order_prefs($input){
+    $base = default_card_order_prefs();
+    if(!is_array($input)) return $base;
+    foreach(array_keys($base) as $k){
+        if(!array_key_exists($k, $input) || !is_array($input[$k])) continue;
+        $seen = [];
+        $out = [];
+        foreach($input[$k] as $id){
+            $v = trim((string)$id);
+            if($v === '' || strlen($v) > 180) continue;
+            if(isset($seen[$v])) continue;
+            $seen[$v] = true;
+            $out[] = $v;
+            if(count($out) >= 500) break;
+        }
+        $base[$k] = $out;
+    }
+    return $base;
+}
+
 function default_user_preferences(){
     return [
         'dashboard_settings' => default_dashboard_settings(),
-        'ap_siren_prefs' => []
+        'ap_siren_prefs' => [],
+        'tab_siren_prefs' => default_tab_siren_prefs(),
+        'card_order_prefs' => default_card_order_prefs()
     ];
 }
 
@@ -112,7 +197,132 @@ function normalize_user_preferences($input){
     if(!is_array($input)) return $base;
     $base['dashboard_settings'] = normalize_dashboard_settings($input['dashboard_settings'] ?? null);
     $base['ap_siren_prefs'] = normalize_ap_siren_prefs($input['ap_siren_prefs'] ?? null);
+    $base['tab_siren_prefs'] = normalize_tab_siren_prefs($input['tab_siren_prefs'] ?? null);
+    $base['card_order_prefs'] = normalize_card_order_prefs($input['card_order_prefs'] ?? null);
     return $base;
+}
+
+function normalize_source_status_entry($row){
+    if(!is_array($row)) return null;
+    $id = trim((string)($row['id'] ?? ''));
+    if($id === '') return null;
+    $name = trim((string)($row['name'] ?? $id));
+    $url = normalize_uisp_url($row['url'] ?? '');
+    $lastPollAt = trim((string)($row['last_poll_at'] ?? ''));
+    $httpCode = isset($row['http']) ? (int)$row['http'] : 0;
+    if($httpCode < 0) $httpCode = 0;
+    $latency = isset($row['latency_ms']) ? (int)$row['latency_ms'] : 0;
+    if($latency < 0) $latency = 0;
+    $deviceCount = isset($row['device_count']) ? (int)$row['device_count'] : 0;
+    if($deviceCount < 0) $deviceCount = 0;
+    $error = trim((string)($row['error'] ?? ''));
+    return [
+        'id' => $id,
+        'name' => ($name !== '' ? $name : $id),
+        'url' => $url,
+        'ok' => !empty($row['ok']),
+        'http' => $httpCode,
+        'latency_ms' => $latency,
+        'device_count' => $deviceCount,
+        'error' => $error,
+        'last_poll_at' => $lastPollAt
+    ];
+}
+
+function normalize_user_source_status($input){
+    $out = [];
+    if(!is_array($input)) return $out;
+    foreach($input as $row){
+        $normalized = normalize_source_status_entry($row);
+        if(!$normalized) continue;
+        $out[] = $normalized;
+    }
+    return $out;
+}
+
+function get_user_source_status_map($user){
+    $out = [];
+    if(!is_array($user)) return $out;
+    $rows = normalize_user_source_status($user['source_status'] ?? []);
+    foreach($rows as $row){
+        $out[$row['id']] = $row;
+    }
+    return $out;
+}
+
+function summarize_source_status_rows($rows){
+    $summary = [
+        'total' => 0,
+        'healthy' => 0,
+        'failed' => 0,
+        'never_polled' => 0,
+        'last_poll_at' => null
+    ];
+    if(!is_array($rows)) return $summary;
+    $summary['total'] = count($rows);
+    foreach($rows as $row){
+        if(!is_array($row)) continue;
+        if(!empty($row['last_poll_at'])){
+            $ts = strtotime((string)$row['last_poll_at']);
+            if($ts){
+                if(empty($summary['last_poll_at']) || $ts > strtotime((string)$summary['last_poll_at'])){
+                    $summary['last_poll_at'] = date('c', $ts);
+                }
+            }
+        }
+        if(empty($row['last_poll_at'])){
+            $summary['never_polled']++;
+            continue;
+        }
+        if(!empty($row['ok'])){
+            $summary['healthy']++;
+        } else {
+            $summary['failed']++;
+        }
+    }
+    return $summary;
+}
+
+function probe_uisp_source($src){
+    $out = [
+        'id' => (string)($src['id'] ?? ''),
+        'name' => (string)($src['name'] ?? ''),
+        'url' => normalize_uisp_url($src['url'] ?? ''),
+        'ok' => false,
+        'http' => 0,
+        'latency_ms' => 0,
+        'device_count' => 0,
+        'error' => '',
+        'last_poll_at' => date('c')
+    ];
+    $url = rtrim((string)$out['url'], '/');
+    $token = trim((string)($src['token'] ?? ''));
+    if($url === '' || $token === ''){
+        $out['error'] = 'invalid_source';
+        return $out;
+    }
+    $ch = curl_init();
+    $start = microtime(true);
+    curl_setopt_array($ch,[
+        CURLOPT_URL => $url . '/nms/api/v2.1/devices',
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER => ['accept: application/json', 'x-auth-token: ' . $token],
+        CURLOPT_TIMEOUT => 10
+    ]);
+    $resp = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $lat = (int)round((microtime(true) - $start) * 1000);
+    $err = (string)curl_error($ch);
+    curl_close($ch);
+    $rows = json_decode((string)$resp, true);
+    $count = is_array($rows) ? count($rows) : 0;
+    $ok = ($code >= 200 && $code < 300);
+    $out['ok'] = $ok;
+    $out['http'] = $code;
+    $out['latency_ms'] = $lat;
+    $out['device_count'] = $count;
+    $out['error'] = ($ok ? '' : ($err !== '' ? $err : ('http_' . $code)));
+    return $out;
 }
 
 function normalize_uisp_url($value){
@@ -217,6 +427,7 @@ function default_admin_user(){
         'password_hash' => password_hash('admin', PASSWORD_DEFAULT),
         'uisp_token' => '',
         'sources' => [],
+        'source_status' => [],
         'preferences' => default_user_preferences(),
         'created_at' => $now,
         'updated_at' => $now
@@ -232,6 +443,11 @@ function bootstrap_users_store($usersFile, $legacyAuthFile, $envUrl, $envToken){
             if(!is_array($user)) continue;
             if(!isset($store['users'][$uname]['sources']) || !is_array($store['users'][$uname]['sources'])){
                 $store['users'][$uname]['sources'] = [];
+                $didMutate = true;
+            }
+            $normalizedSourceStatus = normalize_user_source_status($store['users'][$uname]['source_status'] ?? null);
+            if(json_encode($normalizedSourceStatus) !== json_encode($store['users'][$uname]['source_status'] ?? null)){
+                $store['users'][$uname]['source_status'] = $normalizedSourceStatus;
                 $didMutate = true;
             }
             $normalizedPrefs = normalize_user_preferences($store['users'][$uname]['preferences'] ?? null);
@@ -293,6 +509,7 @@ function bootstrap_users_store($usersFile, $legacyAuthFile, $envUrl, $envToken){
             'password_hash' => (string)$legacy['password_hash'],
             'uisp_token' => '',
             'sources' => $migratedSources,
+            'source_status' => [],
             'preferences' => default_user_preferences(),
             'created_at' => (string)($legacy['created_at'] ?? $legacy['updated_at'] ?? $now),
             'updated_at' => (string)($legacy['updated_at'] ?? $now)
@@ -363,6 +580,7 @@ if(isset($_GET['action']) && $_GET['action']==='register' && $_SERVER['REQUEST_M
         'password_hash' => password_hash($p, PASSWORD_DEFAULT),
         'uisp_token' => '',
         'sources' => [],
+        'source_status' => [],
         'preferences' => default_user_preferences(),
         'created_at' => $now,
         'updated_at' => $now
@@ -419,6 +637,23 @@ function require_login_for_ajax(){
         echo json_encode(['error'=>'invalid_session']);
         exit;
     }
+}
+
+function require_pro_feature($featureKey){
+    global $NOCWALL_FEATURE_FLAGS;
+    $enabled = !empty($NOCWALL_FEATURE_FLAGS[$featureKey]);
+    if($enabled){
+        return;
+    }
+    http_response_code(403);
+    header('Content-Type: application/json');
+    echo json_encode([
+        'ok' => 0,
+        'error' => 'pro_feature_required',
+        'message' => 'This feature is available in NOCWALL PRO.',
+        'feature' => (string)$featureKey
+    ]);
+    exit;
 }
 
 // Load cache
@@ -548,6 +783,39 @@ function send_gotify($title,$message,$priority=5){
     return $code>=200 && $code<300;
 }
 
+function api_get_json($baseUrl, $path, $token = '', $timeoutSec = 6){
+    $base = rtrim((string)$baseUrl, '/');
+    $uri = '/' . ltrim((string)$path, '/');
+    $url = $base . $uri;
+    $start = microtime(true);
+    $ch = curl_init();
+    $headers = ['accept: application/json'];
+    if(trim((string)$token) !== ''){
+        $headers[] = 'Authorization: Bearer ' . trim((string)$token);
+    }
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER => $headers,
+        CURLOPT_TIMEOUT => max(2, (int)$timeoutSec),
+    ]);
+    $resp = curl_exec($ch);
+    $err = curl_error($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    $latency = (int)round((microtime(true) - $start) * 1000);
+    $json = json_decode((string)$resp, true);
+    $ok = ($code >= 200 && $code < 300 && is_array($json));
+    return [
+        'ok' => $ok,
+        'code' => $code,
+        'latency_ms' => $latency,
+        'error' => $ok ? '' : ($err ?: ('http_' . $code)),
+        'json' => is_array($json) ? $json : null
+    ];
+}
+
 // AJAX
 if(isset($_GET['ajax'])){
     require_login_for_ajax();
@@ -645,6 +913,8 @@ if(isset($_GET['ajax'])){
             $id=device_key($d);
             $name=$d['identification']['name']??$id;
             $role=device_role($d);
+            $siteName = (string)($d['identification']['site']['name'] ?? $d['site']['name'] ?? $d['identification']['siteName'] ?? '');
+            $siteId = (string)($d['identification']['site']['id'] ?? $d['identification']['siteId'] ?? '');
             $isGw=is_gateway($d);
             $isAp=is_ap($d);
             $isRouter=is_router($d);
@@ -724,6 +994,7 @@ if(isset($_GET['ajax'])){
                     }
                 }
             } else {
+                if(($cache[$id]['last_seen'] ?? 0) !== $now){ $cache[$id]['last_seen'] = $now; $cache_changed = true; }
                 if(!empty($cache[$id]['offline_since'])){ unset($cache[$id]['offline_since']); $cache_changed=true; }
                 $offline_since=null;
                 // If previously offline, send recovery notification
@@ -739,6 +1010,7 @@ if(isset($_GET['ajax'])){
 
             $ack_until=$cache[$id]['ack_until']??null;
             $ack_active = $ack_until && $ack_until > $now;
+            $last_seen = (int)($cache[$id]['last_seen'] ?? ($on ? $now : 0));
 
             $flap_history = $cache[$id]['flap_history'] ?? [];
             if(!empty($flap_history)){
@@ -819,9 +1091,19 @@ if(isset($_GET['ajax'])){
                 'id'=>$id,'name'=>$name,
                 'gateway'=>$isGw,'ap'=>$isAp,'station'=>$isStation,
                 'router'=>$isRouter,'switch'=>$isSwitch,'role'=>$role,'backbone'=>$isBackbone,
+                'source_id'=>(string)($d['_source_id'] ?? ''),
+                'source_name'=>(string)($d['_source_name'] ?? ''),
+                'site_id'=>$siteId,
+                'site'=>$siteName,
+                'hostname'=>(string)($d['identification']['hostname'] ?? ''),
+                'mac'=>(string)($d['identification']['mac'] ?? ''),
+                'serial'=>(string)($d['identification']['serialNumber'] ?? ''),
+                'vendor'=>(string)($d['identification']['vendor'] ?? ''),
+                'model'=>(string)($d['identification']['model'] ?? ''),
                 'online'=>$on,'cpu'=>$cpu,'ram'=>$ram,'temp'=>$temp,'latency'=>$lat,
                 'cpe_latency'=>$cpe_lat,
                 'uptime'=>$uptime,
+                'last_seen'=>$last_seen,
                 'offline_since'=>$offline_since,
                 'flaps_recent'=>$flaps_recent,
                 'latency_alert'=>$latency_alert_active,
@@ -834,7 +1116,301 @@ if(isset($_GET['ajax'])){
         echo json_encode(['devices'=>$out,'http'=>$http_code,'api_latency'=>$api_latency]); exit;
     }
 
+    if($_GET['ajax']==='inventory_overview'){
+        require_pro_feature('inventory');
+        $identsReq = api_get_json($NOCWALL_API_URL, '/inventory/identities', $NOCWALL_API_TOKEN, 6);
+        if(!$identsReq['ok']){
+            http_response_code(502);
+            echo json_encode([
+                'ok' => 0,
+                'error' => 'inventory_unreachable',
+                'message' => 'Inventory API is unavailable.',
+                'details' => $identsReq['error'],
+                'http' => $identsReq['code'],
+                'api_latency' => $identsReq['latency_ms']
+            ]);
+            exit;
+        }
+
+        $identities = $identsReq['json']['identities'] ?? [];
+        if(!is_array($identities)) $identities = [];
+
+        $driftReq = api_get_json($NOCWALL_API_URL, '/inventory/drift?limit=1000', $NOCWALL_API_TOKEN, 6);
+        $lifeReq = api_get_json($NOCWALL_API_URL, '/inventory/lifecycle?limit=1000', $NOCWALL_API_TOKEN, 6);
+
+        $driftLatest = [];
+        if($driftReq['ok']){
+            $snapshots = $driftReq['json']['snapshots'] ?? [];
+            if(is_array($snapshots)){
+                foreach($snapshots as $snap){
+                    if(!is_array($snap)) continue;
+                    $identityId = trim((string)($snap['identity_id'] ?? ''));
+                    if($identityId === '') continue;
+                    $observedAt = (int)($snap['observed_at'] ?? 0);
+                    if(!isset($driftLatest[$identityId]) || $observedAt >= (int)($driftLatest[$identityId]['observed_at'] ?? 0)){
+                        $driftLatest[$identityId] = $snap;
+                    }
+                }
+            }
+        }
+
+        $lifecycle = [];
+        if($lifeReq['ok']){
+            $scores = $lifeReq['json']['scores'] ?? [];
+            if(is_array($scores)){
+                foreach($scores as $score){
+                    if(!is_array($score)) continue;
+                    $identityId = trim((string)($score['identity_id'] ?? ''));
+                    if($identityId === '') continue;
+                    $lifecycle[$identityId] = $score;
+                }
+            }
+        }
+
+        $devices = [];
+        foreach($identities as $ident){
+            if(!is_array($ident)) continue;
+            $primary = trim((string)($ident['primary_device_id'] ?? ''));
+            if($primary === '') continue;
+            $identityId = trim((string)($ident['identity_id'] ?? ''));
+            $drift = $identityId !== '' ? ($driftLatest[$identityId] ?? null) : null;
+            $life = $identityId !== '' ? ($lifecycle[$identityId] ?? null) : null;
+
+            $devices[$primary] = [
+                'identity_id' => $identityId,
+                'name' => (string)($ident['name'] ?? ''),
+                'role' => (string)($ident['role'] ?? ''),
+                'site_id' => (string)($ident['site_id'] ?? ''),
+                'last_seen' => (int)($ident['last_seen'] ?? 0),
+                'drift_changed' => is_array($drift) ? !empty($drift['changed']) : false,
+                'drift_observed_at' => is_array($drift) ? (int)($drift['observed_at'] ?? 0) : 0,
+                'lifecycle_level' => is_array($life) ? (string)($life['level'] ?? '') : '',
+                'lifecycle_score' => is_array($life) ? (int)($life['score'] ?? 0) : 0,
+                'source_refs_count' => is_array($ident['source_refs'] ?? null) ? count($ident['source_refs']) : 0
+            ];
+        }
+
+        echo json_encode([
+            'ok' => 1,
+            'fetched_at' => date('c'),
+            'identities' => count($identities),
+            'devices' => $devices,
+            'api_latency' => [
+                'identities' => $identsReq['latency_ms'],
+                'drift' => $driftReq['latency_ms'],
+                'lifecycle' => $lifeReq['latency_ms']
+            ]
+        ]);
+        exit;
+    }
+
+    if($_GET['ajax']==='inventory_device'){
+        require_pro_feature('inventory');
+        $deviceId = trim((string)($_GET['id'] ?? ''));
+        $deviceName = trim((string)($_GET['name'] ?? ''));
+        if($deviceId === ''){
+            http_response_code(400);
+            echo json_encode(['ok'=>0,'error'=>'id_required']);
+            exit;
+        }
+
+        $identsReq = api_get_json($NOCWALL_API_URL, '/inventory/identities', $NOCWALL_API_TOKEN, 6);
+        if(!$identsReq['ok']){
+            http_response_code(502);
+            echo json_encode([
+                'ok' => 0,
+                'error' => 'inventory_unreachable',
+                'message' => 'Inventory API is unavailable.',
+                'details' => $identsReq['error'],
+                'http' => $identsReq['code']
+            ]);
+            exit;
+        }
+
+        $identities = $identsReq['json']['identities'] ?? [];
+        if(!is_array($identities)) $identities = [];
+        $identity = null;
+        foreach($identities as $ident){
+            if(!is_array($ident)) continue;
+            $primary = trim((string)($ident['primary_device_id'] ?? ''));
+            if($primary !== '' && $primary === $deviceId){
+                $identity = $ident;
+                break;
+            }
+        }
+        if($identity === null && $deviceName !== ''){
+            $nameNeedle = strtolower($deviceName);
+            foreach($identities as $ident){
+                if(!is_array($ident)) continue;
+                $name = strtolower(trim((string)($ident['name'] ?? '')));
+                if($name !== '' && $name === $nameNeedle){
+                    $identity = $ident;
+                    break;
+                }
+            }
+        }
+        if($identity === null){
+            echo json_encode([
+                'ok' => 1,
+                'device_id' => $deviceId,
+                'identity' => null,
+                'interfaces' => [],
+                'neighbors' => [],
+                'drift' => [],
+                'lifecycle' => null,
+                'message' => 'No inventory identity found yet for this device. Wait for telemetry ingest/source polling.'
+            ]);
+            exit;
+        }
+
+        $identityId = trim((string)($identity['identity_id'] ?? ''));
+        $q = rawurlencode($identityId);
+        $ifaceReq = api_get_json($NOCWALL_API_URL, '/inventory/interfaces?identity_id=' . $q . '&limit=200', $NOCWALL_API_TOKEN, 6);
+        $neighReq = api_get_json($NOCWALL_API_URL, '/inventory/neighbors?identity_id=' . $q . '&limit=200', $NOCWALL_API_TOKEN, 6);
+        $driftReq = api_get_json($NOCWALL_API_URL, '/inventory/drift?identity_id=' . $q . '&limit=40', $NOCWALL_API_TOKEN, 6);
+        $lifeReq = api_get_json($NOCWALL_API_URL, '/inventory/lifecycle?identity_id=' . $q . '&limit=1', $NOCWALL_API_TOKEN, 6);
+
+        $interfaces = ($ifaceReq['ok'] && is_array($ifaceReq['json']['interfaces'] ?? null)) ? $ifaceReq['json']['interfaces'] : [];
+        $neighbors = ($neighReq['ok'] && is_array($neighReq['json']['neighbors'] ?? null)) ? $neighReq['json']['neighbors'] : [];
+        $drift = ($driftReq['ok'] && is_array($driftReq['json']['snapshots'] ?? null)) ? $driftReq['json']['snapshots'] : [];
+        $lifecycle = null;
+        if($lifeReq['ok'] && is_array($lifeReq['json']['scores'] ?? null) && count($lifeReq['json']['scores']) > 0){
+            $lifecycle = $lifeReq['json']['scores'][0];
+        }
+
+        $ifaceSummary = ['total' => 0, 'oper_up' => 0, 'oper_down' => 0];
+        foreach($interfaces as $iface){
+            if(!is_array($iface)) continue;
+            $ifaceSummary['total']++;
+            if(array_key_exists('oper_up', $iface) && $iface['oper_up'] === true){
+                $ifaceSummary['oper_up']++;
+            } else {
+                $ifaceSummary['oper_down']++;
+            }
+        }
+
+        usort($interfaces, function($a, $b){
+            $an = strtolower(trim((string)($a['name'] ?? '')));
+            $bn = strtolower(trim((string)($b['name'] ?? '')));
+            return strcmp($an, $bn);
+        });
+        usort($drift, function($a, $b){
+            $at = (int)($a['observed_at'] ?? 0);
+            $bt = (int)($b['observed_at'] ?? 0);
+            return $bt <=> $at;
+        });
+
+        echo json_encode([
+            'ok' => 1,
+            'device_id' => $deviceId,
+            'identity' => $identity,
+            'interface_summary' => $ifaceSummary,
+            'interfaces' => array_slice($interfaces, 0, 80),
+            'neighbors' => array_slice($neighbors, 0, 80),
+            'drift' => array_slice($drift, 0, 20),
+            'lifecycle' => $lifecycle,
+            'api_latency' => [
+                'identities' => $identsReq['latency_ms'],
+                'interfaces' => $ifaceReq['latency_ms'],
+                'neighbors' => $neighReq['latency_ms'],
+                'drift' => $driftReq['latency_ms'],
+                'lifecycle' => $lifeReq['latency_ms']
+            ]
+        ]);
+        exit;
+    }
+
+    if($_GET['ajax']==='topology_overview'){
+        require_pro_feature('topology');
+        $limitNodes = (int)($_GET['nodes_limit'] ?? 1200);
+        $limitEdges = (int)($_GET['edges_limit'] ?? 2000);
+        if($limitNodes <= 0 || $limitNodes > 5000) $limitNodes = 1200;
+        if($limitEdges <= 0 || $limitEdges > 8000) $limitEdges = 2000;
+
+        $nodesReq = api_get_json($NOCWALL_API_URL, '/topology/nodes?limit=' . $limitNodes, $NOCWALL_API_TOKEN, 7);
+        $edgesReq = api_get_json($NOCWALL_API_URL, '/topology/edges?limit=' . $limitEdges, $NOCWALL_API_TOKEN, 7);
+        $healthReq = api_get_json($NOCWALL_API_URL, '/topology/health', $NOCWALL_API_TOKEN, 7);
+
+        if(!$nodesReq['ok'] || !$edgesReq['ok'] || !$healthReq['ok']){
+            http_response_code(502);
+            echo json_encode([
+                'ok' => 0,
+                'error' => 'topology_unreachable',
+                'message' => 'Topology API is unavailable.',
+                'details' => [
+                    'nodes' => ['ok'=>$nodesReq['ok'],'http'=>$nodesReq['code'],'error'=>$nodesReq['error']],
+                    'edges' => ['ok'=>$edgesReq['ok'],'http'=>$edgesReq['code'],'error'=>$edgesReq['error']],
+                    'health' => ['ok'=>$healthReq['ok'],'http'=>$healthReq['code'],'error'=>$healthReq['error']]
+                ]
+            ]);
+            exit;
+        }
+
+        $nodes = $nodesReq['json']['nodes'] ?? [];
+        $edges = $edgesReq['json']['edges'] ?? [];
+        $health = $healthReq['json']['health'] ?? [];
+        if(!is_array($nodes)) $nodes = [];
+        if(!is_array($edges)) $edges = [];
+        if(!is_array($health)) $health = [];
+
+        echo json_encode([
+            'ok' => 1,
+            'nodes' => $nodes,
+            'edges' => $edges,
+            'health' => $health,
+            'counts' => [
+                'nodes' => count($nodes),
+                'edges' => count($edges),
+            ],
+            'api_latency' => [
+                'nodes' => $nodesReq['latency_ms'],
+                'edges' => $edgesReq['latency_ms'],
+                'health' => $healthReq['latency_ms']
+            ],
+            'fetched_at' => date('c')
+        ]);
+        exit;
+    }
+
+    if($_GET['ajax']==='topology_trace'){
+        require_pro_feature('topology');
+        $sourceNodeID = trim((string)($_GET['source_node_id'] ?? ''));
+        $targetNodeID = trim((string)($_GET['target_node_id'] ?? ''));
+        $sourceIdentityID = trim((string)($_GET['source_identity_id'] ?? ''));
+        $targetIdentityID = trim((string)($_GET['target_identity_id'] ?? ''));
+
+        $query = [];
+        if($sourceNodeID !== '') $query[] = 'source_node_id=' . rawurlencode($sourceNodeID);
+        if($targetNodeID !== '') $query[] = 'target_node_id=' . rawurlencode($targetNodeID);
+        if($sourceIdentityID !== '') $query[] = 'source_identity_id=' . rawurlencode($sourceIdentityID);
+        if($targetIdentityID !== '') $query[] = 'target_identity_id=' . rawurlencode($targetIdentityID);
+
+        $path = '/topology/path';
+        if(count($query) > 0) $path .= '?' . implode('&', $query);
+
+        $traceReq = api_get_json($NOCWALL_API_URL, $path, $NOCWALL_API_TOKEN, 7);
+        if(!$traceReq['ok']){
+            http_response_code(502);
+            echo json_encode([
+                'ok' => 0,
+                'error' => 'topology_trace_failed',
+                'message' => 'Topology trace is unavailable.',
+                'details' => $traceReq['error'],
+                'http' => $traceReq['code']
+            ]);
+            exit;
+        }
+
+        $payload = $traceReq['json'];
+        if(!is_array($payload)) $payload = [];
+        $payload['ok'] = 1;
+        $payload['api_latency'] = $traceReq['latency_ms'];
+        echo json_encode($payload);
+        exit;
+    }
+
     if($_GET['ajax']==='history' && !empty($_GET['id'])){
+        require_pro_feature('history');
         $id=$_GET['id'];
         $stmt=$db->prepare("SELECT timestamp,cpu,ram,temp,latency FROM metrics WHERE device_id=? ORDER BY timestamp DESC LIMIT 1440");
         $stmt->bindValue(1,$id,SQLITE3_TEXT);
@@ -844,6 +1420,7 @@ if(isset($_GET['ajax'])){
         echo json_encode(array_reverse($rows)); exit;
     }
     if($_GET['ajax']==='cpe_history'){
+        require_pro_feature('cpe_history');
         $id=trim((string)($_GET['id'] ?? ''));
         $points=[];
         if($id!==''){
@@ -1020,6 +1597,24 @@ if(isset($_GET['ajax'])){
             $prefs['ap_siren_prefs'] = normalize_ap_siren_prefs($decoded);
         }
 
+        if(array_key_exists('tab_siren_prefs', $_POST)){
+            $hadInput = true;
+            $decoded = json_decode((string)$_POST['tab_siren_prefs'], true);
+            if(!is_array($decoded)){
+                echo json_encode(['ok'=>0,'error'=>'invalid_tab_siren_prefs']); exit;
+            }
+            $prefs['tab_siren_prefs'] = normalize_tab_siren_prefs($decoded);
+        }
+
+        if(array_key_exists('card_order_prefs', $_POST)){
+            $hadInput = true;
+            $decoded = json_decode((string)$_POST['card_order_prefs'], true);
+            if(!is_array($decoded)){
+                echo json_encode(['ok'=>0,'error'=>'invalid_card_order_prefs']); exit;
+            }
+            $prefs['card_order_prefs'] = normalize_card_order_prefs($decoded);
+        }
+
         if(!$hadInput){
             echo json_encode(['ok'=>0,'error'=>'no_fields']); exit;
         }
@@ -1028,6 +1623,41 @@ if(isset($_GET['ajax'])){
         $USERS_STORE['users'][$sessionUser]['updated_at'] = date('c');
         save_users_store($USERS_FILE, $USERS_STORE);
         echo json_encode(['ok'=>1,'preferences'=>$prefs]); exit;
+    }
+
+    if($_GET['ajax']==='sources_status'){
+        $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
+        $user = get_user_by_username($USERS_STORE, $sessionUser);
+        if(!$user){
+            echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
+        }
+        $statusMap = get_user_source_status_map($user);
+        $effective = get_effective_uisp_sources($user, $UISP_URL, $UISP_TOKEN);
+        $rows = [];
+        foreach($effective as $src){
+            $id = (string)($src['id'] ?? '');
+            $saved = $statusMap[$id] ?? null;
+            $rows[] = [
+                'id' => $id,
+                'name' => (string)($src['name'] ?? $id),
+                'url' => normalize_uisp_url($src['url'] ?? ''),
+                'enabled' => !empty($src['enabled']),
+                'ok' => ($saved ? !empty($saved['ok']) : null),
+                'http' => ($saved ? (int)($saved['http'] ?? 0) : null),
+                'latency_ms' => ($saved ? (int)($saved['latency_ms'] ?? 0) : null),
+                'device_count' => ($saved ? (int)($saved['device_count'] ?? 0) : null),
+                'error' => ($saved ? (string)($saved['error'] ?? '') : ''),
+                'last_poll_at' => ($saved ? (string)($saved['last_poll_at'] ?? '') : '')
+            ];
+        }
+        $summary = summarize_source_status_rows($rows);
+        echo json_encode([
+            'ok' => 1,
+            'username' => $sessionUser,
+            'sources' => $rows,
+            'summary' => $summary
+        ]);
+        exit;
     }
 
     if($_GET['ajax']==='sources_list'){
@@ -1120,6 +1750,14 @@ if(isset($_GET['ajax'])){
         }
 
         $USERS_STORE['users'][$sessionUser]['sources'] = $sources;
+        $statusRows = normalize_user_source_status($user['source_status'] ?? null);
+        foreach($statusRows as &$statusRow){
+            if((string)($statusRow['id'] ?? '') !== (string)$savedId) continue;
+            $statusRow['name'] = $name;
+            $statusRow['url'] = $url;
+        }
+        unset($statusRow);
+        $USERS_STORE['users'][$sessionUser]['source_status'] = $statusRows;
         $USERS_STORE['users'][$sessionUser]['updated_at'] = date('c');
         save_users_store($USERS_FILE, $USERS_STORE);
         echo json_encode(['ok'=>1, 'id'=>$savedId, 'count'=>count($sources)]); exit;
@@ -1141,6 +1779,12 @@ if(isset($_GET['ajax'])){
             if((string)$src['id'] !== $id) $filtered[] = $src;
         }
         $USERS_STORE['users'][$sessionUser]['sources'] = $filtered;
+        $statusRows = normalize_user_source_status($user['source_status'] ?? null);
+        $statusFiltered = [];
+        foreach($statusRows as $row){
+            if((string)($row['id'] ?? '') !== $id) $statusFiltered[] = $row;
+        }
+        $USERS_STORE['users'][$sessionUser]['source_status'] = $statusFiltered;
         $USERS_STORE['users'][$sessionUser]['updated_at'] = date('c');
         save_users_store($USERS_FILE, $USERS_STORE);
         echo json_encode(['ok'=>1, 'count'=>count($filtered)]); exit;
@@ -1153,7 +1797,10 @@ if(isset($_GET['ajax'])){
             echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
         }
         $id = trim((string)($_POST['id'] ?? ''));
-        $sources = get_stored_user_sources($user);
+        if($id === ''){
+            echo json_encode(['ok'=>0,'error'=>'id_required']); exit;
+        }
+        $sources = get_effective_uisp_sources($user, $UISP_URL, $UISP_TOKEN);
         $target = null;
         foreach($sources as $src){
             if((string)$src['id'] === $id){
@@ -1164,27 +1811,33 @@ if(isset($_GET['ajax'])){
         if(!$target){
             echo json_encode(['ok'=>0,'error'=>'source_not_found']); exit;
         }
-        $ch = curl_init();
-        $start = microtime(true);
-        curl_setopt_array($ch,[
-            CURLOPT_URL=>rtrim((string)$target['url'],"/")."/nms/api/v2.1/devices",
-            CURLOPT_RETURNTRANSFER=>true,
-            CURLOPT_HTTPHEADER=>["accept: application/json","x-auth-token: ".$target['token']],
-            CURLOPT_TIMEOUT=>10
-        ]);
-        $resp = curl_exec($ch);
-        $code = (int)curl_getinfo($ch,CURLINFO_HTTP_CODE);
-        $lat = round((microtime(true)-$start)*1000);
-        $err = curl_error($ch);
-        curl_close($ch);
-        $rows = json_decode((string)$resp, true);
-        $count = is_array($rows) ? count($rows) : 0;
+        $probe = probe_uisp_source($target);
+
+        $statusRows = normalize_user_source_status($user['source_status'] ?? null);
+        $statusSaved = false;
+        for($i = 0; $i < count($statusRows); $i++){
+            if((string)($statusRows[$i]['id'] ?? '') !== $id) continue;
+            $statusRows[$i] = normalize_source_status_entry($probe);
+            $statusSaved = true;
+            break;
+        }
+        if(!$statusSaved){
+            $statusRows[] = normalize_source_status_entry($probe);
+        }
+        $USERS_STORE['users'][$sessionUser]['source_status'] = normalize_user_source_status($statusRows);
+        $USERS_STORE['users'][$sessionUser]['updated_at'] = date('c');
+        save_users_store($USERS_FILE, $USERS_STORE);
+
         echo json_encode([
-            'ok' => ($code >= 200 && $code < 300),
-            'http' => $code,
-            'latency_ms' => $lat,
-            'device_count' => $count,
-            'error' => ($err ?: null)
+            'ok' => !empty($probe['ok']),
+            'id' => (string)$probe['id'],
+            'name' => (string)$probe['name'],
+            'url' => (string)$probe['url'],
+            'http' => (int)$probe['http'],
+            'latency_ms' => (int)$probe['latency_ms'],
+            'device_count' => (int)$probe['device_count'],
+            'error' => ($probe['error'] !== '' ? $probe['error'] : null),
+            'last_poll_at' => (string)$probe['last_poll_at']
         ]);
         exit;
     }
@@ -1270,6 +1923,7 @@ if(isset($_GET['ajax'])){
     }
 
     if($_GET['ajax']==='ack' && !empty($_GET['id']) && !empty($_GET['dur'])){
+        require_pro_feature('ack');
         $id=$_GET['id']; $dur=$_GET['dur'];
         $durmap=['30m'=>1800,'1h'=>3600,'6h'=>21600,'8h'=>28800,'12h'=>43200];
         $cache[$id]['ack_until']=time()+($durmap[$dur]??1800);
@@ -1277,16 +1931,19 @@ if(isset($_GET['ajax'])){
         echo json_encode(['ok'=>1]); exit;
     }
     if($_GET['ajax']==='clear' && !empty($_GET['id'])){
+        require_pro_feature('ack');
         unset($cache[$_GET['id']]['ack_until']);
         file_put_contents($CACHE_FILE,json_encode($cache));
         echo json_encode(['ok'=>1]); exit;
     }
     if($_GET['ajax']==='simulate' && !empty($_GET['id'])){
+        require_pro_feature('simulate');
         $cache[$_GET['id']]['simulate']=true;
         file_put_contents($CACHE_FILE,json_encode($cache));
         echo json_encode(['ok'=>1]); exit;
     }
     if($_GET['ajax']==='clearsim' && !empty($_GET['id'])){
+        require_pro_feature('simulate');
         $did = $_GET['id'];
         if(isset($cache[$did]['simulate'])) unset($cache[$did]['simulate']);
         // Proactively clear any outage state created by simulation so UI snaps back immediately
@@ -1296,6 +1953,7 @@ if(isset($_GET['ajax'])){
         echo json_encode(['ok'=>1]); exit;
     }
     if($_GET['ajax']==='clearall'){
+        require_pro_feature('ack');
         foreach($cache as $k=>&$c){
             if(is_array($c)){
                 if(array_key_exists('ack_until',$c)) unset($c['ack_until']);
@@ -1315,6 +1973,10 @@ if(!isset($_GET['ajax'])){
 if(isset($_GET['view']) && $_GET['view']==='device'){
     if(!isset($_SESSION['auth_ok']) || empty($_SESSION['auth_user'])){
         header('Location: ./?login=1');
+        exit;
+    }
+    if(empty($NOCWALL_FEATURE_FLAGS['history'])){
+        header('Location: ./');
         exit;
     }
     $deviceId = trim((string)($_GET['id'] ?? ''));
@@ -1672,7 +2334,7 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
 <header>
   <?php $AUTH_USER = htmlspecialchars((string)($_SESSION['auth_user'] ?? ''), ENT_QUOTES); ?>
   <div class="brand">
-    <span class="brand-title">NOCWALL-CE</span>
+    <span class="brand-title">NOCWALL-CE<?=!empty($NOCWALL_FEATURE_FLAGS['strict_ce']) ? ' <small style="font-size:12px;color:#f5b87c;">(Strict CE Mode)</small>' : ''?></span>
     <span id="overallSummary"></span>
   </div>
   <div class="header-actions">
@@ -1682,42 +2344,95 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
     <?php endif; ?>
     <button onclick="manageUispSources()">Account Settings</button>
     <button id="enableSoundBtn" class="btn-accent" onclick="enableSound()">Enable Sound</button>
-    <button onclick="clearAll()">Clear All Acks</button>
+    <?php if(!empty($NOCWALL_FEATURE_FLAGS['ack'])): ?>
+      <button onclick="clearAll()">Clear All Acks</button>
+    <?php endif; ?>
     <button onclick="changePassword()">Change Password</button>
     <button onclick="logout()">Logout</button>
   </div>
 </header>
 <div class="tabs">
-    <button class="tablink active" onclick="openTab('gateways', event)">Gateways</button>
-    <button class="tablink" onclick="openTab('aps', event)">APs</button>
-    <button class="tablink" onclick="openTab('routers', event)">Routers & Switches</button>
+    <button class="tablink active" data-tab="gateways" onclick="openTab('gateways', event)">Gateways</button>
+    <button class="tablink" data-tab="aps" onclick="openTab('aps', event)">APs</button>
+    <button class="tablink" data-tab="routers" onclick="openTab('routers', event)">Routers & Switches</button>
+    <?php if(!empty($NOCWALL_FEATURE_FLAGS['topology'])): ?>
+      <button class="tablink" data-tab="topology" onclick="openTab('topology', event)">Topology</button>
+    <?php endif; ?>
 </div>
-<section class="display-controls" aria-label="Dashboard display controls">
-  <div class="display-controls-title">Display Controls</div>
-  <div class="display-controls-row">
-    <label for="settingDensity">Card Density</label>
-    <select id="settingDensity">
-      <option value="normal">Normal</option>
-      <option value="compact">Compact</option>
-    </select>
-    <button id="settingReset" type="button" class="btn-outline">Reset</button>
+<section class="source-status-strip" aria-label="UISP source status">
+  <div class="source-status-head">
+    <div id="sourceStatusSummary" class="source-status-summary">Checking source health...</div>
+    <button id="pollAllSourcesBtn" type="button" class="btn-outline">Poll All Sources</button>
   </div>
-  <div class="display-controls-row">
-    <span class="display-controls-label">Visible Metrics</span>
-    <label><input type="checkbox" id="settingMetricCpu" checked> CPU</label>
-    <label><input type="checkbox" id="settingMetricRam" checked> RAM</label>
-    <label><input type="checkbox" id="settingMetricTemp" checked> Temp</label>
-    <label><input type="checkbox" id="settingMetricLatency" checked> Latency</label>
-    <label><input type="checkbox" id="settingMetricUptime" checked> Uptime</label>
-    <label><input type="checkbox" id="settingMetricOutage" checked> Outage</label>
-  </div>
+  <div id="sourceStatusList" class="source-status-list"></div>
+  <div id="sourceStatusNotice" class="source-status-notice"></div>
 </section>
-<div id="gateways" class="tabcontent" style="display:block"><div id="gateGrid" class="grid"></div></div>
+<?php if(!empty($NOCWALL_FEATURE_FLAGS['display_controls'])): ?>
+  <section class="display-controls" aria-label="Dashboard display controls">
+    <div class="display-controls-title">Display Controls</div>
+    <div class="display-controls-row">
+      <label for="settingDensity">Card Density</label>
+      <select id="settingDensity">
+        <option value="normal">Normal</option>
+        <option value="compact">Compact</option>
+      </select>
+      <button id="settingReset" type="button" class="btn-outline">Reset</button>
+    </div>
+    <div class="display-controls-row">
+      <span class="display-controls-label">Visible Metrics</span>
+      <label><input type="checkbox" id="settingMetricCpu" checked> CPU</label>
+      <label><input type="checkbox" id="settingMetricRam" checked> RAM</label>
+      <label><input type="checkbox" id="settingMetricTemp" checked> Temp</label>
+      <label><input type="checkbox" id="settingMetricLatency" checked> Latency</label>
+      <label><input type="checkbox" id="settingMetricUptime" checked> Uptime</label>
+      <label><input type="checkbox" id="settingMetricOutage" checked> Outage</label>
+    </div>
+  </section>
+<?php endif; ?>
+<div id="gateways" class="tabcontent" style="display:block">
+  <?php if(!empty($NOCWALL_FEATURE_FLAGS['advanced_actions'])): ?>
+    <div class="grid-actions">
+      <button id="gatewaySirenToggleBtn" type="button" class="btn-outline">Gateways Siren: On</button>
+    </div>
+  <?php endif; ?>
+  <div id="gateGrid" class="grid"></div>
+</div>
 <div id="aps" class="tabcontent" style="display:none">
-  <div class="grid-actions"></div>
+  <?php if(!empty($NOCWALL_FEATURE_FLAGS['advanced_actions'])): ?>
+    <div class="grid-actions">
+      <button id="apTabSirenToggleBtn" type="button" class="btn-outline">APs Siren: On</button>
+    </div>
+  <?php endif; ?>
   <div id="apGrid" class="grid"></div>
 </div>
-<div id="routers" class="tabcontent" style="display:none"><div id="routerGrid" class="grid"></div></div>
+<div id="routers" class="tabcontent" style="display:none">
+  <?php if(!empty($NOCWALL_FEATURE_FLAGS['advanced_actions'])): ?>
+    <div class="grid-actions">
+      <button id="routerSirenToggleBtn" type="button" class="btn-outline">Routers/Switches Siren: On</button>
+    </div>
+  <?php endif; ?>
+  <div id="routerGrid" class="grid"></div>
+</div>
+<?php if(!empty($NOCWALL_FEATURE_FLAGS['topology'])): ?>
+  <div id="topology" class="tabcontent" style="display:none">
+    <div class="topology-toolbar">
+      <button id="topologyRefreshBtn" type="button" class="btn-outline">Refresh Topology</button>
+      <label>Source
+        <select id="topologySourceSelect"></select>
+      </label>
+      <label>Target
+        <select id="topologyTargetSelect"></select>
+      </label>
+      <button id="topologyTraceBtn" type="button" class="btn-outline">Trace Path</button>
+      <button id="topologyClearTraceBtn" type="button" class="btn-outline">Clear Trace</button>
+    </div>
+    <div id="topologyHealthSummary" class="topology-health"></div>
+    <div id="topologyStatus" class="topology-status">Loading topology...</div>
+    <div id="topologyCanvasWrap" class="topology-canvas-wrap">
+      <svg id="topologySvg" viewBox="0 0 1200 680" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+  </div>
+<?php endif; ?>
 <footer id="footer"></footer>
 
 <div id="tlsModal" class="modal">
@@ -1742,22 +2457,82 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
   </div>
  </div>
 
-<div id="cpeHistoryModal" class="modal" onclick="if(event.target===this) closeCpeHistory();">
-  <div class="modal-content">
-    <button class="modal-close" onclick="closeCpeHistory()" aria-label="Close">&times;</button>
-    <h3 id="cpeHistoryTitle">Station Ping History</h3>
-    <p id="cpeHistorySubtitle" class="modal-subtitle">All recorded station pings for the last 7 days.</p>
-    <div id="cpeHistoryStatus" class="history-status">Click "View All Station Ping History" to load samples.</div>
-    <div class="history-chart-wrap">
-      <canvas id="cpeHistoryChart" width="900" height="320"></canvas>
+<?php if(!empty($NOCWALL_FEATURE_FLAGS['cpe_history'])): ?>
+  <div id="cpeHistoryModal" class="modal" onclick="if(event.target===this) closeCpeHistory();">
+    <div class="modal-content">
+      <button class="modal-close" onclick="closeCpeHistory()" aria-label="Close">&times;</button>
+      <h3 id="cpeHistoryTitle">Station Ping History</h3>
+      <p id="cpeHistorySubtitle" class="modal-subtitle">All recorded station pings for the last 7 days.</p>
+      <div id="cpeHistoryStatus" class="history-status">Click "View All Station Ping History" to load samples.</div>
+      <div class="history-chart-wrap">
+        <canvas id="cpeHistoryChart" width="900" height="320"></canvas>
+      </div>
+      <div id="cpeHistoryEmpty" class="history-empty" style="display:none;">No ping samples recorded for this period.</div>
+      <div id="cpeHistoryStats" class="history-stats"></div>
     </div>
-    <div id="cpeHistoryEmpty" class="history-empty" style="display:none;">No ping samples recorded for this period.</div>
-    <div id="cpeHistoryStats" class="history-stats"></div>
+   </div>
+<?php endif; ?>
+
+<?php if(!empty($NOCWALL_FEATURE_FLAGS['inventory'])): ?>
+  <div id="inventoryModal" class="modal" onclick="if(event.target===this) closeInventory();">
+    <div class="modal-content inventory-modal">
+      <button class="modal-close" onclick="closeInventory()" aria-label="Close">&times;</button>
+      <h3 id="inventoryTitle">Inventory</h3>
+      <div id="inventoryStatus" class="inventory-status">Loading inventory...</div>
+      <section class="inventory-section">
+        <h4>Identity</h4>
+        <div id="inventoryIdentity" class="inventory-identity"></div>
+      </section>
+      <section class="inventory-section">
+        <h4>Interfaces</h4>
+        <div id="inventoryInterfaces"></div>
+      </section>
+      <section class="inventory-section">
+        <h4>Neighbors</h4>
+        <div id="inventoryNeighbors"></div>
+      </section>
+      <section class="inventory-section">
+        <h4>Drift</h4>
+        <div id="inventoryDrift"></div>
+      </section>
+    </div>
   </div>
- </div>
+<?php endif; ?>
+
+<div id="setupWizardModal" class="modal" aria-hidden="true">
+  <div class="modal-content wizard-modal">
+    <h3 style="margin:0 0 8px">Welcome to NOCWALL-CE</h3>
+    <p class="wizard-subtitle">Add your first UISP source to start loading device telemetry on this dashboard.</p>
+    <form id="setupWizardForm" onsubmit="return false;">
+      <div class="wizard-grid">
+        <div>
+          <label for="wizardSourceName">Source Name</label>
+          <input id="wizardSourceName" type="text" placeholder="Main UISP">
+        </div>
+        <div>
+          <label for="wizardSourceUrl">UISP Base URL</label>
+          <input id="wizardSourceUrl" type="url" placeholder="https://isp.unmsapp.com" required>
+        </div>
+        <div>
+          <label for="wizardSourceToken">UISP API Token</label>
+          <input id="wizardSourceToken" type="password" placeholder="Paste API token" required>
+        </div>
+      </div>
+      <div class="wizard-actions">
+        <button id="wizardSaveTestBtn" class="btn-accent" type="button">Save and Test Connection</button>
+        <button id="wizardSkipBtn" class="btn-outline" type="button">Skip for Now</button>
+        <button id="wizardOpenSettingsBtn" class="btn-outline" type="button">Open Full Settings</button>
+      </div>
+      <div id="setupWizardStatus" class="wizard-status"></div>
+    </form>
+  </div>
+</div>
 
 <audio id="siren" src="buz.mp3?v=<?=$ASSET_VERSION?>" preload="auto"></audio>
 
+<script>
+  window.NOCWALL_FEATURES = <?=json_encode($NOCWALL_FEATURE_FLAGS, JSON_UNESCAPED_SLASHES)?>;
+</script>
 <script src="assets/app.js?v=<?=$ASSET_VERSION?>"></script>
 </body>
 </html>

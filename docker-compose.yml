@@ -8,6 +8,11 @@ services:
     environment:
       UISP_URL: ${UISP_URL:-https://example.unmsapp.com}
       UISP_TOKEN: ${UISP_TOKEN:-changeme}
+      NOCWALL_API_URL: ${NOCWALL_API_URL:-http://api:8080}
+      API_TOKEN: ${API_TOKEN:-}
+      NOCWALL_FEATURE_PROFILE: ${NOCWALL_FEATURE_PROFILE:-ce}
+      NOCWALL_PRO_FEATURES: ${NOCWALL_PRO_FEATURES:-}
+      NOCWALL_STRICT_CE: ${NOCWALL_STRICT_CE:-}
       GOTIFY_DEFAULTUSER_NAME: ${GOTIFY_DEFAULTUSER_NAME:-admin}
       GOTIFY_DEFAULTUSER_PASS: ${GOTIFY_DEFAULTUSER_PASS:-changeme}
       SHOW_TLS_UI: ${SHOW_TLS_UI:-false}
@@ -74,7 +79,7 @@ configs:
       }
 
       :80 {
-          @api path /api/* /auth/login /mobile/config /devices /incidents /push/register /health /agents /agents/register /telemetry/ingest /events/ingest /sources/uisp/poll /sources/uisp/status
+          @api path /api/* /auth/login /mobile/config /devices /incidents /push/register /health /agents /agents/register /telemetry/ingest /events/ingest /sources/uisp/poll /sources/uisp/status /inventory/* /topology/*
           reverse_proxy @api api:8080
           reverse_proxy uisp-noc:80
       }

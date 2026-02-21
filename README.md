@@ -74,6 +74,11 @@ PRO target:
   - metric toggles (CPU, RAM, Temp, Latency, Uptime, Outage)
   - per-account preference sync (saved server-side, loaded across browsers after login)
   - AP card siren toggle (`Siren: On/Off`) persisted per account
+  - per-tab siren toggles for Gateways, APs, and Routers/Switches (persisted per account)
+  - drag-and-drop card ordering per tab (Gateways/APs/Routers-Switches), persisted per account
+  - inventory/drift badges on cards (from API inventory overview)
+  - per-card Inventory modal with identity details, interface summary, neighbor links, lifecycle score, and drift snapshots
+  - CE strict-profile defaults (minimal card contract) with PRO-only feature gating
 - Go API preview with in-memory/file-backed store:
   - `GET /health`
   - `POST /auth/login`
@@ -93,8 +98,19 @@ PRO target:
   - `GET /inventory/identities` (stub)
   - `GET /inventory/observations` (stub)
   - `GET /inventory/drift` (stub)
+  - `GET /inventory/interfaces` (stub)
+  - `GET /inventory/neighbors` (stub)
+  - `GET /inventory/lifecycle` (stub)
+  - `POST /inventory/identities/merge` (stub)
+  - `GET /topology/nodes` (stub)
+  - `GET /topology/edges` (stub)
+  - `GET /topology/health` (stub)
+  - `GET /topology/path` (stub)
   - identity stitching from telemetry fields (`mac`, `serial`, `hostname`, source/device hints)
   - drift fingerprint snapshots per identity
+  - interface/neighbor ingestion mappers from telemetry payloads (`interfaces`, `neighbors`)
+  - topology graph synthesis from identity + neighbor link inventory
+  - topology tab renderer (SVG map) with resolved/unresolved/stale link coloring and path trace controls
 - Docker Compose builds API and web locally from source by default (no private image dependency).
 - Docker Compose wiring uses safe env placeholders (no hardcoded real keys).
 
@@ -115,8 +131,10 @@ PRO target:
   - add CI checks to prevent PRO leakage into CE
 - R05: ingest mappers for interface stats and LLDP/CDP neighbor facts.
 - R06: expanded inventory APIs (identity merge operations, interface stats, lifecycle scoring paths).
-- R07: UI panels for merged identity, interface breakdown, and drift badges.
-- R08: merge-safety and migration rollback tests.
+- R07: UI panels for merged identity, interface breakdown, and drift badges. (implemented as dashboard Inventory modal + badges)
+- R08: merge-safety and migration rollback tests. (implemented as store tests, including migration replay/duplicate-id repair coverage)
+- R09/R10: topology graph service + topology API endpoints (`/topology/nodes`, `/topology/edges`, `/topology/health`) now available as stubs.
+- R11/R12: topology map tab + path trace endpoint (`/topology/path`) implemented as stubs.
 - Add connector adapters beyond UISP (progressive rollout by NMS family).
 
 ## Quick Start (Local Dev)
@@ -178,6 +196,21 @@ Optional UISP source polling env vars:
 - `UISP_DEVICES_PATH` (default `/nms/api/v2.1/devices`)
 - `UISP_POLL_INTERVAL_SEC` (0 disables background polling)
 - `UISP_POLL_RETRIES` (default `1`)
+
+Optional inventory bridge vars (web -> API):
+- `NOCWALL_API_URL` (default `http://api:8080`)
+- `API_TOKEN` (if API auth is enabled)
+
+Feature profile vars:
+- `NOCWALL_FEATURE_PROFILE` (`ce` default, `pro` enables advanced UI/actions)
+- `NOCWALL_PRO_FEATURES` (optional explicit `true/false` override)
+- `NOCWALL_STRICT_CE` (optional explicit `true/false` override)
+
+CE release gate:
+
+```bash
+./scripts/ce-release-gate.sh
+```
 
 Note:
 - `UISP_*` variables are current connector-specific settings.
@@ -247,6 +280,15 @@ curl -X POST http://localhost:8080/telemetry/ingest \
   -d '{"source":"agent","agent_id":"agent-lab-1","event_type":"device_up","device_id":"sw-lab-1","device":"Switch Lab 1","site_id":"lab","online":true,"latency_ms":2.1}'
 ```
 
+Topology API quick checks:
+
+```bash
+curl "http://localhost:8080/topology/nodes?limit=25"
+curl "http://localhost:8080/topology/edges?limit=25"
+curl "http://localhost:8080/topology/health"
+curl "http://localhost:8080/topology/path?source_node_id=ident:IDENT_A&target_node_id=ident:IDENT_B"
+```
+
 
 Run manual UISP poll (demo mode if no valid UISP creds):
 
@@ -271,6 +313,17 @@ curl http://localhost:8080/inventory/schema
 curl http://localhost:8080/inventory/identities
 curl "http://localhost:8080/inventory/observations?limit=20"
 curl "http://localhost:8080/inventory/drift?limit=20"
+curl "http://localhost:8080/inventory/interfaces?limit=20"
+curl "http://localhost:8080/inventory/neighbors?limit=20"
+curl "http://localhost:8080/inventory/lifecycle?limit=20"
+```
+
+Manual identity merge (stub):
+
+```bash
+curl -X POST http://localhost:8080/inventory/identities/merge \
+  -H "Content-Type: application/json" \
+  -d '{"primary_id":"ident-primary","secondary_ids":["ident-secondary-1","ident-secondary-2"]}'
 ```
 
 ## Documentation

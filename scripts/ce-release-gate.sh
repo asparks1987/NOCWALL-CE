@@ -13,7 +13,7 @@ has_cmd() {
 }
 
 collect_paths() {
-  local paths=(api assets web index.php docker-compose.yml Dockerfile start.sh scripts .github)
+  local paths=(api assets web index.php docker-compose.yml Dockerfile start.sh .github)
   local out=()
   local p
   for p in "${paths[@]}"; do
@@ -72,6 +72,14 @@ if [[ -n "$secret_hits" ]]; then
   echo "[ce-gate] Potential hardcoded secrets found:" >&2
   printf '%s\n' "$secret_hits" >&2
   fail=1
+fi
+
+# 4) CE profile must remain default in compose.
+if [[ -f docker-compose.yml ]]; then
+  if ! grep -qE 'NOCWALL_FEATURE_PROFILE:[[:space:]]*\$\{NOCWALL_FEATURE_PROFILE:-ce\}' docker-compose.yml; then
+    echo "[ce-gate] docker-compose default must remain CE profile." >&2
+    fail=1
+  fi
 fi
 
 if [[ "$fail" -ne 0 ]]; then

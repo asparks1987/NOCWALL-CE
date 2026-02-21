@@ -19,6 +19,69 @@ Legend:
 - [x] Dockerized local stack
 - [ ] Planned product split change: move non-minimal CE capabilities behind PRO gates.
 
+## 25 New CE Adoption Features (Strictly Non-PRO)
+
+These features are intentionally limited to wallboard usability, reliability, and onboarding.
+They avoid PRO-only domains (team workflows, correlation, automation, enterprise controls, deep analytics).
+
+1. `[x]` CEF01 `[CE]` First-run setup wizard (add source + test + start dashboard)
+2. `[ ]` CEF02 `[CE]` Demo data toggle from UI for instant wallboard preview
+3. `[ ]` CEF03 `[CE]` Source connectivity diagnostics panel (DNS/TLS/API reachability)
+4. `[x]` CEF04 `[CE]` Manual "Poll Now" button per source
+5. `[x]` CEF05 `[CE]` Source status strip (last poll time, success/fail, latency)
+6. `[ ]` CEF06 `[CE]` Global search box for device name/MAC/hostname
+7. `[ ]` CEF07 `[CE]` Quick filters (all/offline/online by tab)
+8. `[ ]` CEF08 `[CE]` Sort controls (status, name, last-seen)
+9. `[ ]` CEF09 `[CE]` Group-by mode (role/site) for card layout
+10. `[x]` CEF10 `[CE]` Saved default tab per account
+11. `[ ]` CEF11 `[CE]` Saved refresh interval preset per account
+12. `[ ]` CEF12 `[CE]` Kiosk mode hotkey + URL flag (hide controls/chrome)
+13. `[ ]` CEF13 `[CE]` Keyboard shortcuts overlay (`?` help modal)
+14. `[ ]` CEF14 `[CE]` Dashboard legend panel (status colors/icons meanings)
+15. `[ ]` CEF15 `[CE]` Card status-change highlight (recently changed online/offline)
+16. `[ ]` CEF16 `[CE]` "Last updated" stale-data warning banner
+17. `[ ]` CEF17 `[CE]` API degraded banner with retry backoff indicator
+18. `[ ]` CEF18 `[CE]` Read-only fallback rendering from last known cache snapshot
+19. `[ ]` CEF19 `[CE]` Local browser notification option for new offline events
+20. `[ ]` CEF20 `[CE]` Optional soft chime mode (lower-volume alert profile)
+21. `[ ]` CEF21 `[CE]` Theme presets (classic/high-contrast/light) with persistence
+22. `[ ]` CEF22 `[CE]` Font scaling presets for distant wall displays
+23. `[ ]` CEF23 `[CE]` Card print/export to PNG snapshot for NOC reports
+24. `[ ]` CEF24 `[CE]` Import/export dashboard preferences JSON
+25. `[ ]` CEF25 `[CE]` In-app "What's new" changelog modal per release
+
+## Phase CE-A - CE Adoption and Wallboard Polish
+
+### Epic CE-A1 - CE Feature Pack 1 (CEF01-CEF10)
+- [x] RCE01 Implement first-run wizard with source save/test handoff.
+- [ ] RCE02 Add demo data UI toggle and API wiring.
+- [ ] RCE03 Build source diagnostics panel and health probes.
+- [x] RCE04 Add per-source "Poll Now" actions and status strip.
+- [ ] RCE05 Add search + quick filters across tabs.
+- [ ] RCE06 Add sort modes and account-persisted defaults.
+- [ ] RCE07 Implement group-by layout mode (role/site).
+- [x] RCE08 Add default-tab persistence.
+
+### Epic CE-A2 - CE Feature Pack 2 (CEF11-CEF18)
+- [ ] RCE09 Add refresh interval presets and persistence.
+- [ ] RCE10 Add kiosk mode (hotkey + query flag).
+- [ ] RCE11 Add keyboard shortcuts help modal.
+- [ ] RCE12 Add dashboard legend panel.
+- [ ] RCE13 Add recent state-change highlights on cards.
+- [ ] RCE14 Add stale-data warning banner.
+- [ ] RCE15 Add API degraded/retry backoff banner.
+- [ ] RCE16 Add read-only cached snapshot fallback path.
+
+### Epic CE-A3 - CE Feature Pack 3 (CEF19-CEF25)
+- [ ] RCE17 Add browser notifications option for offline events.
+- [ ] RCE18 Add soft chime alert profile option.
+- [ ] RCE19 Add theme presets and persistence.
+- [ ] RCE20 Add wall-distance font scaling presets.
+- [ ] RCE21 Add dashboard PNG snapshot export.
+- [ ] RCE22 Add settings JSON import/export.
+- [ ] RCE23 Add in-app release changelog modal.
+- [ ] RCE24 Add CE-only tests and docs for all CE feature-pack flows.
+
 ## 50 Net-New Features (Not Previously Planned in BURNDOWN)
 
 ### Inventory and Topology
@@ -86,12 +149,12 @@ Legend:
 ## Phase 0 - CE Minimalization and PRO Gating
 
 ### Epic 0 - Enforce Minimal CE Product Contract
-- [ ] R00 Define strict CE card contract: online/offline, device name, role, site, last-seen only.
-- [ ] R00a Add feature flags for PRO-only features with deny-by-default in CE builds.
-- [ ] R00b Move ack/escalation/suppression/automation entry points behind PRO gates.
-- [ ] R00c Remove non-essential CE dashboard controls and metrics from default CE UI.
-- [ ] R00d Keep CE focused on wallboard display-only operations and basic health checks.
-- [ ] R00e Add CI guardrails to fail CE builds when PRO-gated routes/components leak.
+- [x] [STUB] R00 Define strict CE card contract: online/offline, device name, role, site, last-seen only.
+- [x] [STUB] R00a Add feature flags for PRO-only features with deny-by-default in CE builds.
+- [x] [STUB] R00b Move ack/escalation/suppression/automation entry points behind PRO gates.
+- [x] [STUB] R00c Remove non-essential CE dashboard controls and metrics from default CE UI.
+- [x] [STUB] R00d Keep CE focused on wallboard display-only operations and basic health checks.
+- [x] [STUB] R00e Add CI guardrails to fail CE builds when PRO-gated routes/components leak.
 
 ## Phase 1 - Data Foundation and Topology
 
@@ -100,17 +163,18 @@ Legend:
 - [x] [STUB] R02 Create DB migrations and backfill scripts from current device cache/API store.
 - [x] [STUB] R03 Implement identity stitching engine (fingerprint by MAC/serial/hostname/site hints).
 - [x] [STUB] R04 Add drift fingerprint generator and change-detection snapshots.
-- [ ] R05 Build ingestion mappers for interface stats and LLDP/CDP neighbor facts.
-- [ ] R06 Expose APIs for identity merges, drift history, interface stats, and lifecycle score.
+- [x] [STUB] R05 Build ingestion mappers for interface stats and LLDP/CDP neighbor facts.
+- [x] [STUB] R06 Expose APIs for identity merges, drift history, interface stats, and lifecycle score.
 - [x] [STUB] R06a Expose read APIs for inventory schema, identities, observations, and drift snapshots.
-- [ ] R07 Add UI panels for merged identity, interface breakdown, and drift badges.
-- [ ] R08 Add tests: merge correctness, false-merge guardrails, migration rollback safety.
+- [x] [STUB] R07 Add UI panels for merged identity, interface breakdown, and drift badges.
+- [x] [STUB] R08 Add tests: merge correctness, false-merge guardrails, migration rollback safety.
+- [x] [STUB] R08a Add migration rollback safety coverage for schema upgrades and persistence replay.
 
 ### Epic 2 - Topology and Path Intelligence (F06-F10)
-- [ ] R09 Build topology graph service from stitched inventory and neighbor links.
-- [ ] R10 Implement topology API (`/topology/nodes`, `/topology/edges`, `/topology/health`).
-- [ ] R11 Add map renderer with link-health heatmap coloring and stale-link indicators.
-- [ ] R12 Add path trace engine and endpoint for selected source/target devices.
+- [x] [STUB] R09 Build topology graph service from stitched inventory and neighbor links.
+- [x] [STUB] R10 Implement topology API (`/topology/nodes`, `/topology/edges`, `/topology/health`).
+- [x] [STUB] R11 Add map renderer with link-health heatmap coloring and stale-link indicators.
+- [x] [STUB] R12 Add path trace engine and endpoint for selected source/target devices.
 - [ ] R13 Add WAN SLA computation jobs (latency/loss/availability windows).
 - [ ] R14 Add HA pair watcher and failover-state eventing.
 - [ ] R15 Add topology QA fixtures and synthetic network datasets.

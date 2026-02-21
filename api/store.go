@@ -4,8 +4,10 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -15,8 +17,16 @@ const (
 	storeSchemaVersion      = 2
 	maxSourceObservations   = 10000
 	maxDriftSnapshots       = 4000
+	maxDeviceInterfaces     = 20000
+	maxNeighborLinks        = 20000
 	identityBackfillSource  = "store_migration"
 	defaultDeviceSourceName = "ingest"
+)
+
+var (
+	ErrInvalidPrimary  = errors.New("invalid_primary_id")
+	ErrNoSecondary     = errors.New("no_secondary_ids")
+	ErrPrimaryNotFound = errors.New("primary_identity_not_found")
 )
 
 type Store struct {
@@ -270,6 +280,529 @@ func (s *Store) ListDriftSnapshots(limit int, identityID string) ([]DriftSnapsho
 	}
 	truncated := total > len(filtered)
 	return filtered, truncated, limit
+}
+
+func (s *Store) ListDeviceInterfaces(limit int, identityID string) ([]DeviceInterface, bool, int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	filterID := strings.TrimSpace(identityID)
+	filtered := make([]DeviceInterface, 0, len(s.DeviceInterfaces))
+	for i := len(s.DeviceInterfaces) - 1; i >= 0; i-- {
+		item := s.DeviceInterfaces[i]
+		if filterID != "" && item.IdentityID != filterID {
+			continue
+		}
+		filtered = append(filtered, item)
+		if len(filtered) >= limit {
+			break
+		}
+	}
+
+	total := 0
+	if filterID == "" {
+		total = len(s.DeviceInterfaces)
+	} else {
+		for _, item := range s.DeviceInterfaces {
+			if item.IdentityID == filterID {
+				total++
+			}
+		}
+	}
+	truncated := total > len(filtered)
+	return filtered, truncated, limit
+}
+
+func (s *Store) ListNeighborLinks(limit int, identityID string) ([]NeighborLink, bool, int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	filterID := strings.TrimSpace(identityID)
+	filtered := make([]NeighborLink, 0, len(s.NeighborLinks))
+	for i := len(s.NeighborLinks) - 1; i >= 0; i-- {
+		item := s.NeighborLinks[i]
+		if filterID != "" && item.IdentityID != filterID {
+			continue
+		}
+		filtered = append(filtered, item)
+		if len(filtered) >= limit {
+			break
+		}
+	}
+
+	total := 0
+	if filterID == "" {
+		total = len(s.NeighborLinks)
+	} else {
+		for _, item := range s.NeighborLinks {
+			if item.IdentityID == filterID {
+				total++
+			}
+		}
+	}
+	truncated := total > len(filtered)
+	return filtered, truncated, limit
+}
+
+func (s *Store) ListLifecycleScores(limit int, identityID string) ([]LifecycleScore, bool, int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	filterID := strings.TrimSpace(identityID)
+	scores := make([]LifecycleScore, 0, len(s.DeviceIdentities))
+	nowMs := time.Now().UnixMilli()
+	for _, ident := range s.DeviceIdentities {
+		if filterID != "" && ident.IdentityID != filterID {
+			continue
+		}
+		score := 100
+		reasons := make([]string, 0, 4)
+
+		if ident.Vendor == "" {
+			score -= 20
+			reasons = append(reasons, "missing_vendor")
+		}
+		if ident.Model == "" {
+			score -= 20
+			reasons = append(reasons, "missing_model")
+		}
+		age := nowMs - ident.LastSeen
+		if age > int64((24 * time.Hour).Milliseconds()) {
+			score -= 25
+			reasons = append(reasons, "stale_last_seen_24h")
+		}
+		if age > int64((7 * 24 * time.Hour).Milliseconds()) {
+			score -= 20
+			reasons = append(reasons, "stale_last_seen_7d")
+		}
+
+		if score < 0 {
+			score = 0
+		}
+		level := "low"
+		if score < 60 {
+			level = "high"
+		} else if score < 80 {
+			level = "medium"
+		}
+
+		scores = append(scores, LifecycleScore{
+			IdentityID: ident.IdentityID,
+			Score:      score,
+			Level:      level,
+			Reasons:    reasons,
+		})
+	}
+
+	truncated := false
+	if len(scores) > limit {
+		scores = scores[:limit]
+		truncated = true
+	}
+	return scores, truncated, limit
+}
+
+func (s *Store) ListTopologyNodes(limit int, siteID string) ([]TopologyNode, bool, int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if limit <= 0 || limit > 1000 {
+		limit = 300
+	}
+	siteFilter := normalizeKeyToken(siteID)
+	nodes, _, _ := s.buildTopologyGraphLocked()
+	filtered := make([]TopologyNode, 0, len(nodes))
+	for _, node := range nodes {
+		if siteFilter != "" {
+			// Site filtering applies to managed identities only.
+			if node.Kind != "managed" || normalizeKeyToken(node.SiteID) != siteFilter {
+				continue
+			}
+		}
+		filtered = append(filtered, node)
+		if len(filtered) >= limit {
+			break
+		}
+	}
+	truncated := len(nodes) > len(filtered)
+	return filtered, truncated, limit
+}
+
+func (s *Store) ListTopologyEdges(limit int, identityID string) ([]TopologyEdge, bool, int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if limit <= 0 || limit > 1000 {
+		limit = 300
+	}
+	filterID := strings.TrimSpace(identityID)
+	_, edges, _ := s.buildTopologyGraphLocked()
+	filtered := make([]TopologyEdge, 0, len(edges))
+	for _, edge := range edges {
+		if filterID != "" && edge.SourceIdentityID != filterID {
+			continue
+		}
+		filtered = append(filtered, edge)
+		if len(filtered) >= limit {
+			break
+		}
+	}
+	total := len(edges)
+	if filterID != "" {
+		total = 0
+		for _, edge := range edges {
+			if edge.SourceIdentityID == filterID {
+				total++
+			}
+		}
+	}
+	truncated := total > len(filtered)
+	return filtered, truncated, limit
+}
+
+func (s *Store) TopologyHealth() TopologyHealth {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, _, health := s.buildTopologyGraphLocked()
+	return health
+}
+
+func (s *Store) TraceTopologyPath(sourceIdentityID, targetIdentityID, sourceNodeID, targetNodeID string) ([]TopologyNode, []TopologyEdge, bool, string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	nodes, edges, _ := s.buildTopologyGraphLocked()
+	nodeByID := make(map[string]TopologyNode, len(nodes))
+	for _, node := range nodes {
+		nodeByID[node.NodeID] = node
+	}
+
+	sourceNodeID = strings.TrimSpace(sourceNodeID)
+	targetNodeID = strings.TrimSpace(targetNodeID)
+	sourceIdentityID = strings.TrimSpace(sourceIdentityID)
+	targetIdentityID = strings.TrimSpace(targetIdentityID)
+
+	if sourceNodeID == "" && sourceIdentityID != "" {
+		sourceNodeID = topologyNodeIDForIdentity(sourceIdentityID)
+	}
+	if targetNodeID == "" && targetIdentityID != "" {
+		targetNodeID = topologyNodeIDForIdentity(targetIdentityID)
+	}
+	if sourceNodeID == "" || targetNodeID == "" {
+		return nil, nil, false, "source and target are required"
+	}
+	if _, ok := nodeByID[sourceNodeID]; !ok {
+		return nil, nil, false, "source node not found"
+	}
+	if _, ok := nodeByID[targetNodeID]; !ok {
+		return nil, nil, false, "target node not found"
+	}
+
+	if sourceNodeID == targetNodeID {
+		return []TopologyNode{nodeByID[sourceNodeID]}, nil, true, "source equals target"
+	}
+
+	adj := make(map[string][]string, len(nodes))
+	edgeByPair := make(map[string]TopologyEdge, len(edges)*2)
+	for _, edge := range edges {
+		if edge.FromNodeID == "" || edge.ToNodeID == "" {
+			continue
+		}
+		adj[edge.FromNodeID] = append(adj[edge.FromNodeID], edge.ToNodeID)
+		adj[edge.ToNodeID] = append(adj[edge.ToNodeID], edge.FromNodeID)
+		edgeByPair[topologyEdgePairKey(edge.FromNodeID, edge.ToNodeID)] = edge
+		edgeByPair[topologyEdgePairKey(edge.ToNodeID, edge.FromNodeID)] = edge
+	}
+
+	queue := []string{sourceNodeID}
+	visited := map[string]bool{sourceNodeID: true}
+	parent := map[string]string{}
+	found := false
+
+	for len(queue) > 0 && !found {
+		current := queue[0]
+		queue = queue[1:]
+		for _, next := range adj[current] {
+			if visited[next] {
+				continue
+			}
+			visited[next] = true
+			parent[next] = current
+			if next == targetNodeID {
+				found = true
+				break
+			}
+			queue = append(queue, next)
+		}
+	}
+
+	if !found {
+		return nil, nil, false, "no path found"
+	}
+
+	nodeIDs := []string{targetNodeID}
+	for cur := targetNodeID; cur != sourceNodeID; {
+		p, ok := parent[cur]
+		if !ok || p == "" {
+			return nil, nil, false, "path reconstruction failed"
+		}
+		nodeIDs = append(nodeIDs, p)
+		cur = p
+	}
+	// reverse
+	for i, j := 0, len(nodeIDs)-1; i < j; i, j = i+1, j-1 {
+		nodeIDs[i], nodeIDs[j] = nodeIDs[j], nodeIDs[i]
+	}
+
+	pathNodes := make([]TopologyNode, 0, len(nodeIDs))
+	pathEdges := make([]TopologyEdge, 0, max(0, len(nodeIDs)-1))
+	for i, nodeID := range nodeIDs {
+		pathNodes = append(pathNodes, nodeByID[nodeID])
+		if i == 0 {
+			continue
+		}
+		prev := nodeIDs[i-1]
+		if edge, ok := edgeByPair[topologyEdgePairKey(prev, nodeID)]; ok {
+			pathEdges = append(pathEdges, edge)
+		}
+	}
+
+	return pathNodes, pathEdges, true, ""
+}
+
+func (s *Store) buildTopologyGraphLocked() ([]TopologyNode, []TopologyEdge, TopologyHealth) {
+	nowMs := time.Now().UnixMilli()
+	nodesByID := make(map[string]TopologyNode, len(s.DeviceIdentities))
+	tokenToNode := make(map[string]string, len(s.DeviceIdentities)*5)
+	managedNodeIDs := make([]string, 0, len(s.DeviceIdentities))
+
+	for _, ident := range s.DeviceIdentities {
+		identityID := strings.TrimSpace(ident.IdentityID)
+		if identityID == "" {
+			continue
+		}
+		nodeID := topologyNodeIDForIdentity(identityID)
+		node := TopologyNode{
+			NodeID:          nodeID,
+			IdentityID:      identityID,
+			Label:           firstNonEmpty(strings.TrimSpace(ident.Name), strings.TrimSpace(ident.PrimaryDeviceID), identityID),
+			Role:            strings.TrimSpace(ident.Role),
+			SiteID:          strings.TrimSpace(ident.SiteID),
+			LastSeen:        ident.LastSeen,
+			Kind:            "managed",
+			SourceRefsCount: len(ident.SourceRefs),
+		}
+		nodesByID[nodeID] = node
+		managedNodeIDs = append(managedNodeIDs, nodeID)
+		for _, token := range topologyIdentityTokens(ident) {
+			if token == "" {
+				continue
+			}
+			if _, exists := tokenToNode[token]; !exists {
+				tokenToNode[token] = nodeID
+			}
+		}
+	}
+
+	edgesByKey := make(map[string]TopologyEdge, len(s.NeighborLinks))
+	degree := make(map[string]int, len(nodesByID))
+	unknownNeighborEdges := 0
+
+	for _, link := range s.NeighborLinks {
+		sourceIdentity := strings.TrimSpace(link.IdentityID)
+		if sourceIdentity == "" {
+			continue
+		}
+		fromNodeID := topologyNodeIDForIdentity(sourceIdentity)
+		if _, ok := nodesByID[fromNodeID]; !ok {
+			// Keep source nodes visible even if identity data is stale/missing.
+			nodesByID[fromNodeID] = TopologyNode{
+				NodeID:     fromNodeID,
+				IdentityID: sourceIdentity,
+				Label:      sourceIdentity,
+				Kind:       "managed",
+			}
+			managedNodeIDs = append(managedNodeIDs, fromNodeID)
+		}
+
+		toNodeID, resolved := resolveNeighborNodeID(link, tokenToNode)
+		if toNodeID == "" {
+			token := normalizeKeyToken(firstNonEmpty(link.NeighborIdentityHint, link.NeighborDeviceName, link.NeighborInterfaceHint, link.ID))
+			if token == "" {
+				token = "unknown"
+			}
+			toNodeID = "unresolved:" + token
+			resolved = false
+		}
+
+		if _, ok := nodesByID[toNodeID]; !ok {
+			kind := "external"
+			if strings.HasPrefix(toNodeID, "ident:") {
+				kind = "managed"
+			}
+			nodesByID[toNodeID] = TopologyNode{
+				NodeID: toNodeID,
+				Label:  firstNonEmpty(strings.TrimSpace(link.NeighborDeviceName), strings.TrimSpace(link.NeighborIdentityHint), toNodeID),
+				Kind:   kind,
+			}
+		}
+
+		key := normalizeKeyToken(strings.Join([]string{
+			fromNodeID,
+			toNodeID,
+			strings.TrimSpace(link.LocalInterface),
+			strings.TrimSpace(link.NeighborInterfaceHint),
+			strings.TrimSpace(link.Protocol),
+		}, "|"))
+		if key == "" {
+			continue
+		}
+		if _, exists := edgesByKey[key]; exists {
+			continue
+		}
+
+		edge := TopologyEdge{
+			EdgeID:             "edge-" + key,
+			FromNodeID:         fromNodeID,
+			ToNodeID:           toNodeID,
+			SourceIdentityID:   sourceIdentity,
+			TargetIdentityHint: strings.TrimSpace(link.NeighborIdentityHint),
+			LocalInterface:     strings.TrimSpace(link.LocalInterface),
+			NeighborInterface:  strings.TrimSpace(link.NeighborInterfaceHint),
+			Protocol:           strings.TrimSpace(link.Protocol),
+			Source:             strings.TrimSpace(link.Source),
+			UpdatedAt:          strings.TrimSpace(link.UpdatedAt),
+			Resolved:           resolved,
+		}
+		edgesByKey[key] = edge
+		degree[fromNodeID]++
+		degree[toNodeID]++
+		if !resolved {
+			unknownNeighborEdges++
+		}
+	}
+
+	nodes := make([]TopologyNode, 0, len(nodesByID))
+	for _, node := range nodesByID {
+		nodes = append(nodes, node)
+	}
+	sort.Slice(nodes, func(i, j int) bool {
+		if nodes[i].Kind != nodes[j].Kind {
+			return nodes[i].Kind < nodes[j].Kind
+		}
+		if nodes[i].Label != nodes[j].Label {
+			return nodes[i].Label < nodes[j].Label
+		}
+		return nodes[i].NodeID < nodes[j].NodeID
+	})
+
+	edges := make([]TopologyEdge, 0, len(edgesByKey))
+	for _, edge := range edgesByKey {
+		edges = append(edges, edge)
+	}
+	sort.Slice(edges, func(i, j int) bool {
+		if edges[i].FromNodeID != edges[j].FromNodeID {
+			return edges[i].FromNodeID < edges[j].FromNodeID
+		}
+		if edges[i].ToNodeID != edges[j].ToNodeID {
+			return edges[i].ToNodeID < edges[j].ToNodeID
+		}
+		return edges[i].EdgeID < edges[j].EdgeID
+	})
+
+	isolatedManaged := 0
+	staleManaged24h := 0
+	managedSeen := map[string]struct{}{}
+	for _, nodeID := range managedNodeIDs {
+		if _, ok := managedSeen[nodeID]; ok {
+			continue
+		}
+		managedSeen[nodeID] = struct{}{}
+		node, ok := nodesByID[nodeID]
+		if !ok {
+			continue
+		}
+		if degree[nodeID] == 0 {
+			isolatedManaged++
+		}
+		if node.LastSeen > 0 && nowMs-node.LastSeen > int64((24*time.Hour).Milliseconds()) {
+			staleManaged24h++
+		}
+	}
+
+	nodeIDs := make([]string, 0, len(nodesByID))
+	for nodeID := range nodesByID {
+		nodeIDs = append(nodeIDs, nodeID)
+	}
+	components := topologyConnectedComponents(nodeIDs, edges)
+
+	health := TopologyHealth{
+		NodeCount:            len(nodes),
+		ManagedNodeCount:     len(managedSeen),
+		EdgeCount:            len(edges),
+		UnknownNeighborEdges: unknownNeighborEdges,
+		IsolatedManagedNodes: isolatedManaged,
+		StaleManagedNodes24h: staleManaged24h,
+		ConnectedComponents:  components,
+	}
+	return nodes, edges, health
+}
+
+func (s *Store) MergeIdentities(primaryID string, secondaryIDs []string) (DeviceIdentity, []string, error) {
+	primaryID = strings.TrimSpace(primaryID)
+	if primaryID == "" {
+		return DeviceIdentity{}, nil, ErrInvalidPrimary
+	}
+
+	cleanSecondary := make([]string, 0, len(secondaryIDs))
+	seen := map[string]struct{}{}
+	for _, id := range secondaryIDs {
+		v := strings.TrimSpace(id)
+		if v == "" || v == primaryID {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		cleanSecondary = append(cleanSecondary, v)
+	}
+	if len(cleanSecondary) == 0 {
+		return DeviceIdentity{}, nil, ErrNoSecondary
+	}
+
+	s.mu.Lock()
+	if s.findIdentityIndexLocked(primaryID) < 0 {
+		s.mu.Unlock()
+		return DeviceIdentity{}, nil, ErrPrimaryNotFound
+	}
+	merged := make([]string, 0, len(cleanSecondary))
+	for _, sid := range cleanSecondary {
+		if s.findIdentityIndexLocked(sid) < 0 {
+			continue
+		}
+		primaryID = s.mergeIdentitiesLocked(primaryID, sid)
+		merged = append(merged, sid)
+	}
+	idx := s.findIdentityIndexLocked(primaryID)
+	if idx < 0 {
+		s.mu.Unlock()
+		return DeviceIdentity{}, merged, ErrPrimaryNotFound
+	}
+	identity := s.DeviceIdentities[idx]
+	s.mu.Unlock()
+
+	s.save()
+	return identity, merged, nil
 }
 
 func (s *Store) InventorySchema() InventorySchemaResponse {
@@ -589,6 +1122,8 @@ func (s *Store) upsertIdentityFromTelemetryLocked(req TelemetryIngestRequest, so
 
 	s.recordDriftSnapshotLocked(*identity, nowMs)
 	s.upsertHardwareProfileLocked(identity.IdentityID, obs.Vendor, obs.Model)
+	s.upsertInterfaceFactsLocked(identity.IdentityID, source, req.Interfaces)
+	s.upsertNeighborFactsLocked(identity.IdentityID, source, req.Neighbors)
 	s.SourceObservations = append(s.SourceObservations, obs)
 	if len(s.SourceObservations) > maxSourceObservations {
 		s.SourceObservations = append([]SourceObservation(nil), s.SourceObservations[len(s.SourceObservations)-maxSourceObservations:]...)
@@ -755,6 +1290,116 @@ func (s *Store) upsertHardwareProfileLocked(identityID, vendor, model string) {
 	})
 }
 
+func (s *Store) upsertInterfaceFactsLocked(identityID, source string, facts []TelemetryInterfaceFact) {
+	identityID = strings.TrimSpace(identityID)
+	source = strings.TrimSpace(source)
+	if identityID == "" || source == "" || len(facts) == 0 {
+		return
+	}
+	nowISO := time.Now().UTC().Format(time.RFC3339)
+	incoming := make([]DeviceInterface, 0, len(facts))
+	seen := map[string]struct{}{}
+	for _, fact := range facts {
+		name := strings.TrimSpace(fact.Name)
+		if name == "" {
+			continue
+		}
+		id := "if-" + normalizeKeyToken(identityID+"|"+source+"|"+name)
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		incoming = append(incoming, DeviceInterface{
+			ID:         id,
+			IdentityID: identityID,
+			Name:       name,
+			AdminUp:    fact.AdminUp,
+			OperUp:     fact.OperUp,
+			RxBps:      fact.RxBps,
+			TxBps:      fact.TxBps,
+			ErrorRate:  fact.ErrorRate,
+			Source:     source,
+			UpdatedAt:  nowISO,
+		})
+		if len(incoming) >= 512 {
+			break
+		}
+	}
+	if len(incoming) == 0 {
+		return
+	}
+
+	next := make([]DeviceInterface, 0, len(s.DeviceInterfaces)+len(incoming))
+	for _, row := range s.DeviceInterfaces {
+		if row.IdentityID == identityID && row.Source == source {
+			continue
+		}
+		next = append(next, row)
+	}
+	next = append(next, incoming...)
+	if len(next) > maxDeviceInterfaces {
+		next = append([]DeviceInterface(nil), next[len(next)-maxDeviceInterfaces:]...)
+	}
+	s.DeviceInterfaces = next
+}
+
+func (s *Store) upsertNeighborFactsLocked(identityID, source string, facts []TelemetryNeighborFact) {
+	identityID = strings.TrimSpace(identityID)
+	source = strings.TrimSpace(source)
+	if identityID == "" || source == "" || len(facts) == 0 {
+		return
+	}
+	nowISO := time.Now().UTC().Format(time.RFC3339)
+	incoming := make([]NeighborLink, 0, len(facts))
+	seen := map[string]struct{}{}
+	for _, fact := range facts {
+		localIf := strings.TrimSpace(fact.LocalInterface)
+		neighborName := strings.TrimSpace(fact.NeighborDeviceName)
+		neighborIf := strings.TrimSpace(fact.NeighborInterface)
+		neighborHint := strings.TrimSpace(fact.NeighborIdentityHint)
+		protocol := strings.TrimSpace(fact.Protocol)
+		if localIf == "" && neighborName == "" && neighborIf == "" && neighborHint == "" {
+			continue
+		}
+		key := normalizeKeyToken(identityID + "|" + source + "|" + localIf + "|" + neighborHint + "|" + neighborName + "|" + neighborIf + "|" + protocol)
+		id := "nbr-" + key
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		incoming = append(incoming, NeighborLink{
+			ID:                    id,
+			IdentityID:            identityID,
+			LocalInterface:        localIf,
+			NeighborIdentityHint:  neighborHint,
+			NeighborDeviceName:    neighborName,
+			NeighborInterfaceHint: neighborIf,
+			Protocol:              protocol,
+			Source:                source,
+			UpdatedAt:             nowISO,
+		})
+		if len(incoming) >= 512 {
+			break
+		}
+	}
+	if len(incoming) == 0 {
+		return
+	}
+
+	next := make([]NeighborLink, 0, len(s.NeighborLinks)+len(incoming))
+	for _, row := range s.NeighborLinks {
+		if row.IdentityID == identityID && row.Source == source {
+			continue
+		}
+		next = append(next, row)
+	}
+	next = append(next, incoming...)
+	if len(next) > maxNeighborLinks {
+		next = append([]NeighborLink(nil), next[len(next)-maxNeighborLinks:]...)
+	}
+	s.NeighborLinks = next
+}
+
 func (s *Store) recordDriftSnapshotLocked(identity DeviceIdentity, observedAt int64) {
 	fingerprint, attributes := buildDriftFingerprint(identity)
 	lastFingerprint := ""
@@ -839,6 +1484,112 @@ func appendUnique(values []string, incoming ...string) []string {
 		values = append(values, v)
 	}
 	return values
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func topologyNodeIDForIdentity(identityID string) string {
+	identityID = strings.TrimSpace(identityID)
+	if identityID == "" {
+		return ""
+	}
+	return "ident:" + identityID
+}
+
+func topologyIdentityTokens(ident DeviceIdentity) []string {
+	tokens := []string{
+		normalizeKeyToken(ident.IdentityID),
+		normalizeKeyToken("identity:" + ident.IdentityID),
+		normalizeKeyToken(ident.PrimaryDeviceID),
+		normalizeKeyToken(ident.Name),
+		normalizeKeyToken(ident.Hostname),
+		normalizeKeyToken(ident.MacAddress),
+		normalizeKeyToken(ident.SerialNumber),
+	}
+	out := make([]string, 0, len(tokens))
+	seen := map[string]struct{}{}
+	for _, token := range tokens {
+		if token == "" {
+			continue
+		}
+		if _, ok := seen[token]; ok {
+			continue
+		}
+		seen[token] = struct{}{}
+		out = append(out, token)
+	}
+	return out
+}
+
+func resolveNeighborNodeID(link NeighborLink, tokenToNode map[string]string) (string, bool) {
+	candidates := []string{
+		normalizeKeyToken(link.NeighborIdentityHint),
+		normalizeKeyToken("identity:" + link.NeighborIdentityHint),
+		normalizeKeyToken(link.NeighborDeviceName),
+	}
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		if nodeID, ok := tokenToNode[candidate]; ok && nodeID != "" {
+			return nodeID, true
+		}
+	}
+	return "", false
+}
+
+func topologyConnectedComponents(nodeIDs []string, edges []TopologyEdge) int {
+	if len(nodeIDs) == 0 {
+		return 0
+	}
+	adj := make(map[string][]string, len(nodeIDs))
+	for _, nodeID := range nodeIDs {
+		adj[nodeID] = nil
+	}
+	for _, edge := range edges {
+		if edge.FromNodeID == "" || edge.ToNodeID == "" {
+			continue
+		}
+		adj[edge.FromNodeID] = append(adj[edge.FromNodeID], edge.ToNodeID)
+		adj[edge.ToNodeID] = append(adj[edge.ToNodeID], edge.FromNodeID)
+	}
+
+	visited := make(map[string]bool, len(nodeIDs))
+	components := 0
+	queue := make([]string, 0, len(nodeIDs))
+	for _, start := range nodeIDs {
+		if start == "" || visited[start] {
+			continue
+		}
+		components++
+		queue = queue[:0]
+		queue = append(queue, start)
+		visited[start] = true
+		for len(queue) > 0 {
+			current := queue[0]
+			queue = queue[1:]
+			for _, next := range adj[current] {
+				if next == "" || visited[next] {
+					continue
+				}
+				visited[next] = true
+				queue = append(queue, next)
+			}
+		}
+	}
+	return components
+}
+
+func topologyEdgePairKey(fromNodeID, toNodeID string) string {
+	return strings.TrimSpace(fromNodeID) + "->" + strings.TrimSpace(toNodeID)
 }
 
 func identityKeysFromObservation(obs SourceObservation) []string {

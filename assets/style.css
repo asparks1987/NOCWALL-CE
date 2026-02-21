@@ -59,6 +59,80 @@ header button { margin: 0; }
 .tabcontent {
   padding: 15px;
 }
+.source-status-strip {
+  margin: 10px 12px 0;
+  padding: 10px 12px;
+  border: 1px solid #303030;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #171717, #121212);
+}
+.source-status-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.source-status-summary {
+  font-size: 13px;
+  color: #c9c9c9;
+}
+.source-status-list {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
+.source-status-item {
+  background: #1d1d1d;
+  border: 1px solid #303030;
+  border-radius: 8px;
+  padding: 9px;
+  display: grid;
+  gap: 6px;
+}
+.source-status-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.source-status-name {
+  font-size: 13px;
+  color: #f0f0f0;
+  font-weight: 600;
+}
+.source-status-url {
+  font-size: 11px;
+  color: #9d9d9d;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.source-status-meta {
+  font-size: 12px;
+  color: #bdbdbd;
+}
+.source-status-actions {
+  display: flex;
+  gap: 8px;
+}
+.source-status-actions .btn-outline {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+.source-status-notice {
+  margin-top: 8px;
+  min-height: 18px;
+  font-size: 12px;
+  color: #9ecbff;
+}
+.source-status-notice.error {
+  color: #ff9b9b;
+}
+.source-status-notice.ok {
+  color: #99e29c;
+}
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -77,6 +151,17 @@ header button { margin: 0; }
 .card:hover {
   transform: scale(1.02);
 }
+.card[draggable="true"] {
+  cursor: grab;
+}
+.card.dragging {
+  opacity: 0.55;
+  cursor: grabbing;
+}
+.card.drop-target {
+  outline: 2px dashed #b06cff;
+  outline-offset: 2px;
+}
 .card.offline {
   border: 1px solid #f55;
   box-shadow: 0 0 12px rgba(255, 0, 0, 0.4);
@@ -92,6 +177,11 @@ header button { margin: 0; }
 .status {
   margin-top: 5px;
   font-size: 14px;
+}
+.card-meta {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #b8b8b8;
 }
 .actions {
   display: flex;
@@ -183,6 +273,54 @@ footer {
   color: #aaa;
   font-size: 14px;
 }
+.wizard-modal {
+  max-width: 760px;
+}
+.wizard-subtitle {
+  margin: 0 0 14px 0;
+  color: #b8b8b8;
+  font-size: 14px;
+}
+.wizard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.wizard-grid label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: #c7c7c7;
+}
+.wizard-grid input[type="text"],
+.wizard-grid input[type="url"],
+.wizard-grid input[type="password"] {
+  width: 100%;
+  box-sizing: border-box;
+  background: #121212;
+  border: 1px solid #3b3b3b;
+  color: #eee;
+  border-radius: 7px;
+  padding: 9px 10px;
+}
+.wizard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.wizard-status {
+  margin-top: 10px;
+  min-height: 20px;
+  color: #9ecbff;
+  font-size: 13px;
+}
+.wizard-status.error {
+  color: #ff9b9b;
+}
+.wizard-status.ok {
+  color: #99e29c;
+}
 .history-status {
   font-size: 14px;
   color: #9ecbff;
@@ -218,6 +356,162 @@ footer {
   border: 1px solid #2e2e38;
   border-radius: 6px;
   padding: 6px 10px;
+}
+.inventory-modal {
+  max-width: 1040px;
+}
+.inventory-status {
+  margin: 8px 0 14px;
+  font-size: 13px;
+  color: #9ecbff;
+}
+.inventory-status.ok {
+  color: #99e29c;
+}
+.inventory-status.error {
+  color: #ff9b9b;
+}
+.inventory-section {
+  margin: 10px 0 16px;
+  padding: 10px;
+  border: 1px solid #2e2e2e;
+  border-radius: 8px;
+  background: #181818;
+}
+.inventory-section h4 {
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: #d7d7d7;
+}
+.inventory-identity {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px 12px;
+}
+.inventory-kv {
+  background: #121212;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.inventory-kv span:first-child {
+  color: #a9a9a9;
+}
+.inventory-empty {
+  color: #aaa;
+  font-style: italic;
+  font-size: 13px;
+}
+.inventory-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.inventory-table th,
+.inventory-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid #2f2f2f;
+  text-align: left;
+  vertical-align: top;
+}
+.inventory-table th {
+  color: #c9c9c9;
+  font-weight: 600;
+  background: #131313;
+}
+.topology-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.topology-toolbar label {
+  font-size: 12px;
+  color: #b8b8b8;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.topology-toolbar select {
+  background: #1a1a1a;
+  color: #eee;
+  border: 1px solid #444;
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+.topology-health {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.topology-status {
+  font-size: 13px;
+  color: #a6c8ff;
+  margin-bottom: 8px;
+}
+.topology-status.error {
+  color: #ff9696;
+}
+.topology-canvas-wrap {
+  background: radial-gradient(circle at 20% 10%, rgba(176,108,255,0.08), rgba(0,0,0,0.15) 35%), #121212;
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
+  min-height: 420px;
+  overflow: hidden;
+}
+#topologySvg {
+  width: 100%;
+  min-height: 420px;
+  display: block;
+}
+.topo-edge {
+  stroke: rgba(130,130,130,0.8);
+  stroke-width: 2;
+}
+.topo-edge.resolved {
+  stroke: rgba(122,203,255,0.75);
+}
+.topo-edge.unresolved {
+  stroke: rgba(255,143,95,0.88);
+  stroke-dasharray: 6 6;
+}
+.topo-edge.stale {
+  stroke: rgba(255,206,120,0.9);
+  stroke-dasharray: 2 5;
+}
+.topo-edge.dimmed {
+  opacity: 0.2;
+}
+.topo-node circle {
+  stroke: rgba(255,255,255,0.25);
+  stroke-width: 1.5;
+}
+.topo-node.managed circle {
+  fill: rgba(122,203,255,0.25);
+}
+.topo-node.external circle {
+  fill: rgba(255,173,92,0.23);
+}
+.topo-node.selected circle {
+  stroke: #ffe98a;
+  stroke-width: 2.5;
+}
+.topo-node.dimmed {
+  opacity: 0.35;
+}
+.topo-node text {
+  fill: #ddd;
+  font-size: 11px;
+  paint-order: stroke;
+  stroke: rgba(0,0,0,0.75);
+  stroke-width: 2px;
+  stroke-linejoin: round;
 }
 .grid-actions {
   display: flex;

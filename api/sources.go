@@ -34,6 +34,8 @@ type uiSPDeviceRecord struct {
 	Serial  string
 	Model   string
 	Vendor  string
+	Ifaces  []TelemetryInterfaceFact
+	Neighs  []TelemetryNeighborFact
 	Online  bool
 	Latency *float64
 }
@@ -179,20 +181,22 @@ func (u *UISPConnector) Poll(ctx context.Context, req SourcePollRequest) (source
 
 		online := rec.Online
 		events = append(events, TelemetryIngestRequest{
-			Source:    "uisp",
-			EventType: eventType,
-			DeviceID:  rec.ID,
-			Device:    rec.Name,
-			Hostname:  rec.Host,
-			Mac:       rec.Mac,
-			Serial:    rec.Serial,
-			Model:     rec.Model,
-			Vendor:    rec.Vendor,
-			Role:      rec.Role,
-			SiteID:    rec.SiteID,
-			Online:    &online,
-			LatencyMs: rec.Latency,
-			Message:   fmt.Sprintf("UISP poll state=%t", rec.Online),
+			Source:     "uisp",
+			EventType:  eventType,
+			DeviceID:   rec.ID,
+			Device:     rec.Name,
+			Hostname:   rec.Host,
+			Mac:        rec.Mac,
+			Serial:     rec.Serial,
+			Model:      rec.Model,
+			Vendor:     rec.Vendor,
+			Role:       rec.Role,
+			SiteID:     rec.SiteID,
+			Online:     &online,
+			LatencyMs:  rec.Latency,
+			Message:    fmt.Sprintf("UISP poll state=%t", rec.Online),
+			Interfaces: rec.Ifaces,
+			Neighbors:  rec.Neighs,
 		})
 		emitted++
 	}
@@ -383,6 +387,8 @@ func parseUISPDevices(body []byte) ([]uiSPDeviceRecord, error) {
 				[]string{"identification", "vendor"},
 				[]string{"vendor"},
 			),
+			Ifaces:  parseUISPInterfaces(item),
+			Neighs:  parseUISPNeighbors(item),
 			Online:  online,
 			Latency: latency,
 		})
@@ -392,6 +398,125 @@ func parseUISPDevices(body []byte) ([]uiSPDeviceRecord, error) {
 		return nil, fmt.Errorf("uisp response had no valid records")
 	}
 	return records, nil
+}
+
+func parseUISPInterfaces(device map[string]any) []TelemetryInterfaceFact {
+	raw, ok := device["interfaces"]
+	if !ok {
+		return nil
+	}
+	arr, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]TelemetryInterfaceFact, 0, len(arr))
+	for _, item := range arr {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		name := pickString(m,
+			[]string{"name"},
+			[]string{"identification", "name"},
+			[]string{"ifName"},
+		)
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		adminUp := pickBool(m,
+			[]string{"enabled"},
+			[]string{"adminUp"},
+			[]string{"admin"},
+		)
+		operUp := pickBool(m,
+			[]string{"up"},
+			[]string{"operUp"},
+			[]string{"running"},
+		)
+		rx := pickFloat(m,
+			[]string{"rxBps"},
+			[]string{"rx"},
+			[]string{"stats", "rxBps"},
+		)
+		tx := pickFloat(m,
+			[]string{"txBps"},
+			[]string{"tx"},
+			[]string{"stats", "txBps"},
+		)
+		errRate := pickFloat(m,
+			[]string{"errorRate"},
+			[]string{"stats", "errorRate"},
+			[]string{"errors"},
+		)
+
+		out = append(out, TelemetryInterfaceFact{
+			Name:      name,
+			AdminUp:   adminUp,
+			OperUp:    operUp,
+			RxBps:     rx,
+			TxBps:     tx,
+			ErrorRate: errRate,
+		})
+		if len(out) >= 256 {
+			break
+		}
+	}
+	return out
+}
+
+func parseUISPNeighbors(device map[string]any) []TelemetryNeighborFact {
+	neighborsRaw, ok := device["neighbors"]
+	if !ok {
+		return nil
+	}
+	arr, ok := neighborsRaw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]TelemetryNeighborFact, 0, len(arr))
+	for _, item := range arr {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		localIf := pickString(m,
+			[]string{"localInterface"},
+			[]string{"localPort"},
+			[]string{"interface"},
+		)
+		neighborName := pickString(m,
+			[]string{"neighborDeviceName"},
+			[]string{"remoteName"},
+			[]string{"name"},
+		)
+		neighborIf := pickString(m,
+			[]string{"neighborInterface"},
+			[]string{"remotePort"},
+			[]string{"port"},
+		)
+		neighborHint := pickString(m,
+			[]string{"neighborIdentityHint"},
+			[]string{"neighborId"},
+			[]string{"remoteId"},
+		)
+		protocol := pickString(m,
+			[]string{"protocol"},
+		)
+		if localIf == "" && neighborName == "" && neighborIf == "" && neighborHint == "" {
+			continue
+		}
+		out = append(out, TelemetryNeighborFact{
+			LocalInterface:       localIf,
+			NeighborIdentityHint: neighborHint,
+			NeighborDeviceName:   neighborName,
+			NeighborInterface:    neighborIf,
+			Protocol:             protocol,
+		})
+		if len(out) >= 256 {
+			break
+		}
+	}
+	return out
 }
 
 func pickString(m map[string]any, paths ...[]string) string {
@@ -407,6 +532,35 @@ func pickString(m map[string]any, paths ...[]string) string {
 		}
 	}
 	return ""
+}
+
+func pickBool(m map[string]any, paths ...[]string) *bool {
+	for _, p := range paths {
+		if v, ok := nestedValue(m, p...); ok {
+			switch t := v.(type) {
+			case bool:
+				val := t
+				return &val
+			case string:
+				l := strings.ToLower(strings.TrimSpace(t))
+				if l == "true" || l == "1" || l == "up" || l == "online" || l == "enabled" {
+					val := true
+					return &val
+				}
+				if l == "false" || l == "0" || l == "down" || l == "offline" || l == "disabled" {
+					val := false
+					return &val
+				}
+			case float64:
+				val := t != 0
+				return &val
+			case int:
+				val := t != 0
+				return &val
+			}
+		}
+	}
+	return nil
 }
 
 func pickFloat(m map[string]any, paths ...[]string) *float64 {
