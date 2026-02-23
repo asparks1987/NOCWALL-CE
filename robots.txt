@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://nocwall.com/sitemap.xml
+Sitemap: https://nocwall.org/sitemap.xml

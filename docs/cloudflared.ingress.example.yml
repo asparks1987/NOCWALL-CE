@@ -1,0 +1,13 @@
+tunnel: nocwall-prod
+credentials-file: /etc/cloudflared/nocwall-prod.json
+
+ingress:
+  - hostname: nocwall.com
+    service: http://127.0.0.1:80
+  - hostname: nocwall.org
+    service: http://127.0.0.1:80
+  - hostname: app.nocwall.com
+    service: http://127.0.0.1:80
+  - hostname: app.nocwall.org
+    service: http://127.0.0.1:80
+  - service: http_status:404

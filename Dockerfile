@@ -16,6 +16,12 @@ RUN apt-get update && apt-get install -y \
 
 # Enable Apache modules
 RUN a2enmod rewrite
+RUN printf '%s\n' \
+    '<Files "app.php">' \
+    '  Require all denied' \
+    '</Files>' \
+    > /etc/apache2/conf-available/nocwall-security.conf \
+    && a2enconf nocwall-security
 
 # Set working directory
 WORKDIR /var/www/html
@@ -25,9 +31,22 @@ COPY composer.json /var/www/html/composer.json
 RUN composer install --no-dev --prefer-dist --no-interaction --no-progress --optimize-autoloader
 
 # Copy application files
-COPY index.php /var/www/html/
+COPY app.php /var/www/html/app.php
+COPY index.php /var/www/html/index.php
+COPY app/ /var/www/html/app/
 COPY assets/ /var/www/html/assets/
-COPY buz.mp3 /var/www/html/
+COPY site/ /var/www/html/site/
+COPY pricing/ /var/www/html/pricing/
+COPY features/ /var/www/html/features/
+COPY status/ /var/www/html/status/
+COPY contact/ /var/www/html/contact/
+COPY privacy/ /var/www/html/privacy/
+COPY terms/ /var/www/html/terms/
+COPY docs/index.php /var/www/html/docs/index.php
+COPY robots.txt /var/www/html/robots.txt
+COPY sitemap.xml /var/www/html/sitemap.xml
+COPY favicon.svg /var/www/html/favicon.svg
+COPY buz.mp3 /var/www/html/buz.mp3
 
 # --- Embed Gotify server ---
 # Use a known release; override at build time if desired

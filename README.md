@@ -40,7 +40,28 @@ Long description:
   - multi-vendor NMS adapter expansion in roadmap
 - Product split status:
   - current branch is transitional and still contains features that will be gated/moved to PRO
-  - upcoming releases prioritize reducing CE to minimal wallboard scope
+- upcoming releases prioritize reducing CE to minimal wallboard scope
+
+## Web Routing Split (Marketing vs App)
+
+- Root marketing site:
+  - `https://nocwall.com/`
+  - `https://nocwall.org/`
+  - Pages: `/`, `/pricing`, `/features`, `/docs`, `/status`, `/contact`, `/privacy`, `/terms`
+- App host (existing login/dashboard behavior):
+  - `https://app.nocwall.com/`
+  - `https://app.nocwall.org/`
+- Fallback:
+  - `https://nocwall.com/app` and `https://nocwall.org/app` redirect to app host.
+
+Environment knobs:
+- `NOCWALL_MARKETING_BASE_URL`
+- `NOCWALL_APP_BASE_URL`
+- `NOC_MARKETING_DOMAINS`
+- `NOC_APP_DOMAINS`
+
+Cloudflare Tunnel example:
+- `docs/cloudflared.ingress.example.yml`
 
 ## CE vs PRO Contract (Updated)
 
