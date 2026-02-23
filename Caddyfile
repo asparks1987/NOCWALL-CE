@@ -3,8 +3,19 @@
     admin 0.0.0.0:2019
 }
 
-{$NOC_DOMAIN:localhost} {
-    @api path /api/* /mobile/config /devices /incidents /push/register /health
+{$NOC_MARKETING_DOMAINS:nocwall.com,nocwall.org,localhost} {
+    @api path /api/* /auth/login /mobile/config /devices /incidents /push/register /health /agents /agents/register /telemetry/ingest /events/ingest /sources/uisp/poll /sources/uisp/status /inventory/* /topology/*
+    reverse_proxy @api api:8080
+
+    reverse_proxy uisp-noc:80 {
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host {host}
+        header_up X-Forwarded-For {remote}
+    }
+}
+
+{$NOC_APP_DOMAINS:app.nocwall.com,app.nocwall.org} {
+    @api path /api/* /mobile/config /devices /incidents /push/register /health /auth/login /agents /agents/register /telemetry/ingest /events/ingest /sources/uisp/poll /sources/uisp/status /inventory/* /topology/*
     reverse_proxy @api api:8080
 
     reverse_proxy uisp-noc:80 {

@@ -78,7 +78,13 @@ configs:
           admin 0.0.0.0:2019
       }
 
-      :80 {
+      nocwall.com, nocwall.org, localhost {
+          @api path /api/* /auth/login /mobile/config /devices /incidents /push/register /health /agents /agents/register /telemetry/ingest /events/ingest /sources/uisp/poll /sources/uisp/status /inventory/* /topology/*
+          reverse_proxy @api api:8080
+          reverse_proxy uisp-noc:80
+      }
+
+      app.nocwall.com, app.nocwall.org {
           @api path /api/* /auth/login /mobile/config /devices /incidents /push/register /health /agents /agents/register /telemetry/ingest /events/ingest /sources/uisp/poll /sources/uisp/status /inventory/* /topology/*
           reverse_proxy @api api:8080
           reverse_proxy uisp-noc:80
