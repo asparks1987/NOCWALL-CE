@@ -51,12 +51,13 @@ Long description:
 - App host (existing login/dashboard behavior):
   - `https://app.nocwall.com/`
   - `https://app.nocwall.org/`
-- Fallback:
-  - `https://nocwall.com/app` and `https://nocwall.org/app` redirect to app host.
+- Guaranteed fallback:
+  - `https://nocwall.com/app/` and `https://nocwall.org/app/` serve the app directly.
+  - This keeps login/dashboard available even before `app.*` DNS is live.
 
 Environment knobs:
 - `NOCWALL_MARKETING_BASE_URL`
-- `NOCWALL_APP_BASE_URL`
+- `NOCWALL_APP_BASE_URL` (optional; set to `https://app.nocwall.com` to force subdomain login links)
 - `NOC_MARKETING_DOMAINS`
 - `NOC_APP_DOMAINS`
 
@@ -91,6 +92,8 @@ PRO target:
   - outage simulation
   - station ping history modal
   - per-account UISP source management (`Account Settings`) with multiple UISP URLs and tokens
+  - per-account demo preview toggle (dashboard header + Account Settings) for instant simulated wallboard data
+  - source connectivity diagnostics panel (DNS/TLS/API reachability) in `Account Settings`
 - New dashboard display controls:
   - persistent card density (`Normal`, `Compact`)
   - metric toggles (CPU, RAM, Temp, Latency, Uptime, Outage)
@@ -319,6 +322,19 @@ List configured UISP sources:
 
 ```bash
 curl -c cookies.txt -b cookies.txt "http://localhost/?ajax=sources_list"
+```
+
+Enable demo wallboard preview for the logged-in account:
+
+```bash
+curl -c cookies.txt -b cookies.txt -X POST "http://localhost/?ajax=demo_mode_set" \
+  -d "enabled=1"
+```
+
+Run source DNS/TLS/API diagnostics:
+
+```bash
+curl -c cookies.txt -b cookies.txt "http://localhost/?ajax=sources_diagnostics"
 ```
 
 Check subscription + license status:

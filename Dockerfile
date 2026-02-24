@@ -1,8 +1,14 @@
-# Use the official PHP-Apache image
-FROM php:8.2-apache
+ARG PHP_BASE_IMAGE=php:8.2-apache
+ARG COMPOSER_BASE_IMAGE=composer:2
 
-# Copy composer from official image for dependency install
-COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+# Composer binary source image
+FROM ${COMPOSER_BASE_IMAGE} AS composer-bin
+
+# Use the official PHP-Apache image
+FROM ${PHP_BASE_IMAGE}
+
+# Copy composer from configured image for dependency install
+COPY --from=composer-bin /usr/bin/composer /usr/bin/composer
 
 # Install required packages and extensions
 RUN apt-get update && apt-get install -y \

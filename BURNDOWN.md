@@ -1,3 +1,125 @@
+﻿# ⚙️ Codex Execution Instructions
+
+You are acting as an autonomous senior software engineer.
+
+When instructed to “follow the directions at the top of this file”, you must:
+
+---
+
+## 1. Read & Plan
+- Read this entire file before making changes.
+- Identify all unchecked tasks.
+- Group tasks by dependency and execution order.
+- Determine which tasks can be completed immediately with available context.
+
+---
+
+## 2. Execution Order
+Work in this priority order unless explicitly overridden:
+
+1. Fix broken builds, tests, or runtime errors.
+2. Implement missing core functionality.
+3. Improve correctness and data integrity.
+4. Add tests for newly implemented features.
+5. Improve documentation and developer experience.
+6. Refactor only when it directly improves reliability or clarity.
+
+Do NOT start optional or cosmetic tasks until functional tasks are complete.
+
+---
+
+## 3. Task Processing Rules
+For each task:
+
+- If it can be completed fully → implement it.
+- If it can be partially completed → implement what is possible and document what remains.
+- If it cannot be completed → explain precisely why and what is required.
+
+Always work on tasks in order from top to bottom unless dependencies require reordering.
+
+---
+
+## 4. Implementation Standards
+All work must:
+
+- Follow existing project conventions.
+- Include type hints where applicable.
+- Include docstrings/comments for non-obvious logic.
+- Avoid breaking existing functionality.
+- Prefer small, incremental commits/changes.
+
+Do not introduce unnecessary abstractions.
+
+---
+
+## 5. Testing & Validation
+After implementing tasks:
+
+- Add or update tests where relevant.
+- Run or simulate test execution.
+- Fix failures caused by new changes.
+- Do not leave known failing tests.
+
+If testing is impossible, explain why.
+
+---
+
+## 6. Documentation Updates
+When implementing features:
+
+- Update relevant docs.
+- Add usage examples where helpful.
+- Note operational impacts if any.
+
+Documentation must reflect actual behavior.
+
+---
+
+## 7. Checklist Maintenance
+After completing work:
+
+- Mark completed items as done.
+- Add brief implementation notes under each completed item.
+- Add new tasks if gaps are discovered.
+- Do not delete incomplete tasks.
+
+Use this format:
+
+- [x] Task description  
+  - Notes: what was implemented
+
+---
+
+## 8. Progress Reporting
+At the end of each execution session, provide:
+
+- Summary of completed tasks
+- Remaining high-priority items
+- Blockers or risks
+- Recommended next steps
+
+Be concise and factual.
+
+---
+
+## 9. Autonomy Rules
+- Do not ask questions unless blocked.
+- Make reasonable technical decisions independently.
+- Prefer shipping working solutions over perfect designs.
+- Optimize for reliability and maintainability.
+
+---
+
+## 10. Safety & Scope
+- Do not implement automated trading, financial advice logic, or unsafe operations unless explicitly authorized.
+- Do not expose secrets or credentials.
+- Respect security and compliance constraints.
+
+---
+
+Follow these rules strictly.
+
+
 # NOCWALL-CE Burndown (Recreated)
 
 Chronological multi-phase plan to move from the current state to a fully functional, distributable, and sellable NOCWALL platform.
@@ -27,8 +149,10 @@ These features are intentionally limited to wallboard usability, reliability, an
 They avoid PRO-only domains (team workflows, correlation, automation, enterprise controls, deep analytics).
 
 1. `[x]` CEF01 `[CE]` First-run setup wizard (add source + test + start dashboard)
-2. `[ ]` CEF02 `[CE]` Demo data toggle from UI for instant wallboard preview
-3. `[ ]` CEF03 `[CE]` Source connectivity diagnostics panel (DNS/TLS/API reachability)
+2. `[x]` CEF02 `[CE]` Demo data toggle from UI for instant wallboard preview  
+   - Notes: Added per-account demo mode state, dashboard toggle button, settings toggle, and backend demo device feed wiring in `?ajax=devices`.
+3. `[x]` CEF03 `[CE]` Source connectivity diagnostics panel (DNS/TLS/API reachability)  
+   - Notes: Extended source probes with DNS/TLS/API checks, added `?ajax=sources_diagnostics`, and shipped a settings diagnostics panel with per-source status details.
 4. `[x]` CEF04 `[CE]` Manual "Poll Now" button per source
 5. `[x]` CEF05 `[CE]` Source status strip (last poll time, success/fail, latency)
 6. `[x]` CEF06 `[CE]` Global search box for device name/MAC/hostname
@@ -56,8 +180,10 @@ They avoid PRO-only domains (team workflows, correlation, automation, enterprise
 
 ### Epic CE-A1 - CE Feature Pack 1 (CEF01-CEF10)
 - [x] RCE01 Implement first-run wizard with source save/test handoff.
-- [ ] RCE02 Add demo data UI toggle and API wiring.
-- [ ] RCE03 Build source diagnostics panel and health probes.
+- [x] RCE02 Add demo data UI toggle and API wiring.  
+  - Notes: Implemented account-scoped demo mode APIs (`demo_mode_get/set`), wallboard demo data payload generation, and live UI toggles on dashboard/settings pages.
+- [x] RCE03 Build source diagnostics panel and health probes.  
+  - Notes: Upgraded `probe_uisp_source` for DNS/TLS/API diagnostics and added settings UI/actions to run and render diagnostics across active sources.
 - [x] RCE04 Add per-source "Poll Now" actions and status strip.
 - [x] RCE05 Add search + quick filters across tabs.
 - [x] RCE06 Add sort modes and account-persisted defaults.
@@ -153,7 +279,7 @@ They avoid PRO-only domains (team workflows, correlation, automation, enterprise
 ### Epic 0 - Enforce Minimal CE Product Contract
 - [x] [STUB] R00 Define strict CE card contract: online/offline, device name, role, site, last-seen only.
 - [x] [STUB] R00a Add feature flags for PRO-only features with deny-by-default in CE builds.
-- [x] [STUB] R00b Move ack/escalation/suppression/automation entry points behind PRO gates.
+- [x] [STUB] R00b Keep alert ack/siren-silence in CE; keep escalation/suppression/automation behind PRO gates.
 - [x] [STUB] R00c Remove non-essential CE dashboard controls and metrics from default CE UI.
 - [x] [STUB] R00d Keep CE focused on wallboard display-only operations and basic health checks.
 - [x] [STUB] R00e Add CI guardrails to fail CE builds when PRO-gated routes/components leak.

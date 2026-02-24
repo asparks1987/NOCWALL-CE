@@ -58,13 +58,17 @@ function nocwall_app_base_url(): string {
         return rtrim($configured, '/');
     }
     $host = nocwall_current_host();
+    $scheme = nocwall_current_scheme();
+    if (nocwall_is_app_host()) {
+        return $scheme . '://' . $host;
+    }
     if (substr($host, -11) === 'nocwall.org') {
-        return 'https://app.nocwall.org';
+        return $scheme . '://' . $host . '/app';
     }
     if (substr($host, -11) === 'nocwall.com') {
-        return 'https://app.nocwall.com';
+        return $scheme . '://' . $host . '/app';
     }
-    return nocwall_current_scheme() . '://' . $host;
+    return $scheme . '://' . $host . '/app';
 }
 
 function nocwall_redirect(string $url, int $status = 302): void {
@@ -274,4 +278,3 @@ function nocwall_store_contact_submission(array $input): bool {
     }
     return @file_put_contents($file, $json, LOCK_EX) !== false;
 }
-
