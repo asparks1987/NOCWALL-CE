@@ -231,6 +231,8 @@ let sourceStatusItems = [];
 let sourceStatusSummary = null;
 let sourceStatusLoading = false;
 let sourceStatusLastLoadedAt = 0;
+let demoModeEnabled = false;
+let demoModeToggleBusy = false;
 let topologyCache = { nodes: [], edges: [], health: null, fetched_at: "" };
 let topologyLoading = false;
 let topologyLastFetchMs = 0;
@@ -984,6 +986,67 @@ async function loadUserPrefsFromServer(){
   userPrefsLoaded = true;
 }
 
+function updateDemoModeToggleButton(){
+  const btn = document.getElementById("demoModeToggleBtn");
+  if(!btn) return;
+  const modeText = demoModeEnabled ? "Demo Preview: On" : "Demo Preview: Off";
+  btn.textContent = demoModeToggleBusy ? "Saving Demo..." : modeText;
+  btn.classList.toggle("btn-accent", demoModeEnabled);
+  btn.disabled = demoModeToggleBusy;
+}
+
+function setDemoModeState(enabled){
+  demoModeEnabled = !!enabled;
+  updateDemoModeToggleButton();
+  updateDataHealthBanner();
+}
+
+async function loadDemoModeState(){
+  try{
+    const resp = await fetch(`?ajax=demo_mode_get&t=${Date.now()}`, { cache:"no-store" });
+    if(resp.status===401){ location.reload(); return; }
+    const payload = await resp.json().catch(()=>null);
+    if(!payload || !payload.ok){
+      updateDemoModeToggleButton();
+      return;
+    }
+    setDemoModeState(!!payload.enabled);
+  }catch(_){
+    updateDemoModeToggleButton();
+  }
+}
+
+async function toggleDemoMode(){
+  if(demoModeToggleBusy) return;
+  demoModeToggleBusy = true;
+  updateDemoModeToggleButton();
+  const targetEnabled = !demoModeEnabled;
+  try{
+    const fd = new FormData();
+    fd.append("enabled", targetEnabled ? "1" : "0");
+    const resp = await fetch("?ajax=demo_mode_set", { method:"POST", body:fd });
+    if(resp.status===401){ location.reload(); return; }
+    const payload = await resp.json().catch(()=>null);
+    if(!payload || !payload.ok){
+      setSourceStatusNotice("Unable to update demo mode.", "error");
+      return;
+    }
+    setDemoModeState(!!payload.enabled);
+    if(payload.enabled){
+      setSourceStatusNotice("Demo preview enabled. Showing simulated device data.", "warn");
+    } else {
+      setSourceStatusNotice("Demo preview disabled. Returning to live UISP polling.", "ok");
+    }
+    await loadSourceStatus(true);
+    await fetchDevices({ force: true, reason: "demo-mode-toggle" });
+  }catch(_){
+    setSourceStatusNotice("Demo mode request failed.", "error");
+  } finally {
+    demoModeToggleBusy = false;
+    updateDemoModeToggleButton();
+  }
+}
+
 function setSourceStatusNotice(msg, kind){
   const el = document.getElementById("sourceStatusNotice");
   if(!el) return;
@@ -1018,8 +1081,13 @@ function renderSourceStatusStrip(){
   if(!summaryEl || !listEl) return;
 
   if(!Array.isArray(sourceStatusItems) || sourceStatusItems.length === 0){
-    summaryEl.textContent = "No active UISP sources configured for this account.";
-    listEl.innerHTML = `<div class="source-status-item"><div class="source-status-meta">Open Account Settings or use the setup wizard to add at least one source.</div></div>`;
+    if(demoModeEnabled){
+      summaryEl.textContent = "Demo preview mode is active.";
+      listEl.innerHTML = `<div class="source-status-item"><div class="source-status-meta">Simulated wallboard data is enabled for this account. Disable demo preview to resume live UISP polling.</div></div>`;
+    } else {
+      summaryEl.textContent = "No active UISP sources configured for this account.";
+      listEl.innerHTML = `<div class="source-status-item"><div class="source-status-meta">Open Account Settings or use the setup wizard to add at least one source.</div></div>`;
+    }
     return;
   }
 
@@ -1076,6 +1144,9 @@ async function loadSourceStatus(force){
       setSourceStatusNotice("Unable to load source status.", "error");
       return;
     }
+    if(typeof payload.demo_mode === "boolean"){
+      setDemoModeState(payload.demo_mode);
+    }
     sourceStatusItems = Array.isArray(payload.sources) ? payload.sources : [];
     sourceStatusSummary = payload.summary && typeof payload.summary === "object" ? payload.summary : null;
     sourceStatusLastLoadedAt = Date.now();
@@ -1130,7 +1201,11 @@ async function pollSourceById(sourceId, silent, manageBusy, refreshAfter){
 
 async function pollAllSources(){
   if(!Array.isArray(sourceStatusItems) || sourceStatusItems.length === 0){
-    setSourceStatusNotice("No active sources to poll.", "error");
+    if(demoModeEnabled){
+      setSourceStatusNotice("Demo preview is enabled; there are no live UISP sources to poll.", "warn");
+    } else {
+      setSourceStatusNotice("No active sources to poll.", "error");
+    }
     return;
   }
   setSourcePollButtonsBusy(true);
@@ -1811,6 +1886,10 @@ function updateDataHealthBanner(){
       return;
     }
   }
+  if(demoModeEnabled){
+    setDataHealthBanner("Demo preview is enabled: dashboard is showing simulated devices.", "warn");
+    return;
+  }
   setDataHealthBanner("", "");
 }
 
@@ -1915,6 +1994,9 @@ async function fetchDevices(opts={}){
       }
       schedulePoll(undefined, "error");
       return;
+    }
+    if(typeof payload.demo_mode === "boolean"){
+      setDemoModeState(payload.demo_mode);
     }
     pollErrorCount = 0;
     pollLastErrorMessage = "";
@@ -2322,6 +2404,8 @@ function showHistory(id,name){
   window.location.href='?'+params.toString();
 }
 initDisplaySettings();
+updateDemoModeToggleButton();
+loadDemoModeState();
 loadUserPrefsFromServer().finally(()=>{ ensureFirstRunSourceWizard(); });
 loadSourceStatus(true);
 fetchInventoryOverview(true);

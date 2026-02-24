@@ -6,24 +6,9 @@ if (nocwall_is_app_host()) {
     exit;
 }
 
-$path = parse_url((string)($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH);
-$path = is_string($path) ? $path : '/';
-if ($path === '/app' || $path === '/app/' || strpos($path, '/app/') === 0) {
-    $suffix = $path === '/app' ? '/' : substr($path, 4);
-    if ($suffix === false || $suffix === '') {
-        $suffix = '/';
-    }
-    $target = rtrim(nocwall_app_base_url(), '/') . $suffix;
-    $query = (string)($_SERVER['QUERY_STRING'] ?? '');
-    if ($query !== '') {
-        $target .= '?' . $query;
-    }
-    nocwall_redirect($target, 302);
-}
-
 // Guard against old app-style query routes on marketing host.
 if (isset($_GET['ajax']) || isset($_GET['action']) || isset($_GET['webhook']) || isset($_GET['login']) || isset($_GET['view'])) {
-    $target = rtrim(nocwall_app_base_url(), '/') . '/';
+    $target = '/app/';
     $query = (string)($_SERVER['QUERY_STRING'] ?? '');
     if ($query !== '') {
         $target .= '?' . $query;

@@ -6,6 +6,8 @@ android/build
 android/app/build
 cache
 docs
+!docs/
+!docs/index.php
 *.log
 *.tmp
 *.swp
@@ -16,4 +18,3 @@ coverage
 dist
 tmp
 *.md
-

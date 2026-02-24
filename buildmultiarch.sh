@@ -22,6 +22,12 @@ PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64,linux/arm/v7}"
 BUILDER="${BUILDER:-nocwall-dockerhub}"
 WEB_DOCKERFILE="${WEB_DOCKERFILE:-Dockerfile}"
 API_DOCKERFILE="${API_DOCKERFILE:-api/Dockerfile}"
+PHP_BASE_IMAGE="${PHP_BASE_IMAGE:-php:8.2-apache}"
+COMPOSER_BASE_IMAGE="${COMPOSER_BASE_IMAGE:-composer:2}"
+GO_BASE_IMAGE="${GO_BASE_IMAGE:-golang:1.21-alpine}"
+NODE_BASE_IMAGE="${NODE_BASE_IMAGE:-node:20-alpine}"
+ALPINE_BASE_IMAGE="${ALPINE_BASE_IMAGE:-alpine:3.19}"
+AUTO_ECR_FALLBACK="${AUTO_ECR_FALLBACK:-1}"
 DRY_RUN=0
 SKIP_LOGIN=0
 SKIP_PREFLIGHT=0
@@ -48,6 +54,13 @@ Options:
   --builder <name>           buildx builder name (default: nocwall-dockerhub)
   --web-dockerfile <path>    Web Dockerfile path (default: Dockerfile)
   --api-dockerfile <path>    API Dockerfile path (default: api/Dockerfile)
+  --php-base-image <ref>     PHP base image (default: php:8.2-apache)
+  --composer-base-image <r>  Composer image (default: composer:2)
+  --go-base-image <ref>      Go build image (default: golang:1.21-alpine)
+  --node-base-image <ref>    Node build image (default: node:20-alpine)
+  --alpine-base-image <ref>  Runtime alpine image (default: alpine:3.19)
+  --use-ecr-mirror           Use ECR Public mirrors for all Docker Official base images
+  --no-ecr-fallback          Disable automatic retry using ECR mirrors on base-image pull errors
   --dry-run                  Print commands without executing build/push
   --skip-login               Skip docker login during /install
   --skip-preflight           Skip preflight checks before /build
@@ -59,6 +72,8 @@ Examples:
   ./buildmultiarch.sh /preflight
   ./buildmultiarch.sh /build
   ./buildmultiarch.sh --u predheadtx -i nocwall:latest
+  ./buildmultiarch.sh /build --use-ecr-mirror
+  ./buildmultiarch.sh /build --php-base-image public.ecr.aws/docker/library/php:8.2-apache
   ./buildmultiarch.sh /build --user predheadtx --web-repo nocwall --api-repo nocwall-api --tag latest
 EOF
 }
@@ -109,6 +124,21 @@ parse_common_args() {
         WEB_DOCKERFILE="$2"; shift 2 ;;
       --api-dockerfile)
         API_DOCKERFILE="$2"; shift 2 ;;
+      --php-base-image)
+        PHP_BASE_IMAGE="$2"; shift 2 ;;
+      --composer-base-image)
+        COMPOSER_BASE_IMAGE="$2"; shift 2 ;;
+      --go-base-image)
+        GO_BASE_IMAGE="$2"; shift 2 ;;
+      --node-base-image)
+        NODE_BASE_IMAGE="$2"; shift 2 ;;
+      --alpine-base-image)
+        ALPINE_BASE_IMAGE="$2"; shift 2 ;;
+      --use-ecr-mirror)
+        set_ecr_mirror_images
+        shift ;;
+      --no-ecr-fallback)
+        AUTO_ECR_FALLBACK=0; shift ;;
       --dry-run)
         DRY_RUN=1; shift ;;
       --skip-login)
@@ -124,6 +154,22 @@ parse_common_args() {
         ;;
     esac
   done
+}
+
+set_ecr_mirror_images() {
+  PHP_BASE_IMAGE="public.ecr.aws/docker/library/php:8.2-apache"
+  COMPOSER_BASE_IMAGE="public.ecr.aws/docker/library/composer:2"
+  GO_BASE_IMAGE="public.ecr.aws/docker/library/golang:1.21-alpine"
+  NODE_BASE_IMAGE="public.ecr.aws/docker/library/node:20-alpine"
+  ALPINE_BASE_IMAGE="public.ecr.aws/docker/library/alpine:3.19"
+}
+
+is_ecr_mirror_active() {
+  [[ "$PHP_BASE_IMAGE" == public.ecr.aws/docker/library/* ]] \
+    && [[ "$COMPOSER_BASE_IMAGE" == public.ecr.aws/docker/library/* ]] \
+    && [[ "$GO_BASE_IMAGE" == public.ecr.aws/docker/library/* ]] \
+    && [[ "$NODE_BASE_IMAGE" == public.ecr.aws/docker/library/* ]] \
+    && [[ "$ALPINE_BASE_IMAGE" == public.ecr.aws/docker/library/* ]]
 }
 
 parse_image_shortcut() {
@@ -280,13 +326,42 @@ build_single_image() {
     fi
   fi
 
-  log "Publishing image: $image (dockerfile: $dockerfile)"
-  run_cmd docker buildx build \
+  local build_cmd=(docker buildx build \
     --platform "$PLATFORMS" \
     -f "$dockerfile" \
+    --build-arg "PHP_BASE_IMAGE=$PHP_BASE_IMAGE" \
+    --build-arg "COMPOSER_BASE_IMAGE=$COMPOSER_BASE_IMAGE" \
+    --build-arg "GO_BASE_IMAGE=$GO_BASE_IMAGE" \
+    --build-arg "NODE_BASE_IMAGE=$NODE_BASE_IMAGE" \
+    --build-arg "ALPINE_BASE_IMAGE=$ALPINE_BASE_IMAGE" \
     "${tag_args[@]}" \
     --push \
-    .
+    .)
+
+  log "Publishing image: $image (dockerfile: $dockerfile)"
+  log "Base images: php=$PHP_BASE_IMAGE composer=$COMPOSER_BASE_IMAGE go=$GO_BASE_IMAGE node=$NODE_BASE_IMAGE alpine=$ALPINE_BASE_IMAGE"
+
+  if run_cmd "${build_cmd[@]}"; then
+    :
+  elif [[ "$AUTO_ECR_FALLBACK" == "1" ]] && ! is_ecr_mirror_active; then
+    warn "Build failed with current base registry. Retrying once with ECR Public mirrors."
+    set_ecr_mirror_images
+    build_cmd=(docker buildx build \
+      --platform "$PLATFORMS" \
+      -f "$dockerfile" \
+      --build-arg "PHP_BASE_IMAGE=$PHP_BASE_IMAGE" \
+      --build-arg "COMPOSER_BASE_IMAGE=$COMPOSER_BASE_IMAGE" \
+      --build-arg "GO_BASE_IMAGE=$GO_BASE_IMAGE" \
+      --build-arg "NODE_BASE_IMAGE=$NODE_BASE_IMAGE" \
+      --build-arg "ALPINE_BASE_IMAGE=$ALPINE_BASE_IMAGE" \
+      "${tag_args[@]}" \
+      --push \
+      .)
+    log "Retry base images: php=$PHP_BASE_IMAGE composer=$COMPOSER_BASE_IMAGE go=$GO_BASE_IMAGE node=$NODE_BASE_IMAGE alpine=$ALPINE_BASE_IMAGE"
+    run_cmd "${build_cmd[@]}"
+  else
+    die "Image build failed: $image"
+  fi
   log "Build/push complete: $image"
   if [[ -n "$sha_tag" ]]; then
     log "Build/push complete: $sha_tag"

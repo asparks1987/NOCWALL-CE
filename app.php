@@ -241,7 +241,8 @@ function build_feature_flags_for_user($user){
         'inventory' => $proEnabled,
         'topology' => $proEnabled,
         'history' => $proEnabled,
-        'ack' => $proEnabled,
+        // Acknowledging active sirens is available to all authenticated users (CE + PRO).
+        'ack' => true,
         'simulate' => $proEnabled,
         'cpe_history' => $proEnabled,
         'mobile' => $proEnabled,
@@ -619,6 +620,15 @@ function normalize_card_order_prefs($input){
     return $base;
 }
 
+function normalize_toggle_bool($input){
+    if(is_bool($input)) return $input;
+    if(is_int($input) || is_float($input)) return ((int)$input) !== 0;
+    $raw = strtolower(trim((string)$input));
+    if(in_array($raw, ['1','true','yes','on'], true)) return true;
+    if(in_array($raw, ['0','false','no','off',''], true)) return false;
+    return false;
+}
+
 function default_user_preferences(){
     return [
         'dashboard_settings' => default_dashboard_settings(),
@@ -636,6 +646,11 @@ function normalize_user_preferences($input){
     $base['tab_siren_prefs'] = normalize_tab_siren_prefs($input['tab_siren_prefs'] ?? null);
     $base['card_order_prefs'] = normalize_card_order_prefs($input['card_order_prefs'] ?? null);
     return $base;
+}
+
+function user_demo_data_enabled($user){
+    if(!is_array($user)) return false;
+    return normalize_toggle_bool($user['demo_data_enabled'] ?? false);
 }
 
 function normalize_source_status_entry($row){
@@ -729,7 +744,22 @@ function probe_uisp_source($src){
         'latency_ms' => 0,
         'device_count' => 0,
         'error' => '',
-        'last_poll_at' => date('c')
+        'last_poll_at' => date('c'),
+        'diagnostics' => [
+            'host' => '',
+            'dns_ok' => null,
+            'dns_latency_ms' => 0,
+            'dns_ip' => '',
+            'dns_error' => '',
+            'tls_ok' => null,
+            'tls_latency_ms' => 0,
+            'tls_error' => '',
+            'api_ok' => false,
+            'api_http' => 0,
+            'api_latency_ms' => 0,
+            'api_error' => '',
+            'api_path' => '/nms/api/v2.1/devices'
+        ]
     ];
     $url = rtrim((string)$out['url'], '/');
     $token = trim((string)($src['token'] ?? ''));
@@ -737,6 +767,58 @@ function probe_uisp_source($src){
         $out['error'] = 'invalid_source';
         return $out;
     }
+
+    $host = trim((string)(parse_url($url, PHP_URL_HOST) ?? ''));
+    $scheme = strtolower(trim((string)(parse_url($url, PHP_URL_SCHEME) ?? 'https')));
+    $port = (int)(parse_url($url, PHP_URL_PORT) ?? 0);
+    if($port <= 0){
+        $port = ($scheme === 'http') ? 80 : 443;
+    }
+    $out['diagnostics']['host'] = $host;
+    if($host === ''){
+        $out['error'] = 'invalid_host';
+        $out['diagnostics']['dns_ok'] = false;
+        $out['diagnostics']['dns_error'] = 'invalid_host';
+        return $out;
+    }
+
+    $dnsStart = microtime(true);
+    $dnsRecords = @gethostbynamel($host);
+    $dnsLatency = (int)round((microtime(true) - $dnsStart) * 1000);
+    $dnsOk = is_array($dnsRecords) && count($dnsRecords) > 0;
+    $out['diagnostics']['dns_ok'] = $dnsOk;
+    $out['diagnostics']['dns_latency_ms'] = $dnsLatency;
+    $out['diagnostics']['dns_ip'] = $dnsOk ? (string)$dnsRecords[0] : '';
+    $out['diagnostics']['dns_error'] = $dnsOk ? '' : 'host_unresolved';
+
+    if($scheme === 'https'){
+        $tlsErrNo = 0;
+        $tlsErr = '';
+        $tlsContext = stream_context_create([
+            'ssl' => [
+                'verify_peer' => true,
+                'verify_peer_name' => true,
+                'peer_name' => $host,
+                'SNI_enabled' => true
+            ]
+        ]);
+        $tlsStart = microtime(true);
+        $tlsSock = @stream_socket_client('ssl://' . $host . ':' . $port, $tlsErrNo, $tlsErr, 5, STREAM_CLIENT_CONNECT, $tlsContext);
+        $tlsLatency = (int)round((microtime(true) - $tlsStart) * 1000);
+        if(is_resource($tlsSock)){
+            fclose($tlsSock);
+            $out['diagnostics']['tls_ok'] = true;
+            $out['diagnostics']['tls_error'] = '';
+        } else {
+            $out['diagnostics']['tls_ok'] = false;
+            $out['diagnostics']['tls_error'] = trim((string)$tlsErr) !== '' ? trim((string)$tlsErr) : ('tls_error_' . $tlsErrNo);
+        }
+        $out['diagnostics']['tls_latency_ms'] = $tlsLatency;
+    } else {
+        $out['diagnostics']['tls_ok'] = null;
+        $out['diagnostics']['tls_error'] = 'not_applicable_http';
+    }
+
     $ch = curl_init();
     $start = microtime(true);
     curl_setopt_array($ch,[
@@ -758,7 +840,307 @@ function probe_uisp_source($src){
     $out['latency_ms'] = $lat;
     $out['device_count'] = $count;
     $out['error'] = ($ok ? '' : ($err !== '' ? $err : ('http_' . $code)));
+    $out['diagnostics']['api_ok'] = $ok;
+    $out['diagnostics']['api_http'] = $code;
+    $out['diagnostics']['api_latency_ms'] = $lat;
+    $out['diagnostics']['api_error'] = $out['error'];
     return $out;
+}
+
+function build_demo_wallboard_devices(&$cache){
+    $now = time();
+    $branchPulseOffline = (((int)floor($now / 180)) % 2) === 1;
+    $templates = [
+        [
+            'id' => 'demo-gw-hq-01',
+            'name' => 'HQ Gateway',
+            'role' => 'gateway',
+            'gateway' => true,
+            'ap' => false,
+            'router' => false,
+            'switch' => false,
+            'site_id' => 'hq',
+            'site' => 'Headquarters',
+            'hostname' => 'hq-gw-01',
+            'mac' => '02:00:00:00:10:01',
+            'serial' => 'DEMOHQGW01',
+            'vendor' => 'Ubiquiti',
+            'model' => 'UXG-Pro',
+            'online' => true,
+            'cpu' => 42,
+            'ram' => 57,
+            'temp' => 53,
+            'latency' => 11,
+            'uptime' => 86400 * 34 + 3600 * 3
+        ],
+        [
+            'id' => 'demo-gw-branch-01',
+            'name' => 'Branch Gateway',
+            'role' => 'gateway',
+            'gateway' => true,
+            'ap' => false,
+            'router' => false,
+            'switch' => false,
+            'site_id' => 'branch-west',
+            'site' => 'Branch West',
+            'hostname' => 'branch-gw-01',
+            'mac' => '02:00:00:00:10:02',
+            'serial' => 'DEMOBRGW01',
+            'vendor' => 'Ubiquiti',
+            'model' => 'ER-4',
+            'online' => true,
+            'cpu' => 63,
+            'ram' => 71,
+            'temp' => 49,
+            'latency' => 28,
+            'uptime' => 86400 * 12 + 3600 * 9
+        ],
+        [
+            'id' => 'demo-ap-hq-01',
+            'name' => 'Lobby AP',
+            'role' => 'ap',
+            'gateway' => false,
+            'ap' => true,
+            'router' => false,
+            'switch' => false,
+            'site_id' => 'hq',
+            'site' => 'Headquarters',
+            'hostname' => 'hq-ap-lobby',
+            'mac' => '02:00:00:00:20:01',
+            'serial' => 'DEMOHQAP01',
+            'vendor' => 'Ubiquiti',
+            'model' => 'U6-Pro',
+            'online' => true,
+            'cpu' => 37,
+            'ram' => 45,
+            'temp' => 44,
+            'latency' => 8,
+            'uptime' => 86400 * 9 + 3600 * 2
+        ],
+        [
+            'id' => 'demo-ap-hq-02',
+            'name' => 'Warehouse AP',
+            'role' => 'ap',
+            'gateway' => false,
+            'ap' => true,
+            'router' => false,
+            'switch' => false,
+            'site_id' => 'hq',
+            'site' => 'Headquarters',
+            'hostname' => 'hq-ap-warehouse',
+            'mac' => '02:00:00:00:20:02',
+            'serial' => 'DEMOHQAP02',
+            'vendor' => 'Ubiquiti',
+            'model' => 'U6-LR',
+            'online' => false,
+            'offline_seed_sec' => 420,
+            'cpu' => 0,
+            'ram' => 0,
+            'temp' => null,
+            'latency' => null,
+            'uptime' => 86400 * 2 + 1800
+        ],
+        [
+            'id' => 'demo-ap-branch-01',
+            'name' => 'Branch AP',
+            'role' => 'ap',
+            'gateway' => false,
+            'ap' => true,
+            'router' => false,
+            'switch' => false,
+            'site_id' => 'branch-west',
+            'site' => 'Branch West',
+            'hostname' => 'branch-ap-01',
+            'mac' => '02:00:00:00:20:03',
+            'serial' => 'DEMOBRAP01',
+            'vendor' => 'Ubiquiti',
+            'model' => 'UAP-AC-M',
+            'online' => true,
+            'cpu' => 31,
+            'ram' => 39,
+            'temp' => 40,
+            'latency' => 16,
+            'uptime' => 86400 * 4 + 7200
+        ],
+        [
+            'id' => 'demo-router-core-01',
+            'name' => 'Core Router',
+            'role' => 'router',
+            'gateway' => false,
+            'ap' => false,
+            'router' => true,
+            'switch' => false,
+            'site_id' => 'hq',
+            'site' => 'Headquarters',
+            'hostname' => 'core-router-01',
+            'mac' => '02:00:00:00:30:01',
+            'serial' => 'DEMOCR01',
+            'vendor' => 'MikroTik',
+            'model' => 'CCR2004',
+            'online' => true,
+            'cpu' => 48,
+            'ram' => 52,
+            'temp' => 46,
+            'latency' => 5,
+            'uptime' => 86400 * 18 + 4000
+        ],
+        [
+            'id' => 'demo-router-branch-01',
+            'name' => 'Branch Router',
+            'role' => 'router',
+            'gateway' => false,
+            'ap' => false,
+            'router' => true,
+            'switch' => false,
+            'site_id' => 'branch-west',
+            'site' => 'Branch West',
+            'hostname' => 'branch-router-01',
+            'mac' => '02:00:00:00:30:02',
+            'serial' => 'DEMOBRRT01',
+            'vendor' => 'MikroTik',
+            'model' => 'RB5009',
+            'online' => !$branchPulseOffline,
+            'offline_seed_sec' => 180,
+            'cpu' => $branchPulseOffline ? 0 : 35,
+            'ram' => $branchPulseOffline ? 0 : 43,
+            'temp' => $branchPulseOffline ? null : 39,
+            'latency' => $branchPulseOffline ? null : 21,
+            'uptime' => 86400 * 6 + 5400
+        ],
+        [
+            'id' => 'demo-switch-hq-01',
+            'name' => 'Core Switch',
+            'role' => 'switch',
+            'gateway' => false,
+            'ap' => false,
+            'router' => false,
+            'switch' => true,
+            'site_id' => 'hq',
+            'site' => 'Headquarters',
+            'hostname' => 'core-switch-01',
+            'mac' => '02:00:00:00:40:01',
+            'serial' => 'DEMOCSW01',
+            'vendor' => 'Ubiquiti',
+            'model' => 'USW-Pro-24',
+            'online' => true,
+            'cpu' => 22,
+            'ram' => 30,
+            'temp' => 38,
+            'latency' => 3,
+            'uptime' => 86400 * 25 + 1200
+        ],
+        [
+            'id' => 'demo-switch-branch-01',
+            'name' => 'Branch Switch',
+            'role' => 'switch',
+            'gateway' => false,
+            'ap' => false,
+            'router' => false,
+            'switch' => true,
+            'site_id' => 'branch-west',
+            'site' => 'Branch West',
+            'hostname' => 'branch-switch-01',
+            'mac' => '02:00:00:00:40:02',
+            'serial' => 'DEMOBRSW01',
+            'vendor' => 'Ubiquiti',
+            'model' => 'USW-16',
+            'online' => true,
+            'cpu' => 19,
+            'ram' => 27,
+            'temp' => 35,
+            'latency' => 6,
+            'uptime' => 86400 * 14 + 3600
+        ]
+    ];
+
+    $out = [];
+    $cacheChanged = false;
+    foreach($templates as $tpl){
+        $id = (string)$tpl['id'];
+        if($id === '') continue;
+        if(!isset($cache[$id]) || !is_array($cache[$id])){
+            $cache[$id] = [];
+            $cacheChanged = true;
+        }
+
+        $on = !empty($tpl['online']);
+        $sim = !empty($cache[$id]['simulate']);
+        if($sim){
+            $on = false;
+        }
+
+        $offlineSince = null;
+        if(!$on){
+            if(empty($cache[$id]['offline_since'])){
+                $seedAge = isset($tpl['offline_seed_sec']) ? max(60, (int)$tpl['offline_seed_sec']) : 120;
+                $cache[$id]['offline_since'] = $now - $seedAge;
+                $cacheChanged = true;
+            }
+            $offlineSince = (int)$cache[$id]['offline_since'];
+        } else {
+            if(!empty($cache[$id]['offline_since'])){
+                unset($cache[$id]['offline_since']);
+                $cacheChanged = true;
+            }
+            if(($cache[$id]['last_seen'] ?? 0) !== $now){
+                $cache[$id]['last_seen'] = $now;
+                $cacheChanged = true;
+            }
+        }
+
+        $fallbackLastSeen = !$on ? max(0, $now - (int)($tpl['offline_seed_sec'] ?? 120)) : $now;
+        $lastSeen = (int)($cache[$id]['last_seen'] ?? $fallbackLastSeen);
+        if($on && $lastSeen <= 0){
+            $lastSeen = $now;
+            $cache[$id]['last_seen'] = $lastSeen;
+            $cacheChanged = true;
+        }
+
+        $ackUntil = isset($cache[$id]['ack_until']) ? (int)$cache[$id]['ack_until'] : null;
+        if($ackUntil !== null && $ackUntil <= 0){
+            $ackUntil = null;
+        }
+
+        $out[] = [
+            'id' => $id,
+            'name' => (string)($tpl['name'] ?? $id),
+            'gateway' => !empty($tpl['gateway']),
+            'ap' => !empty($tpl['ap']),
+            'station' => false,
+            'router' => !empty($tpl['router']),
+            'switch' => !empty($tpl['switch']),
+            'role' => (string)($tpl['role'] ?? 'unknown'),
+            'backbone' => true,
+            'source_id' => 'demo-source',
+            'source_name' => 'Demo Data Feed',
+            'site_id' => (string)($tpl['site_id'] ?? ''),
+            'site' => (string)($tpl['site'] ?? ''),
+            'hostname' => (string)($tpl['hostname'] ?? ''),
+            'mac' => (string)($tpl['mac'] ?? ''),
+            'serial' => (string)($tpl['serial'] ?? ''),
+            'vendor' => (string)($tpl['vendor'] ?? ''),
+            'model' => (string)($tpl['model'] ?? ''),
+            'online' => $on,
+            'cpu' => $tpl['cpu'] ?? null,
+            'ram' => $tpl['ram'] ?? null,
+            'temp' => $tpl['temp'] ?? null,
+            'latency' => $tpl['latency'] ?? null,
+            'cpe_latency' => null,
+            'uptime' => $tpl['uptime'] ?? null,
+            'last_seen' => $lastSeen,
+            'offline_since' => $offlineSince,
+            'flaps_recent' => 0,
+            'latency_alert' => false,
+            'flap_alert' => false,
+            'simulate' => $sim,
+            'ack_until' => $ackUntil
+        ];
+    }
+
+    return [
+        'devices' => $out,
+        'cache_changed' => $cacheChanged
+    ];
 }
 
 function normalize_uisp_url($value){
@@ -862,6 +1244,7 @@ function default_admin_user(){
         'username' => 'admin',
         'password_hash' => password_hash('admin', PASSWORD_DEFAULT),
         'uisp_token' => '',
+        'demo_data_enabled' => false,
         'sources' => [],
         'source_status' => [],
         'preferences' => default_user_preferences(),
@@ -878,6 +1261,11 @@ function bootstrap_users_store($usersFile, $legacyAuthFile, $envUrl, $envToken){
     if(is_array($store) && isset($store['users']) && is_array($store['users']) && count($store['users']) > 0){
         foreach($store['users'] as $uname => $user){
             if(!is_array($user)) continue;
+            $demoModeEnabled = user_demo_data_enabled($store['users'][$uname]);
+            if(!array_key_exists('demo_data_enabled', $store['users'][$uname]) || $store['users'][$uname]['demo_data_enabled'] !== $demoModeEnabled){
+                $store['users'][$uname]['demo_data_enabled'] = $demoModeEnabled;
+                $didMutate = true;
+            }
             if(!isset($store['users'][$uname]['sources']) || !is_array($store['users'][$uname]['sources'])){
                 $store['users'][$uname]['sources'] = [];
                 $didMutate = true;
@@ -950,6 +1338,7 @@ function bootstrap_users_store($usersFile, $legacyAuthFile, $envUrl, $envToken){
             'username' => $username,
             'password_hash' => (string)$legacy['password_hash'],
             'uisp_token' => '',
+            'demo_data_enabled' => false,
             'sources' => $migratedSources,
             'source_status' => [],
             'preferences' => default_user_preferences(),
@@ -1160,6 +1549,7 @@ if(isset($_GET['action']) && $_GET['action']==='register' && $_SERVER['REQUEST_M
         'username' => $u,
         'password_hash' => password_hash($p, PASSWORD_DEFAULT),
         'uisp_token' => '',
+        'demo_data_enabled' => false,
         'sources' => [],
         'source_status' => [],
         'preferences' => default_user_preferences(),
@@ -1413,6 +1803,41 @@ if(isset($_GET['ajax'])){
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
     header('Pragma: no-cache');
 
+    if($_GET['ajax']==='demo_mode_get'){
+        $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
+        $user = get_user_by_username($USERS_STORE, $sessionUser);
+        if(!$user){
+            echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
+        }
+        echo json_encode([
+            'ok' => 1,
+            'username' => $sessionUser,
+            'enabled' => user_demo_data_enabled($user)
+        ]);
+        exit;
+    }
+
+    if($_GET['ajax']==='demo_mode_set' && $_SERVER['REQUEST_METHOD']==='POST'){
+        $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
+        $user = get_user_by_username($USERS_STORE, $sessionUser);
+        if(!$user){
+            echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
+        }
+        if(!array_key_exists('enabled', $_POST)){
+            echo json_encode(['ok'=>0,'error'=>'enabled_required']); exit;
+        }
+        $enabled = normalize_toggle_bool($_POST['enabled']);
+        $USERS_STORE['users'][$sessionUser]['demo_data_enabled'] = $enabled;
+        $USERS_STORE['users'][$sessionUser]['updated_at'] = date('c');
+        save_users_store($USERS_FILE, $USERS_STORE);
+        echo json_encode([
+            'ok' => 1,
+            'username' => $sessionUser,
+            'enabled' => $enabled
+        ]);
+        exit;
+    }
+
     if($_GET['ajax']==='mobile_config'){
         require_pro_feature('mobile');
         if(count($effectiveSources) === 0){
@@ -1448,12 +1873,26 @@ if(isset($_GET['ajax'])){
     }
 
     if($_GET['ajax']==='devices'){
+        if(user_demo_data_enabled($currentUser)){
+            $demo = build_demo_wallboard_devices($cache);
+            if(!empty($demo['cache_changed'])){
+                file_put_contents($CACHE_FILE, json_encode($cache));
+            }
+            echo json_encode([
+                'devices' => $demo['devices'],
+                'http' => 200,
+                'api_latency' => 0,
+                'demo_mode' => true
+            ]);
+            exit;
+        }
         if(count($effectiveSources) === 0){
             http_response_code(503);
             echo json_encode([
                 'devices' => [],
                 'http' => 503,
                 'api_latency' => 0,
+                'demo_mode' => false,
                 'error' => 'uisp_sources_not_configured',
                 'message' => 'Add one or more UISP sources in Account Settings.'
             ]);
@@ -1715,7 +2154,7 @@ if(isset($_GET['ajax'])){
         }
 
         if($cache_changed){ file_put_contents($CACHE_FILE,json_encode($cache)); }
-        echo json_encode(['devices'=>$out,'http'=>$http_code,'api_latency'=>$api_latency]); exit;
+        echo json_encode(['devices'=>$out,'http'=>$http_code,'api_latency'=>$api_latency,'demo_mode'=>false]); exit;
     }
 
     if($_GET['ajax']==='inventory_overview'){
@@ -2256,8 +2695,59 @@ if(isset($_GET['ajax'])){
         echo json_encode([
             'ok' => 1,
             'username' => $sessionUser,
+            'demo_mode' => user_demo_data_enabled($user),
             'sources' => $rows,
             'summary' => $summary
+        ]);
+        exit;
+    }
+
+    if($_GET['ajax']==='sources_diagnostics'){
+        $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
+        $user = get_user_by_username($USERS_STORE, $sessionUser);
+        if(!$user){
+            echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
+        }
+        $effective = get_effective_uisp_sources($user, $UISP_URL, $UISP_TOKEN);
+        $rows = [];
+        $statusRows = normalize_user_source_status($user['source_status'] ?? null);
+        foreach($effective as $src){
+            $probe = probe_uisp_source($src);
+            $rows[] = [
+                'id' => (string)$probe['id'],
+                'name' => (string)$probe['name'],
+                'url' => (string)$probe['url'],
+                'ok' => !empty($probe['ok']),
+                'http' => (int)$probe['http'],
+                'latency_ms' => (int)$probe['latency_ms'],
+                'device_count' => (int)$probe['device_count'],
+                'error' => (string)$probe['error'],
+                'last_poll_at' => (string)$probe['last_poll_at'],
+                'diagnostics' => is_array($probe['diagnostics'] ?? null) ? $probe['diagnostics'] : null
+            ];
+
+            $saved = false;
+            for($i=0; $i<count($statusRows); $i++){
+                if((string)($statusRows[$i]['id'] ?? '') !== (string)$probe['id']) continue;
+                $statusRows[$i] = normalize_source_status_entry($probe);
+                $saved = true;
+                break;
+            }
+            if(!$saved){
+                $statusRows[] = normalize_source_status_entry($probe);
+            }
+        }
+        $USERS_STORE['users'][$sessionUser]['source_status'] = normalize_user_source_status($statusRows);
+        $USERS_STORE['users'][$sessionUser]['updated_at'] = date('c');
+        save_users_store($USERS_FILE, $USERS_STORE);
+
+        echo json_encode([
+            'ok' => 1,
+            'username' => $sessionUser,
+            'demo_mode' => user_demo_data_enabled($user),
+            'sources' => $rows,
+            'summary' => summarize_source_status_rows($rows),
+            'diagnosed_at' => date('c')
         ]);
         exit;
     }
@@ -2439,7 +2929,8 @@ if(isset($_GET['ajax'])){
             'latency_ms' => (int)$probe['latency_ms'],
             'device_count' => (int)$probe['device_count'],
             'error' => ($probe['error'] !== '' ? $probe['error'] : null),
-            'last_poll_at' => (string)$probe['last_poll_at']
+            'last_poll_at' => (string)$probe['last_poll_at'],
+            'diagnostics' => is_array($probe['diagnostics'] ?? null) ? $probe['diagnostics'] : null
         ]);
         exit;
     }
@@ -2773,7 +3264,6 @@ if(isset($_GET['ajax'])){
     }
 
     if($_GET['ajax']==='ack' && !empty($_GET['id']) && !empty($_GET['dur'])){
-        require_pro_feature('ack');
         $id=$_GET['id']; $dur=$_GET['dur'];
         $durmap=['30m'=>1800,'1h'=>3600,'6h'=>21600,'8h'=>28800,'12h'=>43200];
         $cache[$id]['ack_until']=time()+($durmap[$dur]??1800);
@@ -2781,7 +3271,6 @@ if(isset($_GET['ajax'])){
         echo json_encode(['ok'=>1]); exit;
     }
     if($_GET['ajax']==='clear' && !empty($_GET['id'])){
-        require_pro_feature('ack');
         unset($cache[$_GET['id']]['ack_until']);
         file_put_contents($CACHE_FILE,json_encode($cache));
         echo json_encode(['ok'=>1]); exit;
@@ -2803,7 +3292,6 @@ if(isset($_GET['ajax'])){
         echo json_encode(['ok'=>1]); exit;
     }
     if($_GET['ajax']==='clearall'){
-        require_pro_feature('ack');
         foreach($cache as $k=>&$c){
             if(is_array($c)){
                 if(array_key_exists('ack_until',$c)) unset($c['ack_until']);
@@ -2843,7 +3331,7 @@ if(isset($_GET['view']) && $_GET['view']==='device'){
 <head>
   <meta charset="utf-8">
   <title>Device Detail - <?=htmlspecialchars($pageTitle, ENT_QUOTES)?> | UISP NOC</title>
-  <link rel="stylesheet" href="assets/style.css?v=<?=$ASSET_VERSION?>">
+  <link rel="stylesheet" href="/assets/style.css?v=<?=$ASSET_VERSION?>">
 </head>
 <body class="detail-page">
   <header class="detail-header">
@@ -2905,7 +3393,7 @@ if(isset($_GET['view']) && $_GET['view']==='device'){
     };
   </script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="assets/device-detail.js?v=<?=$ASSET_VERSION?>"></script>
+  <script src="/assets/device-detail.js?v=<?=$ASSET_VERSION?>"></script>
 </body>
 </html>
 <?php
@@ -2979,6 +3467,19 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
     </section>
 
     <section class="card">
+      <h3 style="margin-top:0">Demo Wallboard Preview</h3>
+      <label style="display:flex;align-items:center;gap:8px;margin:0 0 10px 0">
+        <input id="demoModeEnabled" type="checkbox">
+        Enable demo data feed for instant dashboard preview (no UISP source required).
+      </label>
+      <div class="row-actions">
+        <button onclick="saveDemoMode()">Save Demo Mode</button>
+      </div>
+      <div class="small" style="margin-top:10px">When enabled, dashboard polling uses simulated devices instead of live UISP APIs.</div>
+      <div id="demoModeStatus" class="status"></div>
+    </section>
+
+    <section class="card">
       <h3 style="margin-top:0">Add UISP Source</h3>
       <div class="grid">
         <div>
@@ -3020,6 +3521,28 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
         </tbody>
       </table>
     </section>
+
+    <section class="card">
+      <h3 style="margin-top:0">Source Connectivity Diagnostics</h3>
+      <div class="row-actions" style="margin-bottom:10px">
+        <button id="runDiagnosticsBtn" class="secondary" onclick="runSourceDiagnostics()">Run Diagnostics</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Source</th>
+            <th>DNS</th>
+            <th>TLS</th>
+            <th>API</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+        <tbody id="diagnosticsBody">
+          <tr><td colspan="5" class="small">Diagnostics not run yet.</td></tr>
+        </tbody>
+      </table>
+      <div id="diagnosticsStatus" class="status"></div>
+    </section>
   </main>
 
   <script>
@@ -3038,8 +3561,31 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
       el.textContent = msg || '';
       el.className = 'status ' + (kind || '');
     }
+    function setDemoModeStatus(msg, kind){
+      const el = document.getElementById('demoModeStatus');
+      if(!el) return;
+      el.textContent = msg || '';
+      el.className = 'status ' + (kind || '');
+    }
+    function setDiagnosticsStatus(msg, kind){
+      const el = document.getElementById('diagnosticsStatus');
+      if(!el) return;
+      el.textContent = msg || '';
+      el.className = 'status ' + (kind || '');
+    }
     function esc(v){
       return String(v ?? '').replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
+    }
+    function boolPill(ok, goodLabel, badLabel){
+      const isOk = !!ok;
+      const cls = isOk ? 'pill good' : 'pill bad';
+      return `<span class="${cls}">${isOk ? goodLabel : badLabel}</span>`;
+    }
+    function maybePill(value, goodLabel, badLabel, naLabel){
+      if(value === null || typeof value === 'undefined'){
+        return `<span class="pill warn">${naLabel}</span>`;
+      }
+      return boolPill(!!value, goodLabel, badLabel);
     }
     function billingPillClass(ok){
       return ok ? 'pill good' : 'pill bad';
@@ -3264,6 +3810,99 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
         setBillingStatus('Mobile config request failed.', 'error');
       }
     }
+    async function loadDemoMode(){
+      const el = document.getElementById('demoModeEnabled');
+      if(!el) return;
+      try{
+        const r = await fetch('?ajax=demo_mode_get&t='+Date.now(), { cache:'no-store' });
+        if(r.status === 401){ location.href='./?login=1'; return; }
+        const j = await r.json().catch(()=>null);
+        if(!j || !j.ok){
+          setDemoModeStatus('Unable to load demo mode state.', 'error');
+          return;
+        }
+        el.checked = !!j.enabled;
+        setDemoModeStatus(j.enabled ? 'Demo mode is enabled for this account.' : 'Demo mode is disabled.');
+      }catch(_){
+        setDemoModeStatus('Demo mode status request failed.', 'error');
+      }
+    }
+    async function saveDemoMode(){
+      const el = document.getElementById('demoModeEnabled');
+      if(!el) return;
+      setDemoModeStatus('Saving demo mode...');
+      try{
+        const fd = new FormData();
+        fd.append('enabled', el.checked ? '1' : '0');
+        const r = await fetch('?ajax=demo_mode_set', { method:'POST', body:fd });
+        if(r.status === 401){ location.href='./?login=1'; return; }
+        const j = await r.json().catch(()=>null);
+        if(!j || !j.ok){
+          setDemoModeStatus('Failed to save demo mode: ' + ((j && (j.message || j.error)) || 'unknown'), 'error');
+          return;
+        }
+        el.checked = !!j.enabled;
+        setDemoModeStatus(j.enabled ? 'Demo mode enabled. Dashboard now uses simulated data.' : 'Demo mode disabled. Dashboard will use live UISP sources.');
+      }catch(_){
+        setDemoModeStatus('Demo mode save request failed.', 'error');
+      }
+    }
+    function renderDiagnosticsRows(rows){
+      const body = document.getElementById('diagnosticsBody');
+      if(!body) return;
+      if(!Array.isArray(rows) || rows.length === 0){
+        body.innerHTML = '<tr><td colspan="5" class="small">No active sources available for diagnostics.</td></tr>';
+        return;
+      }
+      body.innerHTML = rows.map((row)=>{
+        const d = (row && row.diagnostics && typeof row.diagnostics === 'object') ? row.diagnostics : {};
+        const dnsPill = maybePill(d.dns_ok, 'Resolved', 'Failed', 'N/A');
+        const tlsPill = maybePill(d.tls_ok, 'Handshake OK', 'Handshake Failed', 'N/A');
+        const apiPill = boolPill(!!d.api_ok, 'Reachable', 'Unreachable');
+        const details = [];
+        if(d.dns_ip) details.push('DNS: ' + d.dns_ip);
+        if(typeof d.api_http === 'number' && d.api_http > 0) details.push('HTTP ' + d.api_http);
+        if(typeof d.api_latency_ms === 'number' && d.api_latency_ms > 0) details.push('API ' + d.api_latency_ms + 'ms');
+        if(typeof d.tls_latency_ms === 'number' && d.tls_latency_ms > 0) details.push('TLS ' + d.tls_latency_ms + 'ms');
+        if(d.api_error) details.push('Err: ' + d.api_error);
+        if(d.dns_error) details.push('DNS err: ' + d.dns_error);
+        if(d.tls_error && d.tls_error !== 'not_applicable_http') details.push('TLS err: ' + d.tls_error);
+        const detailTxt = details.length ? details.join(' | ') : 'No additional details';
+        return `<tr>
+          <td>${esc(row.name || row.id || '(unknown)')}</td>
+          <td>${dnsPill}</td>
+          <td>${tlsPill}</td>
+          <td>${apiPill}</td>
+          <td class="small">${esc(detailTxt)}</td>
+        </tr>`;
+      }).join('');
+    }
+    async function runSourceDiagnostics(){
+      const btn = document.getElementById('runDiagnosticsBtn');
+      if(btn) btn.disabled = true;
+      setDiagnosticsStatus('Running source diagnostics...');
+      try{
+        const r = await fetch('?ajax=sources_diagnostics&t='+Date.now(), { cache:'no-store' });
+        if(r.status === 401){ location.href='./?login=1'; return; }
+        const j = await r.json().catch(()=>null);
+        if(!j || !j.ok){
+          renderDiagnosticsRows([]);
+          setDiagnosticsStatus('Diagnostics failed: ' + ((j && (j.message || j.error)) || 'unknown'), 'error');
+          return;
+        }
+        renderDiagnosticsRows(Array.isArray(j.sources) ? j.sources : []);
+        const summary = j.summary || {};
+        const total = Number(summary.total || 0);
+        const healthy = Number(summary.healthy || 0);
+        const failed = Number(summary.failed || 0);
+        setDiagnosticsStatus(`Diagnostics complete. Healthy: ${healthy}/${total}. Failed: ${failed}.`);
+      }catch(_){
+        renderDiagnosticsRows([]);
+        setDiagnosticsStatus('Diagnostics request failed.', 'error');
+      }finally{
+        if(btn) btn.disabled = false;
+      }
+    }
     function cancelEdit(){
       editSourceId = '';
       document.getElementById('srcName').value = '';
@@ -3334,7 +3973,8 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
       }
       cancelEdit();
       setStatus('Source saved.');
-      loadSources();
+      await loadSources();
+      await runSourceDiagnostics();
     }
     async function deleteSource(id){
       if(!confirm('Delete this UISP source?')) return;
@@ -3348,7 +3988,8 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
         return;
       }
       setStatus('Source deleted.');
-      loadSources();
+      await loadSources();
+      await runSourceDiagnostics();
     }
     async function testSource(id){
       setStatus('Testing source...');
@@ -3366,9 +4007,12 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
       } else {
         setStatus('Test failed. HTTP ' + j.http + (j.error ? (', err: ' + j.error) : ''), 'error');
       }
+      runSourceDiagnostics();
     }
     loadSources();
     loadBillingStatus();
+    loadDemoMode();
+    runSourceDiagnostics();
   </script>
 </body>
 </html>
@@ -3438,7 +4082,7 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
 <head>
 <meta charset="utf-8">
 <title>NOCWALL-CE</title>
-<link rel="stylesheet" href="assets/style.css?v=<?=$ASSET_VERSION?>">
+<link rel="stylesheet" href="/assets/style.css?v=<?=$ASSET_VERSION?>">
 </head>
 <body>
 <header>
@@ -3460,6 +4104,7 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
       <button onclick="manageUispSources()">Upgrade</button>
     <?php endif; ?>
     <button onclick="manageUispSources()">Account Settings</button>
+    <button id="demoModeToggleBtn" type="button" class="btn-outline" onclick="toggleDemoMode()">Demo Preview: Off</button>
     <button id="enableSoundBtn" class="btn-accent" onclick="enableSound()">Enable Sound</button>
     <button type="button" onclick="openShortcuts()">Shortcuts</button>
     <button type="button" onclick="toggleKioskMode()">Kiosk</button>
@@ -3710,12 +4355,12 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
   </div>
 </div>
 
-<audio id="siren" src="buz.mp3?v=<?=$ASSET_VERSION?>" preload="auto"></audio>
+<audio id="siren" src="/buz.mp3?v=<?=$ASSET_VERSION?>" preload="auto"></audio>
 
 <script>
   window.NOCWALL_FEATURES = <?=json_encode($NOCWALL_FEATURE_FLAGS, JSON_UNESCAPED_SLASHES)?>;
 </script>
-<script src="assets/app.js?v=<?=$ASSET_VERSION?>"></script>
+<script src="/assets/app.js?v=<?=$ASSET_VERSION?>"></script>
 </body>
 </html>
 
