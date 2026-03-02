@@ -2510,6 +2510,73 @@ if(isset($_GET['ajax'])){
         exit;
     }
 
+    if($_GET['ajax']==='topology_ha'){
+        require_pro_feature('topology');
+        $pairsLimit = (int)($_GET['pairs_limit'] ?? 120);
+        $eventsLimit = (int)($_GET['events_limit'] ?? 120);
+        if($pairsLimit <= 0 || $pairsLimit > 1000) $pairsLimit = 120;
+        if($eventsLimit <= 0 || $eventsLimit > 1000) $eventsLimit = 120;
+
+        $state = strtolower(trim((string)($_GET['state'] ?? '')));
+        if(!in_array($state, ['redundant', 'failover', 'down', 'unknown'], true)){
+            $state = '';
+        }
+        $eventType = strtolower(trim((string)($_GET['event_type'] ?? '')));
+        if(!in_array($eventType, ['pair_discovered', 'failover', 'recovered', 'state_change'], true)){
+            $eventType = '';
+        }
+        $pairId = trim((string)($_GET['pair_id'] ?? ''));
+
+        $pairsPath = '/topology/ha/pairs?limit=' . $pairsLimit;
+        if($state !== ''){
+            $pairsPath .= '&state=' . rawurlencode($state);
+        }
+        $eventsPath = '/topology/ha/events?limit=' . $eventsLimit;
+        if($pairId !== ''){
+            $eventsPath .= '&pair_id=' . rawurlencode($pairId);
+        }
+        if($eventType !== ''){
+            $eventsPath .= '&event_type=' . rawurlencode($eventType);
+        }
+
+        $pairsReq = api_get_json($NOCWALL_API_URL, $pairsPath, $NOCWALL_API_TOKEN, 7);
+        $eventsReq = api_get_json($NOCWALL_API_URL, $eventsPath, $NOCWALL_API_TOKEN, 7);
+        if(!$pairsReq['ok'] || !$eventsReq['ok']){
+            http_response_code(502);
+            echo json_encode([
+                'ok' => 0,
+                'error' => 'topology_ha_unreachable',
+                'message' => 'Topology HA watcher API is unavailable.',
+                'details' => [
+                    'pairs' => ['ok'=>$pairsReq['ok'],'http'=>$pairsReq['code'],'error'=>$pairsReq['error']],
+                    'events' => ['ok'=>$eventsReq['ok'],'http'=>$eventsReq['code'],'error'=>$eventsReq['error']]
+                ]
+            ]);
+            exit;
+        }
+
+        $pairs = $pairsReq['json']['pairs'] ?? [];
+        $events = $eventsReq['json']['events'] ?? [];
+        if(!is_array($pairs)) $pairs = [];
+        if(!is_array($events)) $events = [];
+
+        echo json_encode([
+            'ok' => 1,
+            'pairs' => $pairs,
+            'events' => $events,
+            'counts' => [
+                'pairs' => count($pairs),
+                'events' => count($events),
+            ],
+            'api_latency' => [
+                'pairs' => $pairsReq['latency_ms'],
+                'events' => $eventsReq['latency_ms'],
+            ],
+            'fetched_at' => date('c')
+        ]);
+        exit;
+    }
+
     if($_GET['ajax']==='topology_trace'){
         require_pro_feature('topology');
         $sourceNodeID = trim((string)($_GET['source_node_id'] ?? ''));
@@ -4506,6 +4573,18 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
     </div>
     <div id="topologyHealthSummary" class="topology-health"></div>
     <div id="topologyStatus" class="topology-status">Loading topology...</div>
+    <div id="topologyHaSummary" class="topology-health topology-ha-summary"></div>
+    <div id="topologyHaStatus" class="topology-status">Loading HA watcher...</div>
+    <div class="topology-ha-grid">
+      <section class="topology-ha-panel">
+        <h4>HA Pairs</h4>
+        <div id="topologyHaPairs" class="topology-ha-list"></div>
+      </section>
+      <section class="topology-ha-panel">
+        <h4>Failover Events</h4>
+        <div id="topologyHaEvents" class="topology-ha-list"></div>
+      </section>
+    </div>
     <div id="topologyCanvasWrap" class="topology-canvas-wrap">
       <svg id="topologySvg" viewBox="0 0 1200 680" preserveAspectRatio="xMidYMid meet"></svg>
     </div>

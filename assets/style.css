@@ -622,6 +622,60 @@ footer {
 .topology-status.error {
   color: #ff9696;
 }
+.topology-ha-summary {
+  margin-bottom: 8px;
+}
+.topology-ha-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.topology-ha-panel {
+  background: #171717;
+  border: 1px solid #2d2d2d;
+  border-radius: 8px;
+  padding: 10px;
+}
+.topology-ha-panel h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: #d7d7d7;
+}
+.topology-ha-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 230px;
+  overflow-y: auto;
+}
+.topology-ha-item {
+  border: 1px solid #2b2b2b;
+  background: #121212;
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 12px;
+  color: #d4d4d4;
+}
+.topology-ha-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 4px;
+}
+.topology-ha-sep {
+  color: #848484;
+}
+.topology-ha-note {
+  margin-top: 4px;
+  color: #adadad;
+}
+.topology-ha-empty {
+  font-size: 12px;
+  color: #9a9a9a;
+  font-style: italic;
+}
 .topology-canvas-wrap {
   background: radial-gradient(circle at 20% 10%, rgba(176,108,255,0.08), rgba(0,0,0,0.15) 35%), #121212;
   border: 1px solid #2a2a2a;
@@ -1039,6 +1093,8 @@ body.theme-high-contrast .display-controls,
 body.theme-high-contrast footer,
 body.theme-high-contrast .modal-content,
 body.theme-high-contrast .inventory-section,
+body.theme-high-contrast .topology-ha-panel,
+body.theme-high-contrast .topology-ha-item,
 body.theme-high-contrast .device-group,
 body.theme-high-contrast .card {
   background: #000 !important;
@@ -1100,6 +1156,8 @@ body.theme-light .display-controls,
 body.theme-light footer,
 body.theme-light .modal-content,
 body.theme-light .inventory-section,
+body.theme-light .topology-ha-panel,
+body.theme-light .topology-ha-item,
 body.theme-light .device-group {
   background: #f7faff;
   color: #1a2436;
@@ -1137,7 +1195,9 @@ body.theme-light .source-status-meta,
 body.theme-light .card-meta,
 body.theme-light .small,
 body.theme-light .wizard-subtitle,
-body.theme-light .modal-subtitle {
+body.theme-light .modal-subtitle,
+body.theme-light .topology-ha-note,
+body.theme-light .topology-ha-empty {
   color: #43546f;
 }
 body.theme-light .badge.good {

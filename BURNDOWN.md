@@ -320,7 +320,8 @@ They avoid PRO-only domains (team workflows, correlation, automation, enterprise
 - [x] [STUB] R12 Add path trace engine and endpoint for selected source/target devices.
 - [x] R13 Add WAN SLA computation jobs (latency/loss/availability windows).
   - Notes: Added PRO `?ajax=wan_sla` endpoint that computes 1h/24h/7d SLA windows from poll metrics, including availability, loss approximation, and latency p95.
-- [ ] R14 Add HA pair watcher and failover-state eventing.
+- [x] R14 Add HA pair watcher and failover-state eventing.
+  - Notes: Added HA pair inference + state watcher in the API store, emitted failover/recovery transition events, exposed `/topology/ha/pairs` + `/topology/ha/events`, wired PRO `?ajax=topology_ha`, and rendered HA pair/event panels in the topology tab.
 - [ ] R15 Add topology QA fixtures and synthetic network datasets.
 - [ ] R16 Add operational docs for graph rebuild, compaction, and troubleshooting.
 

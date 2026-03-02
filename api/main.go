@@ -78,6 +78,7 @@ func main() {
 				"source_uisp_poll":           true,
 				"topology_api":               true,
 				"topology_path_trace":        true,
+				"topology_ha_watcher":        true,
 				"source_poll_background":     pollSec > 0,
 				"cloud_multi_tenant_stub":    true,
 				"connector_multivendor_stub": true,
@@ -246,6 +247,35 @@ func main() {
 		return c.JSON(TopologyHealthResponse{
 			LastUpdated: time.Now().UnixMilli(),
 			Health:      health,
+			Stub:        true,
+		})
+	})
+
+	app.Get("/topology/ha/pairs", authMiddleware, func(c *fiber.Ctx) error {
+		limit := c.QueryInt("limit", 200)
+		state := strings.TrimSpace(c.Query("state", ""))
+		pairs, truncated, normalizedLimit := store.ListHAPairs(limit, state)
+		return c.JSON(TopologyHAPairsResponse{
+			LastUpdated: time.Now().UnixMilli(),
+			Count:       len(pairs),
+			Pairs:       pairs,
+			Truncated:   truncated,
+			Limit:       normalizedLimit,
+			Stub:        true,
+		})
+	})
+
+	app.Get("/topology/ha/events", authMiddleware, func(c *fiber.Ctx) error {
+		limit := c.QueryInt("limit", 200)
+		pairID := strings.TrimSpace(c.Query("pair_id", ""))
+		eventType := strings.TrimSpace(c.Query("event_type", ""))
+		events, truncated, normalizedLimit := store.ListHAFailoverEvents(limit, pairID, eventType)
+		return c.JSON(TopologyHAEventsResponse{
+			LastUpdated: time.Now().UnixMilli(),
+			Count:       len(events),
+			Events:      events,
+			Truncated:   truncated,
+			Limit:       normalizedLimit,
 			Stub:        true,
 		})
 	})

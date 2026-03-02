@@ -142,12 +142,15 @@ PRO target:
   - `GET /topology/nodes` (stub)
   - `GET /topology/edges` (stub)
   - `GET /topology/health` (stub)
+  - `GET /topology/ha/pairs` (stub)
+  - `GET /topology/ha/events` (stub)
   - `GET /topology/path` (stub)
   - identity stitching from telemetry fields (`mac`, `serial`, `hostname`, source/device hints)
   - drift fingerprint snapshots per identity
   - interface/neighbor ingestion mappers from telemetry payloads (`interfaces`, `neighbors`)
   - topology graph synthesis from identity + neighbor link inventory
   - topology tab renderer (SVG map) with resolved/unresolved/stale link coloring and path trace controls
+  - HA pair watcher with failover-state transitions and recent event history
 - Docker Compose builds API and web locally from source by default (no private image dependency).
 - Docker Compose wiring uses safe env placeholders (no hardcoded real keys).
 
@@ -173,6 +176,7 @@ PRO target:
 - R08: merge-safety and migration rollback tests. (implemented as store tests, including migration replay/duplicate-id repair coverage)
 - R09/R10: topology graph service + topology API endpoints (`/topology/nodes`, `/topology/edges`, `/topology/health`) now available as stubs.
 - R11/R12: topology map tab + path trace endpoint (`/topology/path`) implemented as stubs.
+- R13/R14: WAN SLA window summaries and HA watcher eventing (`/topology/ha/pairs`, `/topology/ha/events`, `?ajax=topology_ha`) are now wired.
 - Add connector adapters beyond UISP (progressive rollout by NMS family).
 
 ## Quick Start (Local Dev)
@@ -422,6 +426,8 @@ Topology API quick checks:
 curl "http://localhost:8080/topology/nodes?limit=25"
 curl "http://localhost:8080/topology/edges?limit=25"
 curl "http://localhost:8080/topology/health"
+curl "http://localhost:8080/topology/ha/pairs?limit=25"
+curl "http://localhost:8080/topology/ha/events?limit=25"
 curl "http://localhost:8080/topology/path?source_node_id=ident:IDENT_A&target_node_id=ident:IDENT_B"
 ```
 
