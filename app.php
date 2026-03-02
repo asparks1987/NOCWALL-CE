@@ -1797,6 +1797,66 @@ function send_gotify($title,$message,$priority=5){
     return $code>=200 && $code<300;
 }
 
+
+function compute_wan_sla_window(SQLite3 $db, string $deviceId, int $hours): array {
+    $hours = max(1, $hours);
+    $stmt = $db->prepare("SELECT online, latency FROM metrics WHERE device_id=? AND timestamp >= datetime('now', ?) ORDER BY timestamp DESC");
+    $stmt->bindValue(1, $deviceId, SQLITE3_TEXT);
+    $stmt->bindValue(2, '-' . $hours . ' hours', SQLITE3_TEXT);
+    $res = $stmt->execute();
+
+    $total = 0;
+    $online = 0;
+    $latencies = [];
+    if($res){
+        while($row = $res->fetchArray(SQLITE3_ASSOC)){
+            $total++;
+            $isOnline = (int)($row['online'] ?? 0) === 1;
+            if($isOnline){
+                $online++;
+            }
+            if($isOnline && array_key_exists('latency', $row) && $row['latency'] !== null){
+                $lat = (float)$row['latency'];
+                if($lat >= 0){
+                    $latencies[] = $lat;
+                }
+            }
+        }
+    }
+
+    sort($latencies);
+    $p95 = null;
+    if(count($latencies) > 0){
+        $idx = (int)floor((count($latencies) - 1) * 0.95);
+        if($idx < 0) $idx = 0;
+        $p95 = round($latencies[$idx], 2);
+    }
+
+    $availability = $total > 0 ? round(($online / $total) * 100, 3) : null;
+    $loss = $total > 0 ? round((($total - $online) / $total) * 100, 3) : null;
+
+    return [
+        'window_hours' => $hours,
+        'samples' => $total,
+        'online_samples' => $online,
+        'offline_samples' => max(0, $total - $online),
+        'availability_pct' => $availability,
+        // In the current local poller, packet loss is approximated from offline sample ratio.
+        'loss_pct' => $loss,
+        'latency_p95_ms' => $p95,
+    ];
+}
+
+function build_wan_sla_summary(SQLite3 $db, string $deviceId, array $windows = [1, 24, 168]): array {
+    $out = [];
+    foreach($windows as $hours){
+        $h = (int)$hours;
+        if($h <= 0) continue;
+        $out[] = compute_wan_sla_window($db, $deviceId, $h);
+    }
+    return $out;
+}
+
 function api_get_json($baseUrl, $path, $token = '', $timeoutSec = 6){
     $base = rtrim((string)$baseUrl, '/');
     $uri = '/' . ltrim((string)$path, '/');
@@ -2484,6 +2544,37 @@ if(isset($_GET['ajax'])){
         $payload['ok'] = 1;
         $payload['api_latency'] = $traceReq['latency_ms'];
         echo json_encode($payload);
+        exit;
+    }
+
+
+    if($_GET['ajax']==='wan_sla'){
+        require_pro_feature('topology');
+        $deviceId = trim((string)($_GET['id'] ?? ''));
+        if($deviceId === ''){
+            http_response_code(400);
+            echo json_encode(['ok'=>0,'error'=>'id_required','message'=>'Provide a device id via ?id=.']);
+            exit;
+        }
+
+        $windowsRaw = trim((string)($_GET['windows'] ?? '1,24,168'));
+        $windows = [];
+        foreach(explode(',', $windowsRaw) as $part){
+            $h = (int)trim($part);
+            if($h > 0 && $h <= 24 * 60){
+                $windows[] = $h;
+            }
+        }
+        if(count($windows) === 0) $windows = [1, 24, 168];
+        $windows = array_values(array_unique($windows));
+
+        $summary = build_wan_sla_summary($db, $deviceId, $windows);
+        echo json_encode([
+            'ok' => 1,
+            'device_id' => $deviceId,
+            'computed_at' => date('c'),
+            'windows' => $summary
+        ]);
         exit;
     }
 
