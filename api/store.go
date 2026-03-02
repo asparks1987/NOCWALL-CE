@@ -19,6 +19,7 @@ const (
 	maxDriftSnapshots       = 4000
 	maxDeviceInterfaces     = 20000
 	maxNeighborLinks        = 20000
+	maxHAFailoverEvents     = 4000
 	identityBackfillSource  = "store_migration"
 	defaultDeviceSourceName = "ingest"
 )
@@ -44,6 +45,8 @@ type Store struct {
 	HardwareProfiles   []HardwareProfile     `json:"hardware_profiles"`
 	SourceObservations []SourceObservation   `json:"source_observations"`
 	DriftSnapshots     []DriftSnapshot       `json:"drift_snapshots"`
+	HAPairs            []HAPairStatus        `json:"ha_pairs"`
+	HAFailoverEvents   []HAFailoverEvent     `json:"ha_failover_events"`
 
 	filePath      string
 	identityIndex map[string]string
@@ -62,6 +65,8 @@ type storePersist struct {
 	HardwareProfiles   []HardwareProfile     `json:"hardware_profiles"`
 	SourceObservations []SourceObservation   `json:"source_observations"`
 	DriftSnapshots     []DriftSnapshot       `json:"drift_snapshots"`
+	HAPairs            []HAPairStatus        `json:"ha_pairs"`
+	HAFailoverEvents   []HAFailoverEvent     `json:"ha_failover_events"`
 }
 
 func LoadStore(path string) *Store {
@@ -108,6 +113,8 @@ func (s *Store) save() {
 		HardwareProfiles:   append([]HardwareProfile(nil), s.HardwareProfiles...),
 		SourceObservations: append([]SourceObservation(nil), s.SourceObservations...),
 		DriftSnapshots:     append([]DriftSnapshot(nil), s.DriftSnapshots...),
+		HAPairs:            append([]HAPairStatus(nil), s.HAPairs...),
+		HAFailoverEvents:   append([]HAFailoverEvent(nil), s.HAFailoverEvents...),
 	}
 	s.mu.RUnlock()
 
@@ -158,6 +165,10 @@ func (s *Store) ensureDefaultsAndMigrateLocked() {
 	if len(s.DriftSnapshots) > maxDriftSnapshots {
 		s.DriftSnapshots = append([]DriftSnapshot(nil), s.DriftSnapshots[len(s.DriftSnapshots)-maxDriftSnapshots:]...)
 	}
+	if len(s.HAFailoverEvents) > maxHAFailoverEvents {
+		s.HAFailoverEvents = append([]HAFailoverEvent(nil), s.HAFailoverEvents[len(s.HAFailoverEvents)-maxHAFailoverEvents:]...)
+	}
+	s.updateHAPairWatcherLocked(time.Now().UnixMilli())
 	if s.Version < storeSchemaVersion {
 		s.Version = storeSchemaVersion
 	}
@@ -476,6 +487,59 @@ func (s *Store) TopologyHealth() TopologyHealth {
 	return health
 }
 
+func (s *Store) ListHAPairs(limit int, state string) ([]HAPairStatus, bool, int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	stateFilter := strings.ToLower(strings.TrimSpace(state))
+	filtered := make([]HAPairStatus, 0, min(limit, len(s.HAPairs)))
+	total := 0
+	for _, pair := range s.HAPairs {
+		if stateFilter != "" && strings.ToLower(strings.TrimSpace(pair.State)) != stateFilter {
+			continue
+		}
+		total++
+		if len(filtered) >= limit {
+			continue
+		}
+		filtered = append(filtered, pair)
+	}
+	truncated := total > len(filtered)
+	return filtered, truncated, limit
+}
+
+func (s *Store) ListHAFailoverEvents(limit int, pairID, eventType string) ([]HAFailoverEvent, bool, int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	pairFilter := strings.TrimSpace(pairID)
+	typeFilter := strings.ToLower(strings.TrimSpace(eventType))
+	filtered := make([]HAFailoverEvent, 0, min(limit, len(s.HAFailoverEvents)))
+	total := 0
+	for i := len(s.HAFailoverEvents) - 1; i >= 0; i-- {
+		event := s.HAFailoverEvents[i]
+		if pairFilter != "" && event.PairID != pairFilter {
+			continue
+		}
+		if typeFilter != "" && strings.ToLower(strings.TrimSpace(event.EventType)) != typeFilter {
+			continue
+		}
+		total++
+		if len(filtered) >= limit {
+			continue
+		}
+		filtered = append(filtered, event)
+	}
+	truncated := total > len(filtered)
+	return filtered, truncated, limit
+}
+
 func (s *Store) TraceTopologyPath(sourceIdentityID, targetIdentityID, sourceNodeID, targetNodeID string) ([]TopologyNode, []TopologyEdge, bool, string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -757,6 +821,290 @@ func (s *Store) buildTopologyGraphLocked() ([]TopologyNode, []TopologyEdge, Topo
 	return nodes, edges, health
 }
 
+type haPairCandidate struct {
+	pairID     string
+	identityA  string
+	identityB  string
+	siteID     string
+	role       string
+	score      int
+}
+
+func (s *Store) updateHAPairWatcherLocked(nowMs int64) {
+	nextPairs := s.computeHAPairsLocked(nowMs)
+	prevByPairID := make(map[string]HAPairStatus, len(s.HAPairs))
+	for _, pair := range s.HAPairs {
+		prevByPairID[pair.PairID] = pair
+	}
+
+	nowISO := time.UnixMilli(nowMs).UTC().Format(time.RFC3339)
+	for i := range nextPairs {
+		next := &nextPairs[i]
+		prev, hadPrev := prevByPairID[next.PairID]
+		if hadPrev {
+			next.LastTransitionAt = prev.LastTransitionAt
+			next.LastTransitionAtISO = prev.LastTransitionAtISO
+		}
+
+		stateChanged := !hadPrev || prev.State != next.State || prev.ActiveIdentityID != next.ActiveIdentityID
+		if !stateChanged {
+			continue
+		}
+		next.LastTransitionAt = nowMs
+		next.LastTransitionAtISO = nowISO
+		if !hadPrev {
+			continue
+		}
+
+		eventType := "state_change"
+		if next.State == "failover" && prev.State != "failover" {
+			eventType = "failover"
+		} else if prev.State == "failover" && next.State == "redundant" {
+			eventType = "recovered"
+		} else if prev.ActiveIdentityID != "" && next.ActiveIdentityID != "" && prev.ActiveIdentityID != next.ActiveIdentityID {
+			eventType = "failover"
+		}
+
+		s.HAFailoverEvents = append(s.HAFailoverEvents, HAFailoverEvent{
+			EventID:              "haevt-" + randomID(),
+			PairID:               next.PairID,
+			EventType:            eventType,
+			FromState:            prev.State,
+			ToState:              next.State,
+			FromActiveIdentityID: prev.ActiveIdentityID,
+			ToActiveIdentityID:   next.ActiveIdentityID,
+			NodeAIdentityID:      next.NodeAIdentityID,
+			NodeBIdentityID:      next.NodeBIdentityID,
+			ObservedAt:           nowMs,
+			ObservedAtISO:        nowISO,
+			Message:              buildHAFailoverEventMessage(prev, *next, eventType),
+		})
+	}
+
+	s.HAPairs = nextPairs
+	if len(s.HAFailoverEvents) > maxHAFailoverEvents {
+		s.HAFailoverEvents = append([]HAFailoverEvent(nil), s.HAFailoverEvents[len(s.HAFailoverEvents)-maxHAFailoverEvents:]...)
+	}
+}
+
+func (s *Store) computeHAPairsLocked(nowMs int64) []HAPairStatus {
+	identByID := make(map[string]DeviceIdentity, len(s.DeviceIdentities))
+	groups := map[string][]string{}
+	for _, ident := range s.DeviceIdentities {
+		identityID := strings.TrimSpace(ident.IdentityID)
+		site := strings.TrimSpace(ident.SiteID)
+		role := strings.TrimSpace(ident.Role)
+		if identityID == "" || site == "" || role == "" {
+			continue
+		}
+		identByID[identityID] = ident
+		groupKey := normalizeKeyToken(site) + "|" + normalizeKeyToken(role)
+		groups[groupKey] = append(groups[groupKey], identityID)
+	}
+
+	candidates := map[string]haPairCandidate{}
+	addCandidate := func(identityA, identityB, siteID, role string, score int) {
+		a, b := haPairIdentityOrder(identityA, identityB)
+		if a == "" || b == "" || a == b {
+			return
+		}
+		pairID := topologyHAPairID(a, b)
+		existing, ok := candidates[pairID]
+		if !ok {
+			candidates[pairID] = haPairCandidate{
+				pairID:    pairID,
+				identityA: a,
+				identityB: b,
+				siteID:    siteID,
+				role:      role,
+				score:     score,
+			}
+			return
+		}
+		existing.score += score
+		if existing.siteID == "" {
+			existing.siteID = siteID
+		}
+		if existing.role == "" {
+			existing.role = role
+		}
+		candidates[pairID] = existing
+	}
+
+	for _, identityIDs := range groups {
+		if len(identityIDs) != 2 {
+			continue
+		}
+		identA := identByID[identityIDs[0]]
+		identB := identByID[identityIDs[1]]
+		addCandidate(identA.IdentityID, identB.IdentityID, identA.SiteID, identA.Role, 1)
+	}
+
+	nodes, edges, _ := s.buildTopologyGraphLocked()
+	nodeIdentity := map[string]string{}
+	for _, node := range nodes {
+		if node.Kind != "managed" {
+			continue
+		}
+		identityID := strings.TrimSpace(node.IdentityID)
+		if identityID == "" {
+			continue
+		}
+		nodeIdentity[node.NodeID] = identityID
+	}
+	for _, edge := range edges {
+		identityA := nodeIdentity[edge.FromNodeID]
+		identityB := nodeIdentity[edge.ToNodeID]
+		if identityA == "" || identityB == "" || identityA == identityB {
+			continue
+		}
+		identA, okA := identByID[identityA]
+		identB, okB := identByID[identityB]
+		if !okA || !okB {
+			continue
+		}
+		if normalizeKeyToken(identA.SiteID) != normalizeKeyToken(identB.SiteID) {
+			continue
+		}
+		if normalizeKeyToken(identA.Role) != normalizeKeyToken(identB.Role) {
+			continue
+		}
+		addCandidate(identityA, identityB, identA.SiteID, identA.Role, 2)
+	}
+
+	candidateList := make([]haPairCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		candidateList = append(candidateList, candidate)
+	}
+	sort.Slice(candidateList, func(i, j int) bool {
+		if candidateList[i].score != candidateList[j].score {
+			return candidateList[i].score > candidateList[j].score
+		}
+		return candidateList[i].pairID < candidateList[j].pairID
+	})
+
+	used := map[string]struct{}{}
+	pairs := make([]HAPairStatus, 0, len(candidateList))
+	nowISO := time.UnixMilli(nowMs).UTC().Format(time.RFC3339)
+	for _, candidate := range candidateList {
+		if _, ok := used[candidate.identityA]; ok {
+			continue
+		}
+		if _, ok := used[candidate.identityB]; ok {
+			continue
+		}
+		identA, okA := identByID[candidate.identityA]
+		identB, okB := identByID[candidate.identityB]
+		if !okA || !okB {
+			continue
+		}
+
+		onlineA, tsA, onlineB, tsB, observedSample := s.resolveHAPairOnlineStatesLocked(identA, identB)
+		state, activeID, standbyID := evaluateHAPairState(identA.IdentityID, identB.IdentityID, onlineA, onlineB, tsA, tsB)
+		pairs = append(pairs, HAPairStatus{
+			PairID:               candidate.pairID,
+			SiteID:               candidate.siteID,
+			Role:                 candidate.role,
+			NodeAIdentityID:      identA.IdentityID,
+			NodeAName:            identA.Name,
+			NodeAOnline:          onlineA,
+			NodeBIdentityID:      identB.IdentityID,
+			NodeBName:            identB.Name,
+			NodeBOnline:          onlineB,
+			State:                state,
+			ActiveIdentityID:     activeID,
+			StandbyIdentityID:    standbyID,
+			LastEvaluatedAt:      nowMs,
+			LastEvaluatedAtISO:   nowISO,
+			ObservedSourceSample: observedSample,
+		})
+		used[candidate.identityA] = struct{}{}
+		used[candidate.identityB] = struct{}{}
+	}
+
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].SiteID != pairs[j].SiteID {
+			return pairs[i].SiteID < pairs[j].SiteID
+		}
+		if pairs[i].Role != pairs[j].Role {
+			return pairs[i].Role < pairs[j].Role
+		}
+		return pairs[i].PairID < pairs[j].PairID
+	})
+	return pairs
+}
+
+func (s *Store) resolveHAPairOnlineStatesLocked(identityA, identityB DeviceIdentity) (*bool, int64, *bool, int64, int64) {
+	onlineA, tsA := s.latestIdentityOnlineStateLocked(identityA)
+	onlineB, tsB := s.latestIdentityOnlineStateLocked(identityB)
+	return onlineA, tsA, onlineB, tsB, max(tsA, tsB)
+}
+
+func (s *Store) latestIdentityOnlineStateLocked(identity DeviceIdentity) (*bool, int64) {
+	identityID := strings.TrimSpace(identity.IdentityID)
+	for i := len(s.SourceObservations) - 1; i >= 0; i-- {
+		obs := s.SourceObservations[i]
+		if obs.IdentityID != identityID || obs.Online == nil {
+			continue
+		}
+		v := *obs.Online
+		return &v, obs.ObservedAt
+	}
+
+	primaryDeviceID := strings.TrimSpace(identity.PrimaryDeviceID)
+	if primaryDeviceID == "" {
+		return nil, 0
+	}
+	for _, device := range s.Devices {
+		if strings.TrimSpace(device.ID) != primaryDeviceID {
+			continue
+		}
+		v := device.Online
+		return &v, device.LastSeen
+	}
+	return nil, 0
+}
+
+func evaluateHAPairState(identityAID, identityBID string, onlineA, onlineB *bool, tsA, tsB int64) (string, string, string) {
+	aKnown := onlineA != nil
+	bKnown := onlineB != nil
+	aUp := aKnown && *onlineA
+	bUp := bKnown && *onlineB
+
+	switch {
+	case aUp && bUp:
+		if tsB > tsA {
+			return "redundant", identityBID, identityAID
+		}
+		return "redundant", identityAID, identityBID
+	case aKnown && bKnown && aUp && !bUp:
+		return "failover", identityAID, identityBID
+	case aKnown && bKnown && !aUp && bUp:
+		return "failover", identityBID, identityAID
+	case aKnown && bKnown && !aUp && !bUp:
+		return "down", "", ""
+	case aUp && !bKnown:
+		return "unknown", identityAID, identityBID
+	case bUp && !aKnown:
+		return "unknown", identityBID, identityAID
+	default:
+		return "unknown", "", ""
+	}
+}
+
+func buildHAFailoverEventMessage(prev, next HAPairStatus, eventType string) string {
+	nodeA := firstNonEmpty(next.NodeAName, next.NodeAIdentityID)
+	nodeB := firstNonEmpty(next.NodeBName, next.NodeBIdentityID)
+	switch eventType {
+	case "failover":
+		return "HA failover detected for " + nodeA + " / " + nodeB
+	case "recovered":
+		return "HA pair recovered for " + nodeA + " / " + nodeB
+	default:
+		return "HA state changed for " + nodeA + " / " + nodeB
+	}
+}
+
 func (s *Store) MergeIdentities(primaryID string, secondaryIDs []string) (DeviceIdentity, []string, error) {
 	primaryID = strings.TrimSpace(primaryID)
 	if primaryID == "" {
@@ -798,6 +1146,7 @@ func (s *Store) MergeIdentities(primaryID string, secondaryIDs []string) (Device
 		s.mu.Unlock()
 		return DeviceIdentity{}, merged, ErrPrimaryNotFound
 	}
+	s.updateHAPairWatcherLocked(time.Now().UnixMilli())
 	identity := s.DeviceIdentities[idx]
 	s.mu.Unlock()
 
@@ -1005,6 +1354,7 @@ func (s *Store) IngestTelemetry(req TelemetryIngestRequest) (Device, *Incident, 
 		}
 	}
 
+	s.updateHAPairWatcherLocked(nowMs)
 	deviceCopy := s.Devices[idx]
 	s.mu.Unlock()
 
@@ -1590,6 +1940,23 @@ func topologyConnectedComponents(nodeIDs []string, edges []TopologyEdge) int {
 
 func topologyEdgePairKey(fromNodeID, toNodeID string) string {
 	return strings.TrimSpace(fromNodeID) + "->" + strings.TrimSpace(toNodeID)
+}
+
+func haPairIdentityOrder(identityA, identityB string) (string, string) {
+	a := strings.TrimSpace(identityA)
+	b := strings.TrimSpace(identityB)
+	if a <= b {
+		return a, b
+	}
+	return b, a
+}
+
+func topologyHAPairID(identityA, identityB string) string {
+	a, b := haPairIdentityOrder(identityA, identityB)
+	if a == "" || b == "" {
+		return ""
+	}
+	return "ha:" + normalizeKeyToken(a+"|"+b)
 }
 
 func identityKeysFromObservation(obs SourceObservation) []string {

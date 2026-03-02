@@ -336,6 +336,7 @@ let demoModeEnabled = false;
 let demoModeToggleBusy = false;
 let browserNotificationsToggleBusy = false;
 let topologyCache = { nodes: [], edges: [], health: null, fetched_at: "" };
+let topologyHACache = { pairs: [], events: [], fetched_at: "" };
 let topologyLoading = false;
 let topologyLastFetchMs = 0;
 let topologyTrace = null;
@@ -1964,6 +1965,13 @@ function setTopologyStatus(msg, isError){
   el.classList.toggle("error", !!isError);
 }
 
+function setTopologyHAStatus(msg, isError){
+  const el = document.getElementById("topologyHaStatus");
+  if(!el) return;
+  el.textContent = msg || "";
+  el.classList.toggle("error", !!isError);
+}
+
 function topologyEdgeState(edge){
   if(!edge || edge.resolved !== true) return "unresolved";
   const updated = edge.updated_at ? Date.parse(edge.updated_at) : NaN;
@@ -2022,6 +2030,92 @@ function renderTopologyHealth(){
     `<span class="badge good">Components: ${health.connected_components ?? 0}</span>`
   ];
   el.innerHTML = parts.join(" ");
+}
+
+function topologyHAStateBadgeClass(state){
+  const normalized = String(state || "").trim().toLowerCase();
+  if(normalized === "redundant") return "good";
+  if(normalized === "failover") return "warn";
+  if(normalized === "down") return "bad";
+  return "warn";
+}
+
+function topologyHAStateLabel(state){
+  const normalized = String(state || "").trim().toLowerCase();
+  if(normalized === "redundant") return "Redundant";
+  if(normalized === "failover") return "Failover";
+  if(normalized === "down") return "Down";
+  return "Unknown";
+}
+
+function topologyHAEventLabel(eventType){
+  const normalized = String(eventType || "").trim().toLowerCase();
+  if(normalized === "failover") return "Failover";
+  if(normalized === "recovered") return "Recovered";
+  if(normalized === "pair_discovered") return "Discovered";
+  return "State Change";
+}
+
+function renderTopologyHA(){
+  const summaryEl = document.getElementById("topologyHaSummary");
+  const pairsEl = document.getElementById("topologyHaPairs");
+  const eventsEl = document.getElementById("topologyHaEvents");
+  if(!summaryEl || !pairsEl || !eventsEl) return;
+
+  const pairs = Array.isArray(topologyHACache.pairs) ? topologyHACache.pairs : [];
+  const events = Array.isArray(topologyHACache.events) ? topologyHACache.events : [];
+  const redundant = pairs.filter(p=>String(p && p.state || "").toLowerCase() === "redundant").length;
+  const failover = pairs.filter(p=>String(p && p.state || "").toLowerCase() === "failover").length;
+  const down = pairs.filter(p=>String(p && p.state || "").toLowerCase() === "down").length;
+
+  summaryEl.innerHTML = [
+    `<span class="badge good">HA Pairs: ${pairs.length}</span>`,
+    `<span class="badge ${failover > 0 ? "warn" : "good"}">Failover: ${failover}</span>`,
+    `<span class="badge ${down > 0 ? "bad" : "good"}">Down: ${down}</span>`,
+    `<span class="badge good">Redundant: ${redundant}</span>`,
+    `<span class="badge good">Events: ${events.length}</span>`
+  ].join(" ");
+
+  if(pairs.length === 0){
+    pairsEl.innerHTML = `<div class="topology-ha-empty">No HA pairs detected yet. Pairs are inferred from same-site, same-role managed nodes and topology links.</div>`;
+  } else {
+    pairsEl.innerHTML = pairs.map(pair=>{
+      const state = String(pair && pair.state || "").toLowerCase();
+      const aName = escapeHtml(pair && (pair.node_a_name || pair.node_a_identity_id) || "--");
+      const bName = escapeHtml(pair && (pair.node_b_name || pair.node_b_identity_id) || "--");
+      const active = escapeHtml(pair && pair.active_identity_id || "--");
+      const standby = escapeHtml(pair && pair.standby_identity_id || "--");
+      const when = pair && pair.last_transition_at_iso ? new Date(pair.last_transition_at_iso).toLocaleString() : "--";
+      return `<div class="topology-ha-item">
+        <div><strong>${aName}</strong> <span class="topology-ha-sep">/</span> <strong>${bName}</strong></div>
+        <div class="topology-ha-meta">
+          <span class="badge ${topologyHAStateBadgeClass(state)}">${topologyHAStateLabel(state)}</span>
+          <span>Active: <code>${active}</code></span>
+          <span>Standby: <code>${standby}</code></span>
+          <span>Transition: ${escapeHtml(when)}</span>
+        </div>
+      </div>`;
+    }).join("");
+  }
+
+  if(events.length === 0){
+    eventsEl.innerHTML = `<div class="topology-ha-empty">No HA transition events yet.</div>`;
+  } else {
+    eventsEl.innerHTML = events.slice(0, 20).map(evt=>{
+      const type = topologyHAEventLabel(evt && evt.event_type);
+      const toState = topologyHAStateLabel(evt && evt.to_state);
+      const at = evt && evt.observed_at_iso ? new Date(evt.observed_at_iso).toLocaleString() : "--";
+      const msg = escapeHtml(evt && evt.message || "");
+      return `<div class="topology-ha-item">
+        <div class="topology-ha-meta">
+          <span class="badge ${topologyHAStateBadgeClass(evt && evt.to_state)}">${escapeHtml(type)}</span>
+          <span>To: ${escapeHtml(toState)}</span>
+          <span>At: ${escapeHtml(at)}</span>
+        </div>
+        ${msg ? `<div class="topology-ha-note">${msg}</div>` : ""}
+      </div>`;
+    }).join("");
+  }
 }
 
 function populateTopologySelectors(){
@@ -2088,6 +2182,7 @@ function renderTopologyGraph(){
 
 function renderTopology(){
   renderTopologyHealth();
+  renderTopologyHA();
   populateTopologySelectors();
   renderTopologyGraph();
 }
@@ -2098,15 +2193,34 @@ async function loadTopology(force){
   if(!force && (Date.now() - topologyLastFetchMs) < TOPOLOGY_REFRESH_MS) return;
   topologyLoading = true;
   setTopologyStatus("Loading topology...", false);
+  setTopologyHAStatus("Loading HA watcher...", false);
   try{
-    const resp = await fetch(`?ajax=topology_overview&t=${Date.now()}`, { cache:"no-store" });
-    if(resp.status===401){ location.reload(); return; }
+    const [resp, haResp] = await Promise.all([
+      fetch(`?ajax=topology_overview&t=${Date.now()}`, { cache:"no-store" }),
+      fetch(`?ajax=topology_ha&t=${Date.now()}`, { cache:"no-store" })
+    ]);
+    if(resp.status===401 || haResp.status===401){ location.reload(); return; }
+
     const payload = await resp.json().catch(()=>null);
     if(!payload || !payload.ok){
       const msg = (payload && (payload.message || payload.error)) ? (payload.message || payload.error) : "Unable to load topology.";
       setTopologyStatus(msg, true);
+      setTopologyHAStatus("HA watcher unavailable while topology is degraded.", true);
       return;
     }
+    const haPayload = await haResp.json().catch(()=>null);
+    if(haPayload && haPayload.ok){
+      topologyHACache = {
+        pairs: Array.isArray(haPayload.pairs) ? haPayload.pairs : [],
+        events: Array.isArray(haPayload.events) ? haPayload.events : [],
+        fetched_at: haPayload.fetched_at || ""
+      };
+      setTopologyHAStatus(`HA watcher loaded: ${topologyHACache.pairs.length} pairs, ${topologyHACache.events.length} events.`, false);
+    } else {
+      topologyHACache = { pairs: [], events: [], fetched_at: "" };
+      setTopologyHAStatus((haPayload && (haPayload.message || haPayload.error)) || "HA watcher unavailable.", true);
+    }
+
     topologyCache = {
       nodes: Array.isArray(payload.nodes) ? payload.nodes : [],
       edges: Array.isArray(payload.edges) ? payload.edges : [],
@@ -2114,10 +2228,11 @@ async function loadTopology(force){
       fetched_at: payload.fetched_at || ""
     };
     topologyLastFetchMs = Date.now();
-    setTopologyStatus(`Topology loaded: ${topologyCache.nodes.length} nodes, ${topologyCache.edges.length} edges.`, false);
+    setTopologyStatus(`Topology loaded: ${topologyCache.nodes.length} nodes, ${topologyCache.edges.length} edges, ${topologyHACache.pairs.length} HA pairs.`, false);
     renderTopology();
   }catch(_){
     setTopologyStatus("Topology request failed.", true);
+    setTopologyHAStatus("HA watcher request failed.", true);
   } finally {
     topologyLoading = false;
   }

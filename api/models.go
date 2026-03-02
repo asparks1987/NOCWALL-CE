@@ -274,6 +274,41 @@ type TopologyHealth struct {
 	ConnectedComponents  int `json:"connected_components"`
 }
 
+type HAPairStatus struct {
+	PairID               string `json:"pair_id"`
+	SiteID               string `json:"site_id,omitempty"`
+	Role                 string `json:"role,omitempty"`
+	NodeAIdentityID      string `json:"node_a_identity_id"`
+	NodeAName            string `json:"node_a_name,omitempty"`
+	NodeAOnline          *bool  `json:"node_a_online,omitempty"`
+	NodeBIdentityID      string `json:"node_b_identity_id"`
+	NodeBName            string `json:"node_b_name,omitempty"`
+	NodeBOnline          *bool  `json:"node_b_online,omitempty"`
+	State                string `json:"state"` // redundant | failover | down | unknown
+	ActiveIdentityID     string `json:"active_identity_id,omitempty"`
+	StandbyIdentityID    string `json:"standby_identity_id,omitempty"`
+	LastTransitionAt     int64  `json:"last_transition_at,omitempty"`
+	LastTransitionAtISO  string `json:"last_transition_at_iso,omitempty"`
+	LastEvaluatedAt      int64  `json:"last_evaluated_at"`
+	LastEvaluatedAtISO   string `json:"last_evaluated_at_iso"`
+	ObservedSourceSample int64  `json:"observed_source_sample,omitempty"`
+}
+
+type HAFailoverEvent struct {
+	EventID               string `json:"event_id"`
+	PairID                string `json:"pair_id"`
+	EventType             string `json:"event_type"` // pair_discovered | failover | recovered | state_change
+	FromState             string `json:"from_state,omitempty"`
+	ToState               string `json:"to_state"`
+	FromActiveIdentityID  string `json:"from_active_identity_id,omitempty"`
+	ToActiveIdentityID    string `json:"to_active_identity_id,omitempty"`
+	NodeAIdentityID       string `json:"node_a_identity_id,omitempty"`
+	NodeBIdentityID       string `json:"node_b_identity_id,omitempty"`
+	ObservedAt            int64  `json:"observed_at"`
+	ObservedAtISO         string `json:"observed_at_iso"`
+	Message               string `json:"message,omitempty"`
+}
+
 type TopologyNodesResponse struct {
 	LastUpdated int64          `json:"last_updated"`
 	Count       int            `json:"count"`
@@ -310,6 +345,24 @@ type TopologyPathResponse struct {
 	Edges            []TopologyEdge `json:"edges,omitempty"`
 	Message          string         `json:"message,omitempty"`
 	Stub             bool           `json:"stub"`
+}
+
+type TopologyHAPairsResponse struct {
+	LastUpdated int64          `json:"last_updated"`
+	Count       int            `json:"count"`
+	Pairs       []HAPairStatus `json:"pairs"`
+	Truncated   bool           `json:"truncated"`
+	Limit       int            `json:"limit"`
+	Stub        bool           `json:"stub"`
+}
+
+type TopologyHAEventsResponse struct {
+	LastUpdated int64             `json:"last_updated"`
+	Count       int               `json:"count"`
+	Events      []HAFailoverEvent `json:"events"`
+	Truncated   bool              `json:"truncated"`
+	Limit       int               `json:"limit"`
+	Stub        bool              `json:"stub"`
 }
 
 type IdentityMergeRequest struct {

@@ -495,3 +495,108 @@ func TestTopologyPathTraceFindsShortestPath(t *testing.T) {
 		t.Fatalf("expected missing node path lookup to fail")
 	}
 }
+
+func TestHAPairWatcherEmitsFailoverAndRecoveryEvents(t *testing.T) {
+	s := LoadStore("")
+
+	online := true
+	seed := []TelemetryIngestRequest{
+		{
+			Source:   "ha_test",
+			DeviceID: "ha-a",
+			Device:   "HA A",
+			Role:     "gateway",
+			SiteID:   "ha-site-1",
+			Mac:      "aa:bb:cc:00:00:10",
+			Serial:   "SER-HA-A",
+			Online:   &online,
+		},
+		{
+			Source:   "ha_test",
+			DeviceID: "ha-b",
+			Device:   "HA B",
+			Role:     "gateway",
+			SiteID:   "ha-site-1",
+			Mac:      "aa:bb:cc:00:00:20",
+			Serial:   "SER-HA-B",
+			Online:   &online,
+		},
+	}
+	for _, req := range seed {
+		if _, _, ok := s.IngestTelemetry(req); !ok {
+			t.Fatalf("seed ingest failed for %s", req.DeviceID)
+		}
+	}
+
+	pairs, _, _ := s.ListHAPairs(20, "")
+	if len(pairs) == 0 {
+		t.Fatalf("expected at least one HA pair")
+	}
+	pair := pairs[0]
+	if pair.State != "redundant" {
+		t.Fatalf("expected initial HA state redundant, got=%s", pair.State)
+	}
+
+	offline := false
+	if _, _, ok := s.IngestTelemetry(TelemetryIngestRequest{
+		Source:    "ha_test",
+		DeviceID:  "ha-b",
+		Device:    "HA B",
+		Role:      "gateway",
+		SiteID:    "ha-site-1",
+		EventType: "offline",
+		Online:    &offline,
+	}); !ok {
+		t.Fatalf("offline ingest failed")
+	}
+
+	pairsAfterFailover, _, _ := s.ListHAPairs(20, "")
+	if len(pairsAfterFailover) == 0 {
+		t.Fatalf("expected HA pair after failover transition")
+	}
+	if pairsAfterFailover[0].State != "failover" {
+		t.Fatalf("expected failover state after offline event, got=%s", pairsAfterFailover[0].State)
+	}
+	if pairsAfterFailover[0].ActiveIdentityID == "" {
+		t.Fatalf("expected active identity during failover")
+	}
+
+	events, _, _ := s.ListHAFailoverEvents(20, pair.PairID, "")
+	if len(events) == 0 {
+		t.Fatalf("expected failover events for pair=%s", pair.PairID)
+	}
+	if events[0].EventType != "failover" && events[0].EventType != "state_change" {
+		t.Fatalf("unexpected failover event type: %+v", events[0])
+	}
+	if events[0].ToState != "failover" {
+		t.Fatalf("expected event to_state=failover, got=%s", events[0].ToState)
+	}
+
+	if _, _, ok := s.IngestTelemetry(TelemetryIngestRequest{
+		Source:    "ha_test",
+		DeviceID:  "ha-b",
+		Device:    "HA B",
+		Role:      "gateway",
+		SiteID:    "ha-site-1",
+		EventType: "online",
+		Online:    &online,
+	}); !ok {
+		t.Fatalf("recovery ingest failed")
+	}
+
+	pairsAfterRecovery, _, _ := s.ListHAPairs(20, "")
+	if len(pairsAfterRecovery) == 0 {
+		t.Fatalf("expected HA pair after recovery transition")
+	}
+	if pairsAfterRecovery[0].State != "redundant" {
+		t.Fatalf("expected redundant state after recovery, got=%s", pairsAfterRecovery[0].State)
+	}
+
+	eventsAfterRecovery, _, _ := s.ListHAFailoverEvents(20, pair.PairID, "")
+	if len(eventsAfterRecovery) < 2 {
+		t.Fatalf("expected at least two HA transition events, got=%d", len(eventsAfterRecovery))
+	}
+	if eventsAfterRecovery[0].ToState != "redundant" {
+		t.Fatalf("expected latest event to_state=redundant, got=%s", eventsAfterRecovery[0].ToState)
+	}
+}
