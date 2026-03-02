@@ -1024,3 +1024,151 @@ body.kiosk-mode #footer {
 body.kiosk-mode .tabcontent {
   padding-top: 8px;
 }
+
+/* Theme presets */
+body.theme-high-contrast {
+  background: #000;
+  color: #fff;
+}
+body.theme-high-contrast header,
+body.theme-high-contrast .tabs,
+body.theme-high-contrast .source-status-strip,
+body.theme-high-contrast .view-controls,
+body.theme-high-contrast .legend-panel,
+body.theme-high-contrast .display-controls,
+body.theme-high-contrast footer,
+body.theme-high-contrast .modal-content,
+body.theme-high-contrast .inventory-section,
+body.theme-high-contrast .device-group,
+body.theme-high-contrast .card {
+  background: #000 !important;
+  color: #fff !important;
+  border-color: #fff !important;
+  box-shadow: none !important;
+}
+body.theme-high-contrast .header-actions button,
+body.theme-high-contrast .tablink,
+body.theme-high-contrast .btn-outline,
+body.theme-high-contrast .actions button {
+  background: #000 !important;
+  color: #fff !important;
+  border: 1px solid #fff !important;
+  box-shadow: none !important;
+}
+body.theme-high-contrast .tablink.active,
+body.theme-high-contrast .filter-btn.active,
+body.theme-high-contrast .btn-accent {
+  background: #ffd400 !important;
+  color: #000 !important;
+  border-color: #ffd400 !important;
+  box-shadow: none !important;
+}
+body.theme-high-contrast .badge.good {
+  background: #003800;
+  color: #9dff9d;
+}
+body.theme-high-contrast .badge.warn {
+  background: #3a3000;
+  color: #ffe98f;
+}
+body.theme-high-contrast .badge.bad {
+  background: #3a0000;
+  color: #ff9f9f;
+}
+body.theme-high-contrast .source-status-meta,
+body.theme-high-contrast .card-meta,
+body.theme-high-contrast .small,
+body.theme-high-contrast .wizard-subtitle,
+body.theme-high-contrast .modal-subtitle {
+  color: #e2e2e2 !important;
+}
+
+body.theme-light {
+  background: #eef3fb;
+  color: #1a2436;
+}
+body.theme-light header {
+  background: #dde7f7;
+  color: #1a2436;
+  border-bottom-color: #3f6dd6;
+}
+body.theme-light .tabs,
+body.theme-light .source-status-strip,
+body.theme-light .view-controls,
+body.theme-light .legend-panel,
+body.theme-light .display-controls,
+body.theme-light footer,
+body.theme-light .modal-content,
+body.theme-light .inventory-section,
+body.theme-light .device-group {
+  background: #f7faff;
+  color: #1a2436;
+  border-color: #c8d6f0;
+}
+body.theme-light .tablink,
+body.theme-light .header-actions button,
+body.theme-light .btn-outline,
+body.theme-light .actions button {
+  background: #edf3ff;
+  color: #1a2436;
+  border: 1px solid #b6caee;
+  box-shadow: none;
+}
+body.theme-light .tablink.active,
+body.theme-light .filter-btn.active {
+  background: #dce9ff;
+  border-color: #5f85dc;
+  color: #183671;
+  box-shadow: none;
+}
+body.theme-light .card {
+  background: #ffffff;
+  color: #1a2436;
+  border: 1px solid #c9d8f3;
+  box-shadow: 0 2px 8px rgba(20, 44, 92, 0.12);
+}
+body.theme-light .card h2,
+body.theme-light .source-status-name,
+body.theme-light .inventory-section h4 {
+  color: #1a2436;
+  text-shadow: none;
+}
+body.theme-light .source-status-meta,
+body.theme-light .card-meta,
+body.theme-light .small,
+body.theme-light .wizard-subtitle,
+body.theme-light .modal-subtitle {
+  color: #43546f;
+}
+body.theme-light .badge.good {
+  background: #d9f2dd;
+  color: #17642a;
+}
+body.theme-light .badge.warn {
+  background: #fff1cc;
+  color: #8a6200;
+}
+body.theme-light .badge.bad {
+  background: #ffdfe0;
+  color: #9a1d22;
+}
+body.theme-light .btn-accent {
+  background: linear-gradient(90deg, #2f64d8, #4f86ff);
+  box-shadow: 0 0 10px rgba(79, 134, 255, 0.35);
+}
+
+/* Font scaling presets */
+body.font-scale-normal {
+  zoom: 1;
+}
+body.font-scale-large {
+  zoom: 1.1;
+}
+body.font-scale-xlarge {
+  zoom: 1.22;
+}
+@supports not (zoom: 1) {
+  body.font-scale-normal { font-size: 100%; }
+  body.font-scale-large { font-size: 112%; }
+  body.font-scale-xlarge { font-size: 124%; }
+}

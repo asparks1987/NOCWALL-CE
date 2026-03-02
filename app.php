@@ -519,6 +519,10 @@ function default_dashboard_settings(){
         'sort_mode' => 'manual',
         'group_mode' => 'none',
         'refresh_interval' => 'normal',
+        'theme_preset' => 'classic',
+        'font_scale_preset' => 'normal',
+        'browser_notifications' => false,
+        'alert_sound_profile' => 'default',
         'metrics' => [
             'cpu' => true,
             'ram' => true,
@@ -551,6 +555,21 @@ function normalize_dashboard_settings($input){
     $refreshInterval = trim((string)($input['refresh_interval'] ?? ''));
     if(in_array($refreshInterval, ['fast','normal','slow'], true)){
         $base['refresh_interval'] = $refreshInterval;
+    }
+    $themePreset = strtolower(trim((string)($input['theme_preset'] ?? '')));
+    if(in_array($themePreset, ['classic','high_contrast','light'], true)){
+        $base['theme_preset'] = $themePreset;
+    }
+    $fontScalePreset = strtolower(trim((string)($input['font_scale_preset'] ?? '')));
+    if(in_array($fontScalePreset, ['normal','large','xlarge'], true)){
+        $base['font_scale_preset'] = $fontScalePreset;
+    }
+    if(array_key_exists('browser_notifications', $input)){
+        $base['browser_notifications'] = normalize_toggle_bool($input['browser_notifications']);
+    }
+    $alertSoundProfile = strtolower(trim((string)($input['alert_sound_profile'] ?? '')));
+    if(in_array($alertSoundProfile, ['default','soft'], true)){
+        $base['alert_sound_profile'] = $alertSoundProfile;
     }
     if(isset($input['metrics']) && is_array($input['metrics'])){
         foreach(array_keys($base['metrics']) as $k){
@@ -1687,6 +1706,24 @@ $ASSET_VERSION = max(
     @filemtime(__DIR__ . '/buz.mp3') ?: 0
 );
 
+$NOCWALL_RELEASE_NOTES = [
+    [
+        'id' => '2026-02-ce-a3-pack',
+        'version' => 'CE-A3 Pack',
+        'date' => '2026-02-24',
+        'title' => 'CE Feature Pack 3 Update',
+        'items' => [
+            'Added demo preview mode with account-level toggle.',
+            'Added source DNS/TLS/API diagnostics panel.',
+            'Added browser offline event notifications.',
+            'Added soft chime alert profile toggle.',
+            'Added theme and font scaling presets.',
+            'Added PNG wallboard snapshot export.',
+            'Added dashboard preferences JSON import/export.'
+        ]
+    ]
+];
+
 // Helpers
 function device_key($dev){ $id=$dev['identification']??[]; return $id['mac'] ?? $id['id'] ?? $id['name'] ?? 'unknown'; }
 function normalize_role($role){
@@ -2593,6 +2630,16 @@ if(isset($_GET['ajax'])){
         $USERS_STORE['users'][$sessionUser]['updated_at'] = date('c');
         save_users_store($USERS_FILE, $USERS_STORE);
         echo json_encode(['ok'=>1]); exit;
+    }
+
+    if($_GET['ajax']==='whats_new'){
+        $latest = (is_array($NOCWALL_RELEASE_NOTES) && count($NOCWALL_RELEASE_NOTES) > 0) ? $NOCWALL_RELEASE_NOTES[0] : null;
+        echo json_encode([
+            'ok' => 1,
+            'latest_release_id' => is_array($latest) ? (string)($latest['id'] ?? '') : '',
+            'notes' => $NOCWALL_RELEASE_NOTES
+        ]);
+        exit;
     }
 
     if($_GET['ajax']==='prefs_get'){
@@ -3543,6 +3590,19 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
       </table>
       <div id="diagnosticsStatus" class="status"></div>
     </section>
+
+    <section class="card">
+      <h3 style="margin-top:0">Dashboard Preferences Backup</h3>
+      <div class="row-actions">
+        <button onclick="exportPreferencesJson()">Export Preferences JSON</button>
+        <button class="secondary" onclick="triggerImportPreferences()">Import Preferences JSON</button>
+        <input id="prefsImportFile" type="file" accept="application/json,.json" style="display:none">
+      </div>
+      <div class="small" style="margin-top:10px">
+        Includes dashboard settings, siren preferences, and card ordering for this account.
+      </div>
+      <div id="prefsTransferStatus" class="status"></div>
+    </section>
   </main>
 
   <script>
@@ -3573,6 +3633,12 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
       el.textContent = msg || '';
       el.className = 'status ' + (kind || '');
     }
+    function setPrefsTransferStatus(msg, kind){
+      const el = document.getElementById('prefsTransferStatus');
+      if(!el) return;
+      el.textContent = msg || '';
+      el.className = 'status ' + (kind || '');
+    }
     function esc(v){
       return String(v ?? '').replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
     }
@@ -3586,6 +3652,21 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
         return `<span class="pill warn">${naLabel}</span>`;
       }
       return boolPill(!!value, goodLabel, badLabel);
+    }
+    function prefsFileStamp(){
+      const d = new Date();
+      const pad = n => String(n).padStart(2, '0');
+      return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+    }
+    function downloadTextFile(text, name, type){
+      const blob = new Blob([text], { type: type || 'text/plain' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = name;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(()=>URL.revokeObjectURL(link.href), 2000);
     }
     function billingPillClass(ok){
       return ok ? 'pill good' : 'pill bad';
@@ -3903,6 +3984,87 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
         if(btn) btn.disabled = false;
       }
     }
+    async function exportPreferencesJson(){
+      setPrefsTransferStatus('Exporting preferences...');
+      try{
+        const r = await fetch('?ajax=prefs_get&t='+Date.now(), { cache:'no-store' });
+        if(r.status === 401){ location.href='./?login=1'; return; }
+        const j = await r.json().catch(()=>null);
+        if(!j || !j.ok || !j.preferences){
+          setPrefsTransferStatus('Unable to export preferences.', 'error');
+          return;
+        }
+        const payload = {
+          schema: 'nocwall_prefs_v1',
+          exported_at: new Date().toISOString(),
+          username: j.username || '',
+          preferences: j.preferences
+        };
+        const fileName = `nocwall-prefs-${String(j.username || 'account')}-${prefsFileStamp()}.json`;
+        downloadTextFile(JSON.stringify(payload, null, 2), fileName, 'application/json');
+        setPrefsTransferStatus('Preferences exported.');
+      }catch(_){
+        setPrefsTransferStatus('Preferences export request failed.', 'error');
+      }
+    }
+    function triggerImportPreferences(){
+      const input = document.getElementById('prefsImportFile');
+      if(!input) return;
+      input.value = '';
+      input.click();
+    }
+    async function importPreferencesFile(file){
+      if(!file){
+        setPrefsTransferStatus('Select a JSON file first.', 'error');
+        return;
+      }
+      setPrefsTransferStatus('Importing preferences...');
+      try{
+        const text = await file.text();
+        const parsed = JSON.parse(text);
+        const prefs = (parsed && parsed.preferences && typeof parsed.preferences === 'object')
+          ? parsed.preferences
+          : (parsed && typeof parsed === 'object' ? parsed : null);
+        if(!prefs || typeof prefs !== 'object'){
+          setPrefsTransferStatus('Invalid preferences JSON structure.', 'error');
+          return;
+        }
+
+        const fd = new FormData();
+        let fields = 0;
+        if(Object.prototype.hasOwnProperty.call(prefs, 'dashboard_settings')){
+          fd.append('dashboard_settings', JSON.stringify(prefs.dashboard_settings || {}));
+          fields++;
+        }
+        if(Object.prototype.hasOwnProperty.call(prefs, 'ap_siren_prefs')){
+          fd.append('ap_siren_prefs', JSON.stringify(prefs.ap_siren_prefs || {}));
+          fields++;
+        }
+        if(Object.prototype.hasOwnProperty.call(prefs, 'tab_siren_prefs')){
+          fd.append('tab_siren_prefs', JSON.stringify(prefs.tab_siren_prefs || {}));
+          fields++;
+        }
+        if(Object.prototype.hasOwnProperty.call(prefs, 'card_order_prefs')){
+          fd.append('card_order_prefs', JSON.stringify(prefs.card_order_prefs || {}));
+          fields++;
+        }
+        if(fields === 0){
+          setPrefsTransferStatus('No supported preference fields found in file.', 'error');
+          return;
+        }
+
+        const r = await fetch('?ajax=prefs_save', { method:'POST', body:fd });
+        if(r.status === 401){ location.href='./?login=1'; return; }
+        const j = await r.json().catch(()=>null);
+        if(!j || !j.ok){
+          setPrefsTransferStatus('Import failed: ' + ((j && (j.message || j.error)) || 'unknown'), 'error');
+          return;
+        }
+        setPrefsTransferStatus('Preferences imported successfully.');
+      }catch(_){
+        setPrefsTransferStatus('Unable to import preferences file.', 'error');
+      }
+    }
     function cancelEdit(){
       editSourceId = '';
       document.getElementById('srcName').value = '';
@@ -4009,6 +4171,14 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
       }
       runSourceDiagnostics();
     }
+    const prefsImportInput = document.getElementById('prefsImportFile');
+    if(prefsImportInput){
+      prefsImportInput.addEventListener('change', ev=>{
+        const input = ev.target;
+        const file = input && input.files && input.files[0] ? input.files[0] : null;
+        importPreferencesFile(file);
+      });
+    }
     loadSources();
     loadBillingStatus();
     loadDemoMode();
@@ -4105,6 +4275,12 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
     <?php endif; ?>
     <button onclick="manageUispSources()">Account Settings</button>
     <button id="demoModeToggleBtn" type="button" class="btn-outline" onclick="toggleDemoMode()">Demo Preview: Off</button>
+    <button id="themePresetToggleBtn" type="button" class="btn-outline" onclick="toggleThemePreset()">Theme: Classic</button>
+    <button id="fontScaleToggleBtn" type="button" class="btn-outline" onclick="toggleFontScalePreset()">Font: Normal</button>
+    <button id="exportPngBtn" type="button" class="btn-outline" onclick="exportDashboardPng()">Export PNG</button>
+    <button id="browserNotificationsToggleBtn" type="button" class="btn-outline" onclick="toggleBrowserNotifications()">Browser Alerts: Off</button>
+    <button id="alertSoundProfileToggleBtn" type="button" class="btn-outline" onclick="toggleAlertSoundProfile()">Chime: Default</button>
+    <button id="whatsNewBtn" type="button" class="btn-outline" onclick="openWhatsNewModal()">What's New</button>
     <button id="enableSoundBtn" class="btn-accent" onclick="enableSound()">Enable Sound</button>
     <button type="button" onclick="openShortcuts()">Shortcuts</button>
     <button type="button" onclick="toggleKioskMode()">Kiosk</button>
@@ -4352,6 +4528,15 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
       <div><kbd>/</kbd> Focus search</div>
       <div><kbd>Escape</kbd> Close dialogs</div>
     </div>
+  </div>
+</div>
+
+<div id="whatsNewModal" class="modal" style="display:none;" onclick="if(event.target===this) closeWhatsNewModal();">
+  <div class="modal-content shortcuts-modal">
+    <button class="modal-close" onclick="closeWhatsNewModal()" aria-label="Close">&times;</button>
+    <h3 style="margin-top:0;">What's New</h3>
+    <div id="whatsNewStatus" class="wizard-status">Loading release notes...</div>
+    <div id="whatsNewBody" class="shortcuts-grid"></div>
   </div>
 </div>
 

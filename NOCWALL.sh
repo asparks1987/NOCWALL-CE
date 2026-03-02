@@ -35,6 +35,15 @@ GOTIFY_DEFAULTUSER_NAME="${GOTIFY_DEFAULTUSER_NAME:-admin}"
 GOTIFY_DEFAULTUSER_PASS="${GOTIFY_DEFAULTUSER_PASS:-change_me_now}"
 SHOW_TLS_UI="${SHOW_TLS_UI:-false}"
 API_TOKEN="${API_TOKEN:-}"
+NOCWALL_BILLING_MODE="${NOCWALL_BILLING_MODE:-stripe}"
+NOCWALL_BILLING_SELF_ACTIVATE="${NOCWALL_BILLING_SELF_ACTIVATE:-false}"
+NOCWALL_PRO_MONTHLY_USD="${NOCWALL_PRO_MONTHLY_USD:-19.00}"
+NOCWALL_STRIPE_SECRET_KEY="${NOCWALL_STRIPE_SECRET_KEY:-}"
+NOCWALL_STRIPE_WEBHOOK_SECRET="${NOCWALL_STRIPE_WEBHOOK_SECRET:-}"
+NOCWALL_STRIPE_PRICE_ID="${NOCWALL_STRIPE_PRICE_ID:-}"
+NOCWALL_STRIPE_SUCCESS_URL="${NOCWALL_STRIPE_SUCCESS_URL:-}"
+NOCWALL_STRIPE_CANCEL_URL="${NOCWALL_STRIPE_CANCEL_URL:-}"
+NOCWALL_STRIPE_PORTAL_RETURN_URL="${NOCWALL_STRIPE_PORTAL_RETURN_URL:-}"
 
 # Runtime flags.
 SUITE_PROFILE=0
@@ -68,6 +77,18 @@ Options:
   --gotify-user <name>    Embedded Gotify admin username
   --gotify-pass <pass>    Embedded Gotify admin password
   --api-token <token>     Optional API bearer token for suite API container
+  --billing-mode <mode>   Billing mode: stripe|demo|off (default: stripe)
+  --billing-self-activate <bool>
+                          Self-activation toggle (default: false)
+  --pro-monthly-usd <n>   Display price for PRO plan (default: 19.00)
+  --stripe-secret-key <k> Stripe secret key (sk_...)
+  --stripe-webhook-secret <k>
+                          Stripe webhook signing secret (whsec_...)
+  --stripe-price-id <id>  Stripe recurring price id (price_...)
+  --stripe-success-url <u> Checkout success URL (optional)
+  --stripe-cancel-url <u> Checkout cancel URL (optional)
+  --stripe-portal-return-url <u>
+                          Stripe portal return URL (optional)
   --suite                 Enable 'suite' compose profile (starts API service)
   --pro                   Enable 'pro' compose profile (for extension containers)
   -h, --help              Show this help
@@ -145,6 +166,24 @@ parse_args() {
         GOTIFY_DEFAULTUSER_PASS="$2"; shift 2 ;;
       --api-token)
         API_TOKEN="$2"; shift 2 ;;
+      --billing-mode)
+        NOCWALL_BILLING_MODE="$2"; shift 2 ;;
+      --billing-self-activate)
+        NOCWALL_BILLING_SELF_ACTIVATE="$2"; shift 2 ;;
+      --pro-monthly-usd)
+        NOCWALL_PRO_MONTHLY_USD="$2"; shift 2 ;;
+      --stripe-secret-key)
+        NOCWALL_STRIPE_SECRET_KEY="$2"; shift 2 ;;
+      --stripe-webhook-secret)
+        NOCWALL_STRIPE_WEBHOOK_SECRET="$2"; shift 2 ;;
+      --stripe-price-id)
+        NOCWALL_STRIPE_PRICE_ID="$2"; shift 2 ;;
+      --stripe-success-url)
+        NOCWALL_STRIPE_SUCCESS_URL="$2"; shift 2 ;;
+      --stripe-cancel-url)
+        NOCWALL_STRIPE_CANCEL_URL="$2"; shift 2 ;;
+      --stripe-portal-return-url)
+        NOCWALL_STRIPE_PORTAL_RETURN_URL="$2"; shift 2 ;;
       --suite)
         SUITE_PROFILE=1; shift ;;
       --pro)
@@ -186,6 +225,15 @@ SHOW_TLS_UI=$SHOW_TLS_UI
 GOTIFY_DEFAULTUSER_NAME=$GOTIFY_DEFAULTUSER_NAME
 GOTIFY_DEFAULTUSER_PASS=$GOTIFY_DEFAULTUSER_PASS
 API_TOKEN=$API_TOKEN
+NOCWALL_BILLING_MODE=$NOCWALL_BILLING_MODE
+NOCWALL_BILLING_SELF_ACTIVATE=$NOCWALL_BILLING_SELF_ACTIVATE
+NOCWALL_PRO_MONTHLY_USD=$NOCWALL_PRO_MONTHLY_USD
+NOCWALL_STRIPE_SECRET_KEY=$NOCWALL_STRIPE_SECRET_KEY
+NOCWALL_STRIPE_WEBHOOK_SECRET=$NOCWALL_STRIPE_WEBHOOK_SECRET
+NOCWALL_STRIPE_PRICE_ID=$NOCWALL_STRIPE_PRICE_ID
+NOCWALL_STRIPE_SUCCESS_URL=$NOCWALL_STRIPE_SUCCESS_URL
+NOCWALL_STRIPE_CANCEL_URL=$NOCWALL_STRIPE_CANCEL_URL
+NOCWALL_STRIPE_PORTAL_RETURN_URL=$NOCWALL_STRIPE_PORTAL_RETURN_URL
 EOF
   log "Wrote env file: $ENV_FILE"
 }
@@ -214,6 +262,15 @@ services:
       GOTIFY_DEFAULTUSER_NAME: ${GOTIFY_DEFAULTUSER_NAME:-admin}
       GOTIFY_DEFAULTUSER_PASS: ${GOTIFY_DEFAULTUSER_PASS:-change_me_now}
       SHOW_TLS_UI: ${SHOW_TLS_UI:-false}
+      NOCWALL_BILLING_MODE: ${NOCWALL_BILLING_MODE:-stripe}
+      NOCWALL_BILLING_SELF_ACTIVATE: ${NOCWALL_BILLING_SELF_ACTIVATE:-false}
+      NOCWALL_PRO_MONTHLY_USD: ${NOCWALL_PRO_MONTHLY_USD:-19.00}
+      NOCWALL_STRIPE_SECRET_KEY: ${NOCWALL_STRIPE_SECRET_KEY:-}
+      NOCWALL_STRIPE_WEBHOOK_SECRET: ${NOCWALL_STRIPE_WEBHOOK_SECRET:-}
+      NOCWALL_STRIPE_PRICE_ID: ${NOCWALL_STRIPE_PRICE_ID:-}
+      NOCWALL_STRIPE_SUCCESS_URL: ${NOCWALL_STRIPE_SUCCESS_URL:-}
+      NOCWALL_STRIPE_CANCEL_URL: ${NOCWALL_STRIPE_CANCEL_URL:-}
+      NOCWALL_STRIPE_PORTAL_RETURN_URL: ${NOCWALL_STRIPE_PORTAL_RETURN_URL:-}
     volumes:
       - nocwall_cache:/var/www/html/cache
     networks:
