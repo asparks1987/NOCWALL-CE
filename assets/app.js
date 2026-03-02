@@ -81,6 +81,101 @@ function closeShortcuts(){
   modal.style.display = "none";
 }
 
+function setWhatsNewStatus(msg, kind){
+  const el = document.getElementById("whatsNewStatus");
+  if(!el) return;
+  el.textContent = msg || "";
+  el.className = `wizard-status ${kind || ""}`.trim();
+}
+
+function getSeenWhatsNewReleaseId(){
+  try{
+    return String(localStorage.getItem(WHATS_NEW_SEEN_KEY) || "").trim();
+  }catch(_){
+    return "";
+  }
+}
+
+function markWhatsNewSeen(releaseId){
+  const id = String(releaseId || "").trim();
+  if(!id) return;
+  try{
+    localStorage.setItem(WHATS_NEW_SEEN_KEY, id);
+  }catch(_){ }
+}
+
+function renderWhatsNewNotes(notes){
+  const body = document.getElementById("whatsNewBody");
+  if(!body) return;
+  if(!Array.isArray(notes) || notes.length === 0){
+    body.innerHTML = '<div>No release notes available yet.</div>';
+    return;
+  }
+  body.innerHTML = notes.map(note=>{
+    const title = escapeHtml(note && (note.title || note.version || note.id) || "Release");
+    const version = escapeHtml(note && note.version || "");
+    const date = escapeHtml(note && note.date || "");
+    const items = Array.isArray(note && note.items) ? note.items : [];
+    const itemHtml = items.length
+      ? `<ul>${items.map(item=>`<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+      : "<div>No notes provided.</div>";
+    return `<div>
+      <div><strong>${title}</strong>${version ? ` <span class="small">(${version})</span>` : ""}</div>
+      <div class="small">${date}</div>
+      ${itemHtml}
+    </div>`;
+  }).join("");
+}
+
+async function loadWhatsNew(force){
+  if(whatsNewLoaded && !force){
+    renderWhatsNewNotes(whatsNewNotes);
+    return;
+  }
+  setWhatsNewStatus("Loading release notes...");
+  try{
+    const resp = await fetch(`?ajax=whats_new&t=${Date.now()}`, { cache:"no-store" });
+    if(resp.status===401){ location.reload(); return; }
+    const payload = await resp.json().catch(()=>null);
+    if(!payload || !payload.ok){
+      setWhatsNewStatus("Unable to load release notes.", "error");
+      renderWhatsNewNotes([]);
+      return;
+    }
+    whatsNewNotes = Array.isArray(payload.notes) ? payload.notes : [];
+    whatsNewLatestReleaseId = String(payload.latest_release_id || "").trim();
+    whatsNewLoaded = true;
+    renderWhatsNewNotes(whatsNewNotes);
+    setWhatsNewStatus(`Latest release: ${whatsNewLatestReleaseId || "unknown"}.`, "ok");
+  }catch(_){
+    setWhatsNewStatus("Release notes request failed.", "error");
+    renderWhatsNewNotes([]);
+  }
+}
+
+async function openWhatsNewModal(){
+  const modal = document.getElementById("whatsNewModal");
+  if(!modal) return;
+  modal.style.display = "block";
+  await loadWhatsNew(false);
+  if(whatsNewLatestReleaseId){
+    markWhatsNewSeen(whatsNewLatestReleaseId);
+  }
+}
+
+function closeWhatsNewModal(){
+  const modal = document.getElementById("whatsNewModal");
+  if(!modal) return;
+  modal.style.display = "none";
+}
+
+async function maybePromptWhatsNew(){
+  await loadWhatsNew(false);
+  if(!whatsNewLatestReleaseId) return;
+  if(getSeenWhatsNewReleaseId() === whatsNewLatestReleaseId) return;
+  openWhatsNewModal();
+}
+
 function badgeVal(v,label,suf){if(v==null)return'';let cls='good';if(v>90)cls='bad';else if(v>75)cls='warn';return `<span class="badge ${cls}">${label}: ${v}${suf}</span>`;}
 function badgeLatency(v){if(v==null)return'';let cls='good';if(v>500)cls='bad';else if(v>100)cls='warn';return `<span class="badge ${cls}">Latency: ${v} ms</span>`;}
 
@@ -138,6 +233,7 @@ const pendingSimOverrides=new Map();
 const SIM_OVERRIDE_TTL_MS = 60000;
 let pollTimer=null;
 let chartJsLoader=null;
+let html2canvasLoader=null;
 let cpeHistoryChart=null;
 let cpeHistoryReqId=0;
 const AP_ALERT_GRACE_SEC = 900; // 15 minutes
@@ -155,6 +251,7 @@ const AP_SIREN_PREFS_KEY = "nocwall.ap.siren.v1";
 const TAB_SIREN_PREFS_KEY = "nocwall.tab.siren.v1";
 const CARD_ORDER_PREFS_KEY = "nocwall.card.order.v1";
 const DEVICE_SNAPSHOT_KEY = "nocwall.devices.snapshot.v1";
+const WHATS_NEW_SEEN_KEY = "nocwall.whatsnew.seen.v1";
 let userPrefsLoaded=false;
 let userPrefsSaveTimer=null;
 let pollErrorCount=0;
@@ -208,6 +305,10 @@ const DEFAULT_DASH_SETTINGS = {
   sort_mode: "manual",
   group_mode: "none",
   refresh_interval: "normal",
+  theme_preset: "classic",
+  font_scale_preset: "normal",
+  browser_notifications: false,
+  alert_sound_profile: "default",
   metrics: {
     cpu: true,
     ram: true,
@@ -233,10 +334,14 @@ let sourceStatusLoading = false;
 let sourceStatusLastLoadedAt = 0;
 let demoModeEnabled = false;
 let demoModeToggleBusy = false;
+let browserNotificationsToggleBusy = false;
 let topologyCache = { nodes: [], edges: [], health: null, fetched_at: "" };
 let topologyLoading = false;
 let topologyLastFetchMs = 0;
 let topologyTrace = null;
+let whatsNewNotes = [];
+let whatsNewLatestReleaseId = "";
+let whatsNewLoaded = false;
 const TOPOLOGY_REFRESH_MS = 30000;
 let deviceSearchQuery = "";
 let deviceQuickFilter = "all";
@@ -574,6 +679,21 @@ function normalizeDashSettings(input){
   if(typeof input.refresh_interval === "string"){
     normalized.refresh_interval = normalizeRefreshInterval(input.refresh_interval);
   }
+  if(typeof input.theme_preset === "string"){
+    normalized.theme_preset = normalizeThemePreset(input.theme_preset);
+  }
+  if(typeof input.font_scale_preset === "string"){
+    normalized.font_scale_preset = normalizeFontScalePreset(input.font_scale_preset);
+  }
+  if(Object.prototype.hasOwnProperty.call(input, "browser_notifications")){
+    normalized.browser_notifications = !!input.browser_notifications;
+  }
+  if(typeof input.alert_sound_profile === "string"){
+    const p = String(input.alert_sound_profile).trim().toLowerCase();
+    if(p === "default" || p === "soft"){
+      normalized.alert_sound_profile = p;
+    }
+  }
   const metricKeys = Object.keys(normalized.metrics);
   metricKeys.forEach(key=>{
     if(input.metrics && Object.prototype.hasOwnProperty.call(input.metrics,key)){
@@ -607,6 +727,22 @@ function normalizeRefreshInterval(mode){
   return "normal";
 }
 
+function normalizeThemePreset(mode){
+  const raw = String(mode || "").trim().toLowerCase();
+  if(raw === "high_contrast" || raw === "light"){
+    return raw;
+  }
+  return "classic";
+}
+
+function normalizeFontScalePreset(mode){
+  const raw = String(mode || "").trim().toLowerCase();
+  if(raw === "large" || raw === "xlarge"){
+    return raw;
+  }
+  return "normal";
+}
+
 function normalizeQuickFilter(mode){
   const raw = String(mode || "").trim().toLowerCase();
   if(raw === "online" || raw === "offline"){
@@ -635,6 +771,20 @@ function refreshIntervalLabel(mode){
   if(m === "fast") return "2s";
   if(m === "slow") return "10s";
   return "5s";
+}
+
+function themePresetLabel(mode){
+  const m = normalizeThemePreset(mode);
+  if(m === "high_contrast") return "High Contrast";
+  if(m === "light") return "Light";
+  return "Classic";
+}
+
+function fontScalePresetLabel(mode){
+  const m = normalizeFontScalePreset(mode);
+  if(m === "large") return "Large";
+  if(m === "xlarge") return "XL";
+  return "Normal";
 }
 
 function getSuccessPollIntervalMs(){
@@ -808,6 +958,62 @@ function isMetricEnabled(metricName){
   return !!(dashSettings && dashSettings.metrics && dashSettings.metrics[metricName]);
 }
 
+function applyThemePreset(){
+  if(!document.body) return;
+  const theme = normalizeThemePreset(dashSettings && dashSettings.theme_preset);
+  document.body.classList.toggle("theme-classic", theme === "classic");
+  document.body.classList.toggle("theme-high-contrast", theme === "high_contrast");
+  document.body.classList.toggle("theme-light", theme === "light");
+}
+
+function applyFontScalePreset(){
+  if(!document.body) return;
+  const scale = normalizeFontScalePreset(dashSettings && dashSettings.font_scale_preset);
+  document.body.classList.toggle("font-scale-normal", scale === "normal");
+  document.body.classList.toggle("font-scale-large", scale === "large");
+  document.body.classList.toggle("font-scale-xlarge", scale === "xlarge");
+}
+
+function updateThemePresetButton(){
+  const btn = document.getElementById("themePresetToggleBtn");
+  if(!btn) return;
+  const theme = normalizeThemePreset(dashSettings && dashSettings.theme_preset);
+  btn.textContent = `Theme: ${themePresetLabel(theme)}`;
+  btn.classList.toggle("btn-accent", theme !== "classic");
+}
+
+function updateFontScalePresetButton(){
+  const btn = document.getElementById("fontScaleToggleBtn");
+  if(!btn) return;
+  const scale = normalizeFontScalePreset(dashSettings && dashSettings.font_scale_preset);
+  btn.textContent = `Font: ${fontScalePresetLabel(scale)}`;
+  btn.classList.toggle("btn-accent", scale !== "normal");
+}
+
+function toggleThemePreset(){
+  const order = ["classic", "high_contrast", "light"];
+  const current = normalizeThemePreset(dashSettings && dashSettings.theme_preset);
+  const idx = order.indexOf(current);
+  const next = order[(idx + 1) % order.length];
+  dashSettings.theme_preset = next;
+  applyThemePreset();
+  updateThemePresetButton();
+  saveDashSettings();
+  setSourceStatusNotice(`Theme preset set to ${themePresetLabel(next)}.`, "ok");
+}
+
+function toggleFontScalePreset(){
+  const order = ["normal", "large", "xlarge"];
+  const current = normalizeFontScalePreset(dashSettings && dashSettings.font_scale_preset);
+  const idx = order.indexOf(current);
+  const next = order[(idx + 1) % order.length];
+  dashSettings.font_scale_preset = next;
+  applyFontScalePreset();
+  updateFontScalePresetButton();
+  saveDashSettings();
+  setSourceStatusNotice(`Font scale set to ${fontScalePresetLabel(next)}.`, "ok");
+}
+
 function applyDisplayDensity(){
   if(!document.body) return;
   document.body.classList.toggle("density-compact", dashSettings.density === "compact");
@@ -839,7 +1045,11 @@ function syncDisplayControls(){
 }
 
 function applyDashboardSettings(){
+  applyThemePreset();
+  applyFontScalePreset();
   applyDisplayDensity();
+  updateThemePresetButton();
+  updateFontScalePresetButton();
   syncDisplayControls();
   syncViewControls();
 }
@@ -896,8 +1106,8 @@ function bindDisplayControls(){
 }
 
 function initDisplaySettings(){
+  applyDashboardSettings();
   if(featureEnabled("display_controls")){
-    applyDashboardSettings();
     bindDisplayControls();
   } else {
     const controls = document.querySelector('.display-controls');
@@ -956,6 +1166,8 @@ async function saveUserPrefsToServer(){
         localStorage.setItem(CARD_ORDER_PREFS_KEY, JSON.stringify(cardOrderPrefs));
       }catch(_){ }
       syncTabSirenButtons();
+      updateBrowserNotificationsToggleButton();
+      updateAlertSoundProfileButton();
     }
   }catch(_){ }
 }
@@ -980,6 +1192,8 @@ async function loadUserPrefsFromServer(){
       syncTabSirenButtons();
       syncViewControls();
       setActiveTab(dashSettings.default_tab, { persist: false });
+      updateBrowserNotificationsToggleButton();
+      updateAlertSoundProfileButton();
       renderDevices();
     }
   }catch(_){ }
@@ -1044,6 +1258,119 @@ async function toggleDemoMode(){
   } finally {
     demoModeToggleBusy = false;
     updateDemoModeToggleButton();
+  }
+}
+
+function supportsBrowserNotifications(){
+  return typeof window !== "undefined" && "Notification" in window;
+}
+
+function browserNotificationsEnabled(){
+  return !!(dashSettings && dashSettings.browser_notifications);
+}
+
+function updateBrowserNotificationsToggleButton(){
+  const btn = document.getElementById("browserNotificationsToggleBtn");
+  if(!btn) return;
+  if(!supportsBrowserNotifications()){
+    btn.textContent = "Browser Alerts: N/A";
+    btn.classList.remove("btn-accent");
+    btn.disabled = true;
+    return;
+  }
+  const enabled = browserNotificationsEnabled();
+  const perm = Notification.permission;
+  let suffix = enabled ? "On" : "Off";
+  if(enabled && perm !== "granted"){
+    suffix = "Blocked";
+  } else if(!enabled && perm === "denied"){
+    suffix = "Denied";
+  }
+  btn.textContent = browserNotificationsToggleBusy ? "Saving Alerts..." : `Browser Alerts: ${suffix}`;
+  btn.classList.toggle("btn-accent", enabled && perm === "granted");
+  btn.disabled = browserNotificationsToggleBusy;
+}
+
+function setBrowserNotificationsEnabled(enabled, persist){
+  if(!dashSettings || typeof dashSettings !== "object"){
+    dashSettings = normalizeDashSettings(null);
+  }
+  dashSettings.browser_notifications = !!enabled;
+  if(persist){
+    saveDashSettings();
+  }
+  updateBrowserNotificationsToggleButton();
+}
+
+async function toggleBrowserNotifications(){
+  if(browserNotificationsToggleBusy) return;
+  if(!supportsBrowserNotifications()){
+    setSourceStatusNotice("This browser does not support desktop notifications.", "error");
+    updateBrowserNotificationsToggleButton();
+    return;
+  }
+
+  const currentlyEnabled = browserNotificationsEnabled();
+  if(currentlyEnabled){
+    setBrowserNotificationsEnabled(false, true);
+    setSourceStatusNotice("Browser offline alerts disabled.", "ok");
+    return;
+  }
+
+  browserNotificationsToggleBusy = true;
+  updateBrowserNotificationsToggleButton();
+  try{
+    if(Notification.permission === "denied"){
+      setSourceStatusNotice("Notifications are blocked for this site. Allow them in browser site settings.", "error");
+      setBrowserNotificationsEnabled(false, false);
+      return;
+    }
+    let permission = Notification.permission;
+    if(permission === "default"){
+      permission = await Notification.requestPermission();
+    }
+    if(permission !== "granted"){
+      setBrowserNotificationsEnabled(false, true);
+      setSourceStatusNotice("Browser notification permission not granted.", "error");
+      return;
+    }
+    setBrowserNotificationsEnabled(true, true);
+    setSourceStatusNotice("Browser offline alerts enabled.", "ok");
+  }catch(_){
+    setSourceStatusNotice("Unable to update browser notifications.", "error");
+  } finally {
+    browserNotificationsToggleBusy = false;
+    updateBrowserNotificationsToggleButton();
+  }
+}
+
+function getAlertSoundProfile(){
+  const profile = String((dashSettings && dashSettings.alert_sound_profile) || "default").trim().toLowerCase();
+  return profile === "soft" ? "soft" : "default";
+}
+
+function getAlertPlaybackVolume(){
+  return getAlertSoundProfile() === "soft" ? 0.28 : 1;
+}
+
+function updateAlertSoundProfileButton(){
+  const btn = document.getElementById("alertSoundProfileToggleBtn");
+  if(!btn) return;
+  const profile = getAlertSoundProfile();
+  btn.textContent = profile === "soft" ? "Chime: Soft" : "Chime: Default";
+  btn.classList.toggle("btn-accent", profile === "soft");
+}
+
+function toggleAlertSoundProfile(){
+  const current = getAlertSoundProfile();
+  const next = current === "soft" ? "default" : "soft";
+  dashSettings.alert_sound_profile = next;
+  saveDashSettings();
+  updateAlertSoundProfileButton();
+  if(next === "soft"){
+    setSourceStatusNotice("Soft chime profile enabled (lower alert volume).", "ok");
+  } else {
+    setSourceStatusNotice("Default chime profile enabled.", "ok");
   }
 }
 
@@ -1898,8 +2225,41 @@ function ensurePollBannerTicker(){
   pollBannerTickTimer = setInterval(()=>updateDataHealthBanner(), 1000);
 }
 
+function notifyOfflineTransitions(transitions, fromServer){
+  if(!fromServer) return;
+  if(demoModeEnabled) return;
+  if(!browserNotificationsEnabled()) return;
+  if(!supportsBrowserNotifications()) return;
+  if(Notification.permission !== "granted") return;
+  if(!Array.isArray(transitions) || transitions.length === 0) return;
+
+  transitions.slice(0, 8).forEach(device=>{
+    if(!device || !device.id || device.online) return;
+    if(device.simulate) return;
+    const name = String(device.name || device.id);
+    const role = titleCaseLabel(device && device.role) || "Device";
+    const site = String(device.site || "Unknown site");
+    const body = `${role} at ${site} is now offline.`;
+    try{
+      const notice = new Notification(`Offline: ${name}`, {
+        body,
+        tag: `nocwall-offline-${device.id}`,
+        renotify: true
+      });
+      notice.onclick = ()=>{
+        try{ window.focus(); }catch(_){ }
+        try{ notice.close(); }catch(_){ }
+      };
+      setTimeout(()=>{
+        try{ notice.close(); }catch(_){ }
+      }, 12000);
+    }catch(_){ }
+  });
+}
+
 function updateDeviceStatusMemory(devices, nowMs){
   const list = Array.isArray(devices) ? devices : [];
+  const transitions = [];
   const seen = new Set();
   list.forEach(device=>{
     const id = String((device && device.id) || "").trim();
@@ -1914,6 +2274,9 @@ function updateDeviceStatusMemory(devices, nowMs){
     if(record.online !== online){
       record.online = online;
       record.changedAtMs = nowMs;
+      if(!online){
+        transitions.push(device);
+      }
     }
     record.seenAtMs = nowMs;
   });
@@ -1923,6 +2286,7 @@ function updateDeviceStatusMemory(devices, nowMs){
       deviceStatusMemory.delete(id);
     }
   });
+  return transitions;
 }
 
 function getDeviceTransitionClass(device, nowMs){
@@ -2056,7 +2420,7 @@ function unlockAudio(){
   const prevMuted=a.muted;
   const prevVol=a.volume;
   a.muted=false;
-  a.volume=0.05; // brief quiet blip
+  a.volume=Math.min(0.05, getAlertPlaybackVolume()); // brief quiet blip
   const p=a.play();
   const onSuccess=()=>{
     setTimeout(()=>{ try{ a.pause(); a.currentTime=0; a.volume=prevVol; a.muted=prevMuted; }catch(_){}; audioUnlocked=true; const b=document.getElementById('enableSoundBtn'); if(b) b.style.display='none'; }, 120);
@@ -2127,7 +2491,8 @@ function renderDevices(meta, opts){
       pending.expires = nowMs + SIM_OVERRIDE_TTL_MS;
     }
   });
-  updateDeviceStatusMemory(devices, nowMs);
+  const offlineTransitions = updateDeviceStatusMemory(devices, nowMs);
+  notifyOfflineTransitions(offlineTransitions, fromServer);
 
   const allGateways = devices.filter(d=>d.gateway);
   const allAps = devices.filter(d=>!d.gateway && d.ap);
@@ -2270,7 +2635,7 @@ function renderDevices(meta, opts){
         if(stillAlert){
           const a=document.getElementById('siren');
           if(a){
-            try{ a.pause(); a.currentTime=0; a.muted=false; a.volume=1; }catch(_){ }
+            try{ a.pause(); a.currentTime=0; a.muted=false; a.volume=getAlertPlaybackVolume(); }catch(_){ }
             const pr=a.play();
             if(pr && pr.catch){ pr.catch(()=>{ const b=document.getElementById('enableSoundBtn'); if(b) b.style.display=''; }); }
           }
@@ -2403,10 +2768,66 @@ function showHistory(id,name){
   if(name){ params.set('name',name); }
   window.location.href='?'+params.toString();
 }
+
+function snapshotFileStamp(){
+  const d = new Date();
+  const pad = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+function activeDashboardTabId(){
+  const panels = Array.from(document.querySelectorAll(".tabcontent"));
+  const active = panels.find(panel=>panel && panel.style.display === "block");
+  return active && active.id ? String(active.id) : "dashboard";
+}
+
+function downloadSnapshotDataUrl(dataUrl, fileName){
+  const link = document.createElement("a");
+  link.href = dataUrl;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+async function exportDashboardPng(){
+  const btn = document.getElementById("exportPngBtn");
+  if(btn) btn.disabled = true;
+  setSourceStatusNotice("Rendering PNG snapshot...", "");
+  try{
+    const html2canvas = await ensureHtml2Canvas();
+    const target = document.body;
+    const canvas = await html2canvas(target, {
+      backgroundColor: null,
+      useCORS: true,
+      logging: false,
+      scale: Math.min(2, Math.max(1, window.devicePixelRatio || 1)),
+      windowWidth: Math.max(document.documentElement.scrollWidth, window.innerWidth),
+      windowHeight: Math.max(document.documentElement.scrollHeight, window.innerHeight),
+      scrollX: 0,
+      scrollY: -window.scrollY
+    });
+    const tab = activeDashboardTabId();
+    const fileName = `nocwall-${tab}-${snapshotFileStamp()}.png`;
+    const dataUrl = canvas.toDataURL("image/png");
+    downloadSnapshotDataUrl(dataUrl, fileName);
+    setSourceStatusNotice(`PNG snapshot exported: ${fileName}`, "ok");
+  }catch(_){
+    setSourceStatusNotice("Unable to export PNG snapshot right now.", "error");
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
 initDisplaySettings();
 updateDemoModeToggleButton();
+updateBrowserNotificationsToggleButton();
+updateAlertSoundProfileButton();
 loadDemoModeState();
-loadUserPrefsFromServer().finally(()=>{ ensureFirstRunSourceWizard(); });
+loadUserPrefsFromServer().finally(()=>{
+  ensureFirstRunSourceWizard();
+  maybePromptWhatsNew();
+});
 loadSourceStatus(true);
 fetchInventoryOverview(true);
 loadTopology(true);
@@ -2743,6 +3164,28 @@ function ensureChartJs(){
   return chartJsLoader;
 }
 
+function ensureHtml2Canvas(){
+  if(typeof window !== "undefined" && typeof window.html2canvas === "function"){
+    return Promise.resolve(window.html2canvas);
+  }
+  if(html2canvasLoader) return html2canvasLoader;
+  html2canvasLoader = new Promise((resolve,reject)=>{
+    const script = document.createElement("script");
+    script.src = "https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js";
+    script.async = true;
+    script.onload = ()=>{
+      if(typeof window.html2canvas === "function"){
+        resolve(window.html2canvas);
+        return;
+      }
+      reject(new Error("html2canvas-missing"));
+    };
+    script.onerror = ()=>reject(new Error("html2canvas-load-failed"));
+    document.head.appendChild(script);
+  });
+  return html2canvasLoader;
+}
+
 function getCpeHistoryChart(){
   if(cpeHistoryChart) return cpeHistoryChart;
   if(typeof Chart==='undefined') return null;
@@ -2981,6 +3424,10 @@ document.addEventListener('keydown',ev=>{
     const wizardModal=document.getElementById('setupWizardModal');
     if(wizardModal && wizardModal.style.display==='block'){
       hideSetupWizard();
+    }
+    const whatsNewModal=document.getElementById('whatsNewModal');
+    if(whatsNewModal && whatsNewModal.style.display==='block'){
+      closeWhatsNewModal();
     }
     closeShortcuts();
     return;

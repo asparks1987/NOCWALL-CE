@@ -94,6 +94,13 @@ PRO target:
   - per-account UISP source management (`Account Settings`) with multiple UISP URLs and tokens
   - per-account demo preview toggle (dashboard header + Account Settings) for instant simulated wallboard data
   - source connectivity diagnostics panel (DNS/TLS/API reachability) in `Account Settings`
+  - local browser notification toggle for new offline events (permission-aware, account preference synced)
+  - optional soft chime profile for lower-volume siren alerts
+  - theme presets (`Classic`, `High Contrast`, `Light`) with account persistence
+  - wall-distance font scaling presets (`Normal`, `Large`, `XL`) with account persistence
+  - one-click wallboard PNG export for shift/NOC report snapshots
+  - preferences JSON backup/restore in Account Settings
+  - in-app "What's New" release notes modal with seen-state tracking
 - New dashboard display controls:
   - persistent card density (`Normal`, `Compact`)
   - metric toggles (CPU, RAM, Temp, Latency, Uptime, Outage)
@@ -188,6 +195,17 @@ SBC/edge bootstrap (recommended for Raspberry Pi and similar devices):
 chmod +x ./NOCWALL.sh
 ./NOCWALL.sh /install
 ./NOCWALL.sh /deploy
+```
+
+SBC install with Stripe billing secrets:
+
+```bash
+./NOCWALL.sh /install \
+  --billing-mode stripe \
+  --billing-self-activate false \
+  --stripe-secret-key "sk_test_..." \
+  --stripe-webhook-secret "whsec_..." \
+  --stripe-price-id "price_..."
 ```
 
 Deploy CE + API + PRO extension profile:
@@ -370,6 +388,17 @@ curl -X POST http://localhost:8080/events/ingest \
   -H "Content-Type: application/json" \
   -d '{"type":"device_down","device_id":"demo-1","site":"lab","message":"demo down"}'
 ```
+
+## CE Feature Pack Smoke
+
+Run CE endpoint smoke coverage:
+
+```bash
+BASE_URL=http://localhost ./scripts/ce-feature-pack-smoke.sh
+```
+
+Manual CE feature validation matrix:
+- `docs/ce_feature_pack_test_matrix.md`
 
 Create/refresh an agent (stub):
 

@@ -168,13 +168,20 @@ They avoid PRO-only domains (team workflows, correlation, automation, enterprise
 16. `[x]` CEF16 `[CE]` "Last updated" stale-data warning banner
 17. `[x]` CEF17 `[CE]` API degraded banner with retry backoff indicator
 18. `[x]` CEF18 `[CE]` Read-only fallback rendering from last known cache snapshot
-19. `[ ]` CEF19 `[CE]` Local browser notification option for new offline events
-20. `[ ]` CEF20 `[CE]` Optional soft chime mode (lower-volume alert profile)
-21. `[ ]` CEF21 `[CE]` Theme presets (classic/high-contrast/light) with persistence
-22. `[ ]` CEF22 `[CE]` Font scaling presets for distant wall displays
-23. `[ ]` CEF23 `[CE]` Card print/export to PNG snapshot for NOC reports
-24. `[ ]` CEF24 `[CE]` Import/export dashboard preferences JSON
-25. `[ ]` CEF25 `[CE]` In-app "What's new" changelog modal per release
+19. `[x]` CEF19 `[CE]` Local browser notification option for new offline events  
+   - Notes: Added dashboard header toggle with account-synced preference, permission handling, and desktop notifications on live online->offline transitions.
+20. `[x]` CEF20 `[CE]` Optional soft chime mode (lower-volume alert profile)  
+   - Notes: Added account-synced alert sound profile toggle (`default`/`soft`) and applied lower playback volume to siren alert execution.
+21. `[x]` CEF21 `[CE]` Theme presets (classic/high-contrast/light) with persistence  
+   - Notes: Added account-synced theme preset setting with dashboard toggle and CSS theme classes for classic, high-contrast, and light modes.
+22. `[x]` CEF22 `[CE]` Font scaling presets for distant wall displays  
+   - Notes: Added account-synced font scaling preset (`normal`/`large`/`xlarge`) with dashboard toggle and applied scaling classes.
+23. `[x]` CEF23 `[CE]` Card print/export to PNG snapshot for NOC reports  
+   - Notes: Added dashboard header `Export PNG` action that captures current wallboard view and downloads a timestamped PNG report snapshot.
+24. `[x]` CEF24 `[CE]` Import/export dashboard preferences JSON  
+   - Notes: Added Account Settings export/import workflow for preferences JSON (dashboard settings, siren prefs, and card order) using existing prefs APIs.
+25. `[x]` CEF25 `[CE]` In-app "What's new" changelog modal per release  
+   - Notes: Added backend release-notes payload and dashboard modal with per-release seen tracking to surface “What’s New” updates in-app.
 
 ## Phase CE-A - CE Adoption and Wallboard Polish
 
@@ -201,14 +208,22 @@ They avoid PRO-only domains (team workflows, correlation, automation, enterprise
 - [x] RCE16 Add read-only cached snapshot fallback path.
 
 ### Epic CE-A3 - CE Feature Pack 3 (CEF19-CEF25)
-- [ ] RCE17 Add browser notifications option for offline events.
-- [ ] RCE18 Add soft chime alert profile option.
-- [ ] RCE19 Add theme presets and persistence.
-- [ ] RCE20 Add wall-distance font scaling presets.
-- [ ] RCE21 Add dashboard PNG snapshot export.
-- [ ] RCE22 Add settings JSON import/export.
-- [ ] RCE23 Add in-app release changelog modal.
-- [ ] RCE24 Add CE-only tests and docs for all CE feature-pack flows.
+- [x] RCE17 Add browser notifications option for offline events.  
+  - Notes: Implemented `browser_notifications` preference in dashboard settings, UI toggle button, and transition-driven Notification API dispatch for new offline events.
+- [x] RCE18 Add soft chime alert profile option.  
+  - Notes: Implemented `alert_sound_profile` dashboard setting, dashboard header toggle, and soft-profile volume application during alert playback.
+- [x] RCE19 Add theme presets and persistence.  
+  - Notes: Implemented `theme_preset` dashboard setting, cycle toggle in header, and persistent class-based theme application.
+- [x] RCE20 Add wall-distance font scaling presets.  
+  - Notes: Implemented `font_scale_preset` dashboard setting, cycle toggle in header, and scaling via font-scale body classes.
+- [x] RCE21 Add dashboard PNG snapshot export.  
+  - Notes: Implemented client-side PNG export via `html2canvas` lazy-load, with active-tab filename tagging and in-app status notices.
+- [x] RCE22 Add settings JSON import/export.  
+  - Notes: Implemented JSON backup export and validated import handlers in Account Settings, including support for wrapped and raw preferences payloads.
+- [x] RCE23 Add in-app release changelog modal.  
+  - Notes: Implemented `?ajax=whats_new`, header button/modal rendering release notes, and local per-release seen persistence.
+- [x] RCE24 Add CE-only tests and docs for all CE feature-pack flows.  
+  - Notes: Added `scripts/ce-feature-pack-smoke.sh` for CE endpoint smoke coverage and `docs/ce_feature_pack_test_matrix.md` manual validation matrix across CEF01-CEF25.
 
 ## 50 Net-New Features (Not Previously Planned in BURNDOWN)
 
