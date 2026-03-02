@@ -3,7 +3,7 @@
 Inventory of current codepaths and components.
 
 ## PHP UI + Server
-- `index.php`: Single-page UI and AJAX handler (devices, history, gotify test, TLS provisioning, auth, ack/simulate), SQLite init, Gotify send, TLS modal, cache handling.
+- `index.php`: Single-page UI and AJAX handler (devices, history, WAN SLA windows, gotify test, TLS provisioning, auth, ack/simulate), SQLite init, Gotify send, TLS modal, cache handling.
 - `cache/`: Runtime state (status cache, metrics.sqlite, auth.json, Gotify token/logs).
 
 ## Frontend Assets
