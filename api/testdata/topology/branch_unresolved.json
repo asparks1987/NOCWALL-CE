@@ -1,0 +1,42 @@
+[
+  {
+    "source": "fixture_branch",
+    "device_id": "core-1",
+    "device": "Core Router",
+    "hostname": "core-1.local",
+    "mac": "20:00:00:00:00:01",
+    "serial": "SER-CORE-1",
+    "site_id": "metro-1",
+    "neighbors": [
+      {
+        "local_interface": "xe-0/0/0",
+        "neighbor_device_name": "Access Switch",
+        "neighbor_interface": "ge-0/0/1",
+        "protocol": "lldp"
+      },
+      {
+        "local_interface": "xe-0/0/1",
+        "neighbor_identity_hint": "upstream-isp-edge",
+        "neighbor_interface": "xe-1/0/0",
+        "protocol": "lldp"
+      }
+    ]
+  },
+  {
+    "source": "fixture_branch",
+    "device_id": "access-1",
+    "device": "Access Switch",
+    "hostname": "access-1.local",
+    "mac": "20:00:00:00:00:02",
+    "serial": "SER-ACCESS-1",
+    "site_id": "metro-1",
+    "neighbors": [
+      {
+        "local_interface": "ge-0/0/2",
+        "neighbor_identity_hint": "camera-stack-a",
+        "neighbor_interface": "eth0",
+        "protocol": "lldp"
+      }
+    ]
+  }
+]

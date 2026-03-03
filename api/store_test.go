@@ -2,10 +2,40 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func loadTopologyFixture(t *testing.T, relativePath string) []TelemetryIngestRequest {
+	t.Helper()
+	path := filepath.Join("testdata", "topology", relativePath)
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read topology fixture %s: %v", path, err)
+	}
+	var reqs []TelemetryIngestRequest
+	if err := json.Unmarshal(body, &reqs); err != nil {
+		t.Fatalf("decode topology fixture %s: %v", path, err)
+	}
+	if len(reqs) == 0 {
+		t.Fatalf("topology fixture %s contained no requests", path)
+	}
+	return reqs
+}
+
+func ingestTelemetryBatch(t *testing.T, s *Store, reqs []TelemetryIngestRequest) {
+	t.Helper()
+	for i, req := range reqs {
+		if req.DeviceID == "" {
+			t.Fatalf("fixture request at index %d missing device_id", i)
+		}
+		if _, _, ok := s.IngestTelemetry(req); !ok {
+			t.Fatalf("fixture ingest failed index=%d device_id=%s", i, req.DeviceID)
+		}
+	}
+}
 
 func findIdentityByPrimary(t *testing.T, s *Store, primaryID string) DeviceIdentity {
 	t.Helper()
@@ -598,5 +628,74 @@ func TestHAPairWatcherEmitsFailoverAndRecoveryEvents(t *testing.T) {
 	}
 	if eventsAfterRecovery[0].ToState != "redundant" {
 		t.Fatalf("expected latest event to_state=redundant, got=%s", eventsAfterRecovery[0].ToState)
+	}
+}
+
+func TestTopologyFixtureTriangleResolvedPath(t *testing.T) {
+	s := LoadStore("")
+	seed := loadTopologyFixture(t, "triangle_resolved.json")
+	ingestTelemetryBatch(t, s, seed)
+
+	identA := findIdentityByPrimary(t, s, "tri-a")
+	identB := findIdentityByPrimary(t, s, "tri-b")
+	identC := findIdentityByPrimary(t, s, "tri-c")
+
+	nodes, edges, found, msg := s.TraceTopologyPath(identA.IdentityID, identC.IdentityID, "", "")
+	if !found {
+		t.Fatalf("expected topology path found tri-a->tri-c, msg=%s", msg)
+	}
+	if len(nodes) < 2 || len(edges) < 1 {
+		t.Fatalf("expected non-empty path result, nodes=%d edges=%d", len(nodes), len(edges))
+	}
+
+	allEdges, _, _ := s.ListTopologyEdges(200, "")
+	nodeA := topologyNodeIDForIdentity(identA.IdentityID)
+	nodeB := topologyNodeIDForIdentity(identB.IdentityID)
+	nodeC := topologyNodeIDForIdentity(identC.IdentityID)
+	resolvedPairs := map[string]bool{}
+	for _, edge := range allEdges {
+		if edge.Resolved {
+			resolvedPairs[fmt.Sprintf("%s>%s", edge.FromNodeID, edge.ToNodeID)] = true
+		}
+	}
+	if !resolvedPairs[fmt.Sprintf("%s>%s", nodeA, nodeB)] {
+		t.Fatalf("expected resolved edge tri-a -> tri-b")
+	}
+	if !resolvedPairs[fmt.Sprintf("%s>%s", nodeA, nodeC)] {
+		t.Fatalf("expected resolved edge tri-a -> tri-c")
+	}
+
+	health := s.TopologyHealth()
+	if health.ManagedNodeCount < 3 {
+		t.Fatalf("expected at least three managed nodes for triangle fixture, got=%d", health.ManagedNodeCount)
+	}
+	if health.UnknownNeighborEdges != 0 {
+		t.Fatalf("expected zero unresolved edges for triangle fixture, got=%d", health.UnknownNeighborEdges)
+	}
+}
+
+func TestTopologyFixtureBranchIncludesUnknownNeighbors(t *testing.T) {
+	s := LoadStore("")
+	seed := loadTopologyFixture(t, "branch_unresolved.json")
+	ingestTelemetryBatch(t, s, seed)
+
+	nodes, _, _ := s.ListTopologyNodes(200, "")
+	foundExternal := false
+	for _, node := range nodes {
+		if node.Kind == "external" {
+			foundExternal = true
+			break
+		}
+	}
+	if !foundExternal {
+		t.Fatalf("expected external topology nodes from unresolved neighbors")
+	}
+
+	health := s.TopologyHealth()
+	if health.UnknownNeighborEdges < 2 {
+		t.Fatalf("expected at least two unresolved neighbor edges, got=%d", health.UnknownNeighborEdges)
+	}
+	if health.ManagedNodeCount < 2 {
+		t.Fatalf("expected at least two managed nodes in branch fixture, got=%d", health.ManagedNodeCount)
 	}
 }
