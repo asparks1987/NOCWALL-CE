@@ -1,0 +1,51 @@
+[
+  {
+    "source": "fixture_triangle",
+    "device_id": "tri-a",
+    "device": "Triangle A",
+    "hostname": "tri-a.local",
+    "mac": "10:00:00:00:00:01",
+    "serial": "SER-TRI-A",
+    "site_id": "lab-a",
+    "neighbors": [
+      {
+        "local_interface": "eth0",
+        "neighbor_device_name": "Triangle B",
+        "neighbor_interface": "eth0",
+        "protocol": "lldp"
+      },
+      {
+        "local_interface": "eth1",
+        "neighbor_device_name": "Triangle C",
+        "neighbor_interface": "eth0",
+        "protocol": "lldp"
+      }
+    ]
+  },
+  {
+    "source": "fixture_triangle",
+    "device_id": "tri-b",
+    "device": "Triangle B",
+    "hostname": "tri-b.local",
+    "mac": "10:00:00:00:00:02",
+    "serial": "SER-TRI-B",
+    "site_id": "lab-a",
+    "neighbors": [
+      {
+        "local_interface": "eth1",
+        "neighbor_device_name": "Triangle C",
+        "neighbor_interface": "eth1",
+        "protocol": "lldp"
+      }
+    ]
+  },
+  {
+    "source": "fixture_triangle",
+    "device_id": "tri-c",
+    "device": "Triangle C",
+    "hostname": "tri-c.local",
+    "mac": "10:00:00:00:00:03",
+    "serial": "SER-TRI-C",
+    "site_id": "lab-a"
+  }
+]
