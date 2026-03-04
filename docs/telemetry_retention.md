@@ -1,8 +1,8 @@
-# Telemetry Retention (R17)
+# Telemetry Reliability Layer (R17-R19)
 
-NOCWALL now applies a tiered retention policy to `source_observations` during ingest and store initialization.
+NOCWALL now applies retention, sampling, and missing-signal controls for telemetry reliability.
 
-## Tier policy
+## Retention tier policy (R17)
 
 - **Hot**: up to 24 hours old, keep all points.
 - **Warm**: older than 24 hours and up to 7 days old, keep every 3rd point.
@@ -11,7 +11,29 @@ NOCWALL now applies a tiered retention policy to `source_observations` during in
 
 A hard cap of `maxSourceObservations` is still enforced after tier compaction.
 
-## Diagnostics API
+## Sampling governor and queue priority (R18)
+
+Telemetry ingest now applies per-device-class sampling intervals and poll-queue priorities:
+
+- `core`: 5s minimum sample interval, queue priority 0
+- `distribution`: 10s minimum sample interval, queue priority 1
+- `access`: 15s minimum sample interval, queue priority 2
+- `edge`: 30s minimum sample interval, queue priority 3
+- `default`: 20s minimum sample interval, queue priority 4
+
+State transitions (`device_down`, `offline`, `device_up`, `online`) bypass sample suppression.
+Polled source events are ingested in queue-priority order before persistence.
+
+## Gap detector (R19)
+
+NOCWALL now detects missing telemetry signals and manages `telemetry_gap` incidents:
+
+- Gap threshold is class interval `x4` (minimum 2 minutes).
+- Detector creates unresolved `telemetry_gap` incidents when stale.
+- Detector resolves active `telemetry_gap` incidents when signal freshness recovers.
+- Gap detection runs during telemetry ingest and during source poller loops.
+
+## Diagnostics APIs
 
 Use `GET /telemetry/retention` to inspect the latest retention run summary:
 
@@ -20,4 +42,11 @@ Use `GET /telemetry/retention` to inspect the latest retention run summary:
 - `dropped_count`
 - per-tier retained counts and sampling controls
 
-This endpoint is intended for PRO telemetry validation and operational diagnostics.
+Use `GET /telemetry/governor` to inspect the current governor state:
+
+- `accepted_samples`
+- `dropped_samples`
+- `active_gap_incidents`
+- class rules with interval and queue priority
+
+These endpoints are intended for PRO telemetry validation and operational diagnostics.

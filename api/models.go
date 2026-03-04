@@ -220,6 +220,29 @@ type TelemetryRetentionSummary struct {
 	Tiers        []TelemetryRetentionTier `json:"tiers"`
 }
 
+type TelemetryClassGovernorRule struct {
+	DeviceClass         string   `json:"device_class"`
+	MinSampleIntervalMs int64    `json:"min_sample_interval_ms"`
+	QueuePriority       int      `json:"queue_priority"`
+	Roles               []string `json:"roles,omitempty"`
+}
+
+type TelemetryIngestDecision struct {
+	Accepted            bool   `json:"accepted"`
+	DeviceClass         string `json:"device_class"`
+	QueuePriority       int    `json:"queue_priority"`
+	MinSampleIntervalMs int64  `json:"min_sample_interval_ms"`
+	Reason              string `json:"reason,omitempty"`
+}
+
+type TelemetryGovernorStatus struct {
+	LastEvaluatedAtMs  int64                        `json:"last_evaluated_at_ms"`
+	AcceptedSamples    int64                        `json:"accepted_samples"`
+	DroppedSamples     int64                        `json:"dropped_samples"`
+	ActiveGapIncidents int                          `json:"active_gap_incidents"`
+	Rules              []TelemetryClassGovernorRule `json:"rules"`
+}
+
 type InventoryInterfacesResponse struct {
 	LastUpdated int64             `json:"last_updated"`
 	Count       int               `json:"count"`
@@ -417,19 +440,20 @@ type SourcePollRequest struct {
 }
 
 type SourcePollResponse struct {
-	Source           string `json:"source"`
-	Cursor           string `json:"cursor"`
-	Fetched          int    `json:"fetched"`
-	Normalized       int    `json:"normalized"`
-	Emitted          int    `json:"emitted"`
-	Deduped          int    `json:"deduped"`
-	Ingested         int    `json:"ingested"`
-	IncidentsCreated int    `json:"incidents_created"`
-	Backfill         bool   `json:"backfill"`
-	Demo             bool   `json:"demo"`
-	DurationMs       int64  `json:"duration_ms"`
-	Stub             bool   `json:"stub"`
-	Error            string `json:"error,omitempty"`
+	Source            string `json:"source"`
+	Cursor            string `json:"cursor"`
+	Fetched           int    `json:"fetched"`
+	Normalized        int    `json:"normalized"`
+	Emitted           int    `json:"emitted"`
+	Deduped           int    `json:"deduped"`
+	Ingested          int    `json:"ingested"`
+	DroppedByGovernor int    `json:"dropped_by_governor"`
+	IncidentsCreated  int    `json:"incidents_created"`
+	Backfill          bool   `json:"backfill"`
+	Demo              bool   `json:"demo"`
+	DurationMs        int64  `json:"duration_ms"`
+	Stub              bool   `json:"stub"`
+	Error             string `json:"error,omitempty"`
 }
 
 type SourceStatus struct {

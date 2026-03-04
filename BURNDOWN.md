@@ -331,17 +331,11 @@ They avoid PRO-only domains (team workflows, correlation, automation, enterprise
 
 ### Epic 3 - Telemetry Reliability Layer (F11-F15)
 - [x] R17 Implement retention policy engine with hot/warm/cold partitions.
-<<<<<<< ours
-<<<<<<< ours
-  - Notes: Added persisted telemetry tier partitions (`telemetry_hot`/`telemetry_warm`/`telemetry_cold`) with policy-driven window/cap controls, ingest-time retention compaction/promotions, migration backfill from existing observations, and store tests covering tier promotion/pruning and cap enforcement.
-=======
   - Notes: Added tiered source-observation retention compaction (hot/warm/cold windows), persisted last-run retention summary in store state, and exposed a PRO telemetry retention API endpoint for diagnostics.
->>>>>>> theirs
-=======
-  - Notes: Added tiered source-observation retention compaction (hot/warm/cold windows), persisted last-run retention summary in store state, and exposed a PRO telemetry retention API endpoint for diagnostics.
->>>>>>> theirs
-- [ ] R18 Add per-device-class polling/sampling governor and queue priorities.
-- [ ] R19 Add telemetry gap detector and missing-signal incident generation.
+- [x] R18 Add per-device-class polling/sampling governor and queue priorities.
+  - Notes: Added normalized per-device-class governor rules with queue priorities, sample-interval enforcement in telemetry ingest, source-event priority ordering, drop accounting, and telemetry governor diagnostics at `GET /telemetry/governor`.
+- [x] R19 Add telemetry gap detector and missing-signal incident generation.
+  - Notes: Added class-threshold-based telemetry gap detection with `telemetry_gap` incident create/resolve flow, poller gap-evaluation hooks, and regression tests for incident lifecycle behavior.
 - [ ] R20 Add clock skew checks at ingest and normalize timestamps with source confidence.
 - [ ] R21 Compute source quality scorecards (freshness, completeness, error rate).
 - [ ] R22 Add API and UI views for data-quality and ingestion health.

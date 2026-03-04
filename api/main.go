@@ -72,16 +72,18 @@ func main() {
 			UispBaseURL: uispBase,
 			APIBaseURL:  apiBase,
 			FeatureFlags: map[string]bool{
-				"native_api":                 true,
-				"agent_ingest":               true,
-				"events_ingest":              true,
-				"source_uisp_poll":           true,
-				"topology_api":               true,
-				"topology_path_trace":        true,
-				"topology_ha_watcher":        true,
-				"source_poll_background":     pollSec > 0,
-				"cloud_multi_tenant_stub":    true,
-				"connector_multivendor_stub": true,
+				"native_api":                  true,
+				"agent_ingest":                true,
+				"events_ingest":               true,
+				"source_uisp_poll":            true,
+				"topology_api":                true,
+				"topology_path_trace":         true,
+				"topology_ha_watcher":         true,
+				"telemetry_sampling_governor": true,
+				"telemetry_gap_detector":      true,
+				"source_poll_background":      pollSec > 0,
+				"cloud_multi_tenant_stub":     true,
+				"connector_multivendor_stub":  true,
 			},
 			PushRegister: apiBase + "/push/register",
 			Environment:  getenv("APP_ENV", "dev"),
@@ -127,6 +129,10 @@ func main() {
 
 	app.Get("/telemetry/retention", authMiddleware, func(c *fiber.Ctx) error {
 		return c.JSON(store.LastRetentionSummary())
+	})
+
+	app.Get("/telemetry/governor", authMiddleware, func(c *fiber.Ctx) error {
+		return c.JSON(store.TelemetryGovernorStatus())
 	})
 
 	app.Get("/sources/uisp/status", authMiddleware, func(c *fiber.Ctx) error {
@@ -352,8 +358,9 @@ func main() {
 			resp.Stub = true
 			return c.Status(http.StatusBadGateway).JSON(resp)
 		}
-		ingested, incidents := ingestSourceEvents(store, batch.Events)
+		ingested, incidents, dropped := ingestSourceEvents(store, batch.Events)
 		batch.Response.Ingested = ingested
+		batch.Response.DroppedByGovernor = dropped
 		batch.Response.IncidentsCreated = incidents
 		batch.Response.Stub = true
 		logger.Info("source_poll_manual",
@@ -362,6 +369,7 @@ func main() {
 			"normalized", batch.Response.Normalized,
 			"emitted", batch.Response.Emitted,
 			"ingested", ingested,
+			"dropped_by_governor", dropped,
 			"incidents", incidents,
 			"demo", batch.Response.Demo,
 		)

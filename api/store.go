@@ -14,18 +14,26 @@ import (
 )
 
 const (
-	storeSchemaVersion      = 3
+	storeSchemaVersion      = 4
 	maxSourceObservations   = 10000
 	maxDriftSnapshots       = 4000
 	maxDeviceInterfaces     = 20000
 	maxNeighborLinks        = 20000
 	maxHAFailoverEvents     = 4000
+	maxSamplingStateDevices = 20000
 	defaultHotRetentionMs   = int64((6 * time.Hour) / time.Millisecond)
 	defaultWarmRetentionMs  = int64((7 * 24 * time.Hour) / time.Millisecond)
 	defaultColdRetentionMs  = int64((90 * 24 * time.Hour) / time.Millisecond)
 	defaultHotMaxSamples    = 5000
 	defaultWarmMaxSamples   = 20000
 	defaultColdMaxSamples   = 100000
+	defaultCoreSampleMs     = int64((5 * time.Second) / time.Millisecond)
+	defaultDistSampleMs     = int64((10 * time.Second) / time.Millisecond)
+	defaultAccessSampleMs   = int64((15 * time.Second) / time.Millisecond)
+	defaultEdgeSampleMs     = int64((30 * time.Second) / time.Millisecond)
+	defaultGenericSampleMs  = int64((20 * time.Second) / time.Millisecond)
+	telemetryGapMultiplier  = int64(4)
+	minTelemetryGapMs       = int64((2 * time.Minute) / time.Millisecond)
 	identityBackfillSource  = "store_migration"
 	defaultDeviceSourceName = "ingest"
 	retentionHotHours       = 24
@@ -65,24 +73,29 @@ type TelemetrySample struct {
 type Store struct {
 	mu sync.RWMutex
 
-	Version                  int                      `json:"version"`
-	Devices                  []Device                 `json:"devices"`
-	Incidents                []Incident               `json:"incidents"`
-	Agents                   []Agent                  `json:"agents"`
-	PushTokens               []PushRegisterRequest    `json:"push_tokens"`
-	Users                    []User                   `json:"users"`
-	DeviceIdentities         []DeviceIdentity         `json:"device_identities"`
-	DeviceInterfaces         []DeviceInterface        `json:"device_interfaces"`
-	NeighborLinks            []NeighborLink           `json:"neighbor_links"`
-	HardwareProfiles         []HardwareProfile        `json:"hardware_profiles"`
-	SourceObservations       []SourceObservation      `json:"source_observations"`
-	DriftSnapshots           []DriftSnapshot          `json:"drift_snapshots"`
-	HAPairs                  []HAPairStatus           `json:"ha_pairs"`
-	HAFailoverEvents         []HAFailoverEvent        `json:"ha_failover_events"`
-	TelemetryRetentionPolicy TelemetryRetentionPolicy `json:"telemetry_retention_policy"`
-	TelemetryHot             []TelemetrySample        `json:"telemetry_hot"`
-	TelemetryWarm            []TelemetrySample        `json:"telemetry_warm"`
-	TelemetryCold            []TelemetrySample        `json:"telemetry_cold"`
+	Version                     int                          `json:"version"`
+	Devices                     []Device                     `json:"devices"`
+	Incidents                   []Incident                   `json:"incidents"`
+	Agents                      []Agent                      `json:"agents"`
+	PushTokens                  []PushRegisterRequest        `json:"push_tokens"`
+	Users                       []User                       `json:"users"`
+	DeviceIdentities            []DeviceIdentity             `json:"device_identities"`
+	DeviceInterfaces            []DeviceInterface            `json:"device_interfaces"`
+	NeighborLinks               []NeighborLink               `json:"neighbor_links"`
+	HardwareProfiles            []HardwareProfile            `json:"hardware_profiles"`
+	SourceObservations          []SourceObservation          `json:"source_observations"`
+	DriftSnapshots              []DriftSnapshot              `json:"drift_snapshots"`
+	HAPairs                     []HAPairStatus               `json:"ha_pairs"`
+	HAFailoverEvents            []HAFailoverEvent            `json:"ha_failover_events"`
+	TelemetryRetentionPolicy    TelemetryRetentionPolicy     `json:"telemetry_retention_policy"`
+	TelemetryGovernorRules      []TelemetryClassGovernorRule `json:"telemetry_governor_rules"`
+	TelemetryAcceptedSamples    int64                        `json:"telemetry_accepted_samples"`
+	TelemetryDroppedSamples     int64                        `json:"telemetry_dropped_samples"`
+	TelemetryGovernorLastEvalMs int64                        `json:"telemetry_governor_last_eval_ms"`
+	TelemetryHot                []TelemetrySample            `json:"telemetry_hot"`
+	TelemetryWarm               []TelemetrySample            `json:"telemetry_warm"`
+	TelemetryCold               []TelemetrySample            `json:"telemetry_cold"`
+	TelemetryLastByDevice       map[string]int64             `json:"telemetry_last_by_device,omitempty"`
 
 	filePath      string
 	identityIndex map[string]string
@@ -90,24 +103,29 @@ type Store struct {
 }
 
 type storePersist struct {
-	Version                  int                      `json:"version"`
-	Devices                  []Device                 `json:"devices"`
-	Incidents                []Incident               `json:"incidents"`
-	Agents                   []Agent                  `json:"agents"`
-	PushTokens               []PushRegisterRequest    `json:"push_tokens"`
-	Users                    []User                   `json:"users"`
-	DeviceIdentities         []DeviceIdentity         `json:"device_identities"`
-	DeviceInterfaces         []DeviceInterface        `json:"device_interfaces"`
-	NeighborLinks            []NeighborLink           `json:"neighbor_links"`
-	HardwareProfiles         []HardwareProfile        `json:"hardware_profiles"`
-	SourceObservations       []SourceObservation      `json:"source_observations"`
-	DriftSnapshots           []DriftSnapshot          `json:"drift_snapshots"`
-	HAPairs                  []HAPairStatus           `json:"ha_pairs"`
-	HAFailoverEvents         []HAFailoverEvent        `json:"ha_failover_events"`
-	TelemetryRetentionPolicy TelemetryRetentionPolicy `json:"telemetry_retention_policy"`
-	TelemetryHot             []TelemetrySample        `json:"telemetry_hot"`
-	TelemetryWarm            []TelemetrySample        `json:"telemetry_warm"`
-	TelemetryCold            []TelemetrySample        `json:"telemetry_cold"`
+	Version                     int                          `json:"version"`
+	Devices                     []Device                     `json:"devices"`
+	Incidents                   []Incident                   `json:"incidents"`
+	Agents                      []Agent                      `json:"agents"`
+	PushTokens                  []PushRegisterRequest        `json:"push_tokens"`
+	Users                       []User                       `json:"users"`
+	DeviceIdentities            []DeviceIdentity             `json:"device_identities"`
+	DeviceInterfaces            []DeviceInterface            `json:"device_interfaces"`
+	NeighborLinks               []NeighborLink               `json:"neighbor_links"`
+	HardwareProfiles            []HardwareProfile            `json:"hardware_profiles"`
+	SourceObservations          []SourceObservation          `json:"source_observations"`
+	DriftSnapshots              []DriftSnapshot              `json:"drift_snapshots"`
+	HAPairs                     []HAPairStatus               `json:"ha_pairs"`
+	HAFailoverEvents            []HAFailoverEvent            `json:"ha_failover_events"`
+	TelemetryRetentionPolicy    TelemetryRetentionPolicy     `json:"telemetry_retention_policy"`
+	TelemetryGovernorRules      []TelemetryClassGovernorRule `json:"telemetry_governor_rules"`
+	TelemetryAcceptedSamples    int64                        `json:"telemetry_accepted_samples"`
+	TelemetryDroppedSamples     int64                        `json:"telemetry_dropped_samples"`
+	TelemetryGovernorLastEvalMs int64                        `json:"telemetry_governor_last_eval_ms"`
+	TelemetryHot                []TelemetrySample            `json:"telemetry_hot"`
+	TelemetryWarm               []TelemetrySample            `json:"telemetry_warm"`
+	TelemetryCold               []TelemetrySample            `json:"telemetry_cold"`
+	TelemetryLastByDevice       map[string]int64             `json:"telemetry_last_by_device,omitempty"`
 }
 
 func LoadStore(path string) *Store {
@@ -142,24 +160,29 @@ func (s *Store) save() {
 
 	s.mu.RLock()
 	payload := storePersist{
-		Version:                  s.Version,
-		Devices:                  append([]Device(nil), s.Devices...),
-		Incidents:                append([]Incident(nil), s.Incidents...),
-		Agents:                   append([]Agent(nil), s.Agents...),
-		PushTokens:               append([]PushRegisterRequest(nil), s.PushTokens...),
-		Users:                    append([]User(nil), s.Users...),
-		DeviceIdentities:         append([]DeviceIdentity(nil), s.DeviceIdentities...),
-		DeviceInterfaces:         append([]DeviceInterface(nil), s.DeviceInterfaces...),
-		NeighborLinks:            append([]NeighborLink(nil), s.NeighborLinks...),
-		HardwareProfiles:         append([]HardwareProfile(nil), s.HardwareProfiles...),
-		SourceObservations:       append([]SourceObservation(nil), s.SourceObservations...),
-		DriftSnapshots:           append([]DriftSnapshot(nil), s.DriftSnapshots...),
-		HAPairs:                  append([]HAPairStatus(nil), s.HAPairs...),
-		HAFailoverEvents:         append([]HAFailoverEvent(nil), s.HAFailoverEvents...),
-		TelemetryRetentionPolicy: s.TelemetryRetentionPolicy,
-		TelemetryHot:             append([]TelemetrySample(nil), s.TelemetryHot...),
-		TelemetryWarm:            append([]TelemetrySample(nil), s.TelemetryWarm...),
-		TelemetryCold:            append([]TelemetrySample(nil), s.TelemetryCold...),
+		Version:                     s.Version,
+		Devices:                     append([]Device(nil), s.Devices...),
+		Incidents:                   append([]Incident(nil), s.Incidents...),
+		Agents:                      append([]Agent(nil), s.Agents...),
+		PushTokens:                  append([]PushRegisterRequest(nil), s.PushTokens...),
+		Users:                       append([]User(nil), s.Users...),
+		DeviceIdentities:            append([]DeviceIdentity(nil), s.DeviceIdentities...),
+		DeviceInterfaces:            append([]DeviceInterface(nil), s.DeviceInterfaces...),
+		NeighborLinks:               append([]NeighborLink(nil), s.NeighborLinks...),
+		HardwareProfiles:            append([]HardwareProfile(nil), s.HardwareProfiles...),
+		SourceObservations:          append([]SourceObservation(nil), s.SourceObservations...),
+		DriftSnapshots:              append([]DriftSnapshot(nil), s.DriftSnapshots...),
+		HAPairs:                     append([]HAPairStatus(nil), s.HAPairs...),
+		HAFailoverEvents:            append([]HAFailoverEvent(nil), s.HAFailoverEvents...),
+		TelemetryRetentionPolicy:    s.TelemetryRetentionPolicy,
+		TelemetryGovernorRules:      append([]TelemetryClassGovernorRule(nil), s.TelemetryGovernorRules...),
+		TelemetryAcceptedSamples:    s.TelemetryAcceptedSamples,
+		TelemetryDroppedSamples:     s.TelemetryDroppedSamples,
+		TelemetryGovernorLastEvalMs: s.TelemetryGovernorLastEvalMs,
+		TelemetryHot:                append([]TelemetrySample(nil), s.TelemetryHot...),
+		TelemetryWarm:               append([]TelemetrySample(nil), s.TelemetryWarm...),
+		TelemetryCold:               append([]TelemetrySample(nil), s.TelemetryCold...),
+		TelemetryLastByDevice:       cloneStringInt64Map(s.TelemetryLastByDevice),
 	}
 	s.mu.RUnlock()
 
@@ -204,10 +227,18 @@ func (s *Store) ensureDefaultsAndMigrateLocked() {
 	}
 	s.rebuildIdentityIndexLocked()
 	s.TelemetryRetentionPolicy = normalizeTelemetryRetentionPolicy(s.TelemetryRetentionPolicy)
+	s.TelemetryGovernorRules = normalizeTelemetryGovernorRules(s.TelemetryGovernorRules)
+	if s.TelemetryLastByDevice == nil {
+		s.TelemetryLastByDevice = map[string]int64{}
+	}
+	if s.TelemetryGovernorLastEvalMs <= 0 {
+		s.TelemetryGovernorLastEvalMs = time.Now().UnixMilli()
+	}
 	if s.Version < storeSchemaVersion && len(s.TelemetryHot) == 0 && len(s.TelemetryWarm) == 0 && len(s.TelemetryCold) == 0 {
 		s.backfillTelemetryRetentionFromObservationsLocked()
 	}
 	s.applyTelemetryRetentionLocked(time.Now().UnixMilli())
+	s.pruneSamplingStateLocked(time.Now().UnixMilli())
 
 	if len(s.SourceObservations) > maxSourceObservations {
 		s.SourceObservations = append([]SourceObservation(nil), s.SourceObservations[len(s.SourceObservations)-maxSourceObservations:]...)
@@ -231,6 +262,69 @@ func (s *Store) LastRetentionSummary() TelemetryRetentionSummary {
 	out := s.retentionLast
 	out.Tiers = append([]TelemetryRetentionTier(nil), s.retentionLast.Tiers...)
 	return out
+}
+
+func (s *Store) TelemetryGovernorStatus() TelemetryGovernorStatus {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	status := TelemetryGovernorStatus{
+		LastEvaluatedAtMs: s.TelemetryGovernorLastEvalMs,
+		AcceptedSamples:   s.TelemetryAcceptedSamples,
+		DroppedSamples:    s.TelemetryDroppedSamples,
+		Rules:             append([]TelemetryClassGovernorRule(nil), s.TelemetryGovernorRules...),
+	}
+	activeGaps := 0
+	for _, inc := range s.Incidents {
+		if inc.Type == "telemetry_gap" && inc.Resolved == nil {
+			activeGaps++
+		}
+	}
+	status.ActiveGapIncidents = activeGaps
+	return status
+}
+
+func (s *Store) PrioritizeTelemetryQueue(events []TelemetryIngestRequest) []TelemetryIngestRequest {
+	if len(events) <= 1 {
+		return append([]TelemetryIngestRequest(nil), events...)
+	}
+	s.mu.RLock()
+	rules := append([]TelemetryClassGovernorRule(nil), s.TelemetryGovernorRules...)
+	s.mu.RUnlock()
+
+	type prioritizedEvent struct {
+		req      TelemetryIngestRequest
+		priority int
+	}
+	ordered := make([]prioritizedEvent, 0, len(events))
+	for _, event := range events {
+		rule := telemetryRuleForRole(event.Role, rules)
+		ordered = append(ordered, prioritizedEvent{
+			req:      event,
+			priority: rule.QueuePriority,
+		})
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return ordered[i].priority < ordered[j].priority
+	})
+
+	out := make([]TelemetryIngestRequest, 0, len(ordered))
+	for _, item := range ordered {
+		out = append(out, item.req)
+	}
+	return out
+}
+
+func (s *Store) DetectTelemetryGaps(nowMs int64) (int, int) {
+	if nowMs <= 0 {
+		nowMs = time.Now().UnixMilli()
+	}
+	s.mu.Lock()
+	created, resolved, changed := s.applyTelemetryGapDetectionLocked(nowMs)
+	s.mu.Unlock()
+	if changed {
+		s.save()
+	}
+	return created, resolved
 }
 
 func (s *Store) applyRetentionPolicyLocked(nowMs int64) TelemetryRetentionSummary {
@@ -297,6 +391,157 @@ func (s *Store) hasDuplicateIdentityIDsLocked() bool {
 			return true
 		}
 		seen[id] = struct{}{}
+	}
+	return false
+}
+
+func cloneStringInt64Map(in map[string]int64) map[string]int64 {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]int64, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func defaultTelemetryGovernorRules() []TelemetryClassGovernorRule {
+	return []TelemetryClassGovernorRule{
+		{
+			DeviceClass:         "core",
+			MinSampleIntervalMs: defaultCoreSampleMs,
+			QueuePriority:       0,
+			Roles:               []string{"gateway", "router", "firewall", "controller", "core"},
+		},
+		{
+			DeviceClass:         "distribution",
+			MinSampleIntervalMs: defaultDistSampleMs,
+			QueuePriority:       1,
+			Roles:               []string{"distribution", "aggregation"},
+		},
+		{
+			DeviceClass:         "access",
+			MinSampleIntervalMs: defaultAccessSampleMs,
+			QueuePriority:       2,
+			Roles:               []string{"switch", "ap", "access", "bridge"},
+		},
+		{
+			DeviceClass:         "edge",
+			MinSampleIntervalMs: defaultEdgeSampleMs,
+			QueuePriority:       3,
+			Roles:               []string{"cpe", "station", "client", "endpoint", "sensor", "iot"},
+		},
+		{
+			DeviceClass:         "default",
+			MinSampleIntervalMs: defaultGenericSampleMs,
+			QueuePriority:       4,
+			Roles:               []string{"device"},
+		},
+	}
+}
+
+func normalizeTelemetryGovernorRules(rules []TelemetryClassGovernorRule) []TelemetryClassGovernorRule {
+	if len(rules) == 0 {
+		return defaultTelemetryGovernorRules()
+	}
+
+	fallback := defaultTelemetryGovernorRules()
+	defaultByClass := make(map[string]TelemetryClassGovernorRule, len(fallback))
+	for _, rule := range fallback {
+		defaultByClass[rule.DeviceClass] = rule
+	}
+
+	out := make([]TelemetryClassGovernorRule, 0, len(rules)+1)
+	seenClasses := map[string]struct{}{}
+	for _, rule := range rules {
+		className := strings.ToLower(strings.TrimSpace(rule.DeviceClass))
+		if className == "" {
+			className = "default"
+		}
+		base := defaultByClass[className]
+		if base.DeviceClass == "" {
+			base = defaultByClass["default"]
+		}
+
+		normalized := TelemetryClassGovernorRule{
+			DeviceClass:         className,
+			MinSampleIntervalMs: rule.MinSampleIntervalMs,
+			QueuePriority:       rule.QueuePriority,
+		}
+		if normalized.MinSampleIntervalMs <= 0 {
+			normalized.MinSampleIntervalMs = base.MinSampleIntervalMs
+		}
+		if normalized.QueuePriority < 0 {
+			normalized.QueuePriority = base.QueuePriority
+		}
+		for _, role := range rule.Roles {
+			trimmed := strings.ToLower(strings.TrimSpace(role))
+			if trimmed == "" {
+				continue
+			}
+			normalized.Roles = appendUnique(normalized.Roles, trimmed)
+		}
+		if len(normalized.Roles) == 0 {
+			normalized.Roles = append([]string(nil), base.Roles...)
+		}
+
+		if _, exists := seenClasses[normalized.DeviceClass]; exists {
+			continue
+		}
+		seenClasses[normalized.DeviceClass] = struct{}{}
+		out = append(out, normalized)
+	}
+
+	if _, ok := seenClasses["default"]; !ok {
+		out = append(out, defaultByClass["default"])
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].QueuePriority < out[j].QueuePriority
+	})
+	return out
+}
+
+func telemetryRuleForRole(role string, rules []TelemetryClassGovernorRule) TelemetryClassGovernorRule {
+	if len(rules) == 0 {
+		rules = defaultTelemetryGovernorRules()
+	}
+
+	normalizedRole := strings.ToLower(strings.TrimSpace(role))
+	for _, rule := range rules {
+		for _, candidate := range rule.Roles {
+			if normalizedRole != "" && normalizedRole == candidate {
+				return rule
+			}
+		}
+	}
+
+	for _, rule := range rules {
+		if rule.DeviceClass == "default" {
+			return rule
+		}
+	}
+	return rules[len(rules)-1]
+}
+
+func isTransitionEventType(eventType string) bool {
+	switch strings.ToLower(strings.TrimSpace(eventType)) {
+	case "device_down", "offline", "device_up", "online":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldBypassSampling(eventType string, incomingOnline, currentOnline *bool, hasFactPayload bool) bool {
+	if hasFactPayload {
+		return true
+	}
+	if isTransitionEventType(eventType) {
+		return true
+	}
+	if incomingOnline != nil && currentOnline != nil && *incomingOnline != *currentOnline {
+		return true
 	}
 	return false
 }
@@ -481,6 +726,135 @@ func (s *Store) backfillTelemetryRetentionFromObservationsLocked() {
 		sample.ObservedISO = time.UnixMilli(sample.ObservedAt).UTC().Format(time.RFC3339)
 		s.TelemetryHot = append(s.TelemetryHot, sample)
 	}
+}
+
+func (s *Store) evaluateTelemetryIngestDecisionLocked(deviceID, deviceRole, eventType string, incomingOnline, currentOnline *bool, hasFactPayload bool, nowMs int64) TelemetryIngestDecision {
+	rule := telemetryRuleForRole(deviceRole, s.TelemetryGovernorRules)
+	decision := TelemetryIngestDecision{
+		Accepted:            true,
+		DeviceClass:         rule.DeviceClass,
+		QueuePriority:       rule.QueuePriority,
+		MinSampleIntervalMs: rule.MinSampleIntervalMs,
+	}
+
+	if s.TelemetryLastByDevice == nil {
+		s.TelemetryLastByDevice = map[string]int64{}
+	}
+
+	if hasFactPayload {
+		decision.Reason = "inventory_fact_payload"
+		s.TelemetryLastByDevice[deviceID] = nowMs
+		s.TelemetryAcceptedSamples++
+		s.TelemetryGovernorLastEvalMs = nowMs
+		s.pruneSamplingStateLocked(nowMs)
+		return decision
+	}
+
+	if shouldBypassSampling(eventType, incomingOnline, currentOnline, false) {
+		decision.Reason = "state_transition"
+		s.TelemetryLastByDevice[deviceID] = nowMs
+		s.TelemetryAcceptedSamples++
+		s.TelemetryGovernorLastEvalMs = nowMs
+		s.pruneSamplingStateLocked(nowMs)
+		return decision
+	}
+
+	lastAcceptedAt, seen := s.TelemetryLastByDevice[deviceID]
+	if seen && nowMs-lastAcceptedAt < rule.MinSampleIntervalMs {
+		decision.Accepted = false
+		decision.Reason = "sampled_by_class_interval"
+		s.TelemetryDroppedSamples++
+		s.TelemetryGovernorLastEvalMs = nowMs
+		return decision
+	}
+
+	decision.Reason = "accepted"
+	s.TelemetryLastByDevice[deviceID] = nowMs
+	s.TelemetryAcceptedSamples++
+	s.TelemetryGovernorLastEvalMs = nowMs
+	s.pruneSamplingStateLocked(nowMs)
+	return decision
+}
+
+func (s *Store) pruneSamplingStateLocked(nowMs int64) {
+	if len(s.TelemetryLastByDevice) == 0 {
+		return
+	}
+	cutoff := nowMs - int64((24*time.Hour)/time.Millisecond)
+	for deviceID, seenAt := range s.TelemetryLastByDevice {
+		if seenAt <= cutoff {
+			delete(s.TelemetryLastByDevice, deviceID)
+		}
+	}
+	if len(s.TelemetryLastByDevice) <= maxSamplingStateDevices {
+		return
+	}
+	toDrop := len(s.TelemetryLastByDevice) - maxSamplingStateDevices
+	for deviceID := range s.TelemetryLastByDevice {
+		delete(s.TelemetryLastByDevice, deviceID)
+		toDrop--
+		if toDrop <= 0 {
+			break
+		}
+	}
+}
+
+func (s *Store) applyTelemetryGapDetectionLocked(nowMs int64) (int, int, bool) {
+	if nowMs <= 0 {
+		nowMs = time.Now().UnixMilli()
+	}
+	s.TelemetryGovernorLastEvalMs = nowMs
+	if len(s.Devices) == 0 {
+		return 0, 0, false
+	}
+
+	activeGapByDevice := map[string]int{}
+	for i := range s.Incidents {
+		if s.Incidents[i].Type != "telemetry_gap" || s.Incidents[i].Resolved != nil {
+			continue
+		}
+		activeGapByDevice[s.Incidents[i].DeviceID] = i
+	}
+
+	created := 0
+	resolved := 0
+	changed := false
+	nowISO := time.UnixMilli(nowMs).UTC().Format(time.RFC3339)
+	for _, dev := range s.Devices {
+		if dev.LastSeen <= 0 {
+			continue
+		}
+		rule := telemetryRuleForRole(dev.Role, s.TelemetryGovernorRules)
+		thresholdMs := rule.MinSampleIntervalMs * telemetryGapMultiplier
+		if thresholdMs < minTelemetryGapMs {
+			thresholdMs = minTelemetryGapMs
+		}
+		ageMs := nowMs - dev.LastSeen
+		if ageMs > thresholdMs {
+			if _, exists := activeGapByDevice[dev.ID]; !exists {
+				inc := Incident{
+					ID:       "inc-" + randomID(),
+					DeviceID: dev.ID,
+					Type:     "telemetry_gap",
+					Severity: "warning",
+					Started:  nowISO,
+					Message:  "Missing telemetry signal beyond class threshold",
+					Source:   "telemetry_gap_detector",
+				}
+				s.Incidents = append(s.Incidents, inc)
+				created++
+				changed = true
+			}
+			continue
+		}
+
+		if idx, exists := activeGapByDevice[dev.ID]; exists {
+			s.Incidents[idx].Resolved = &nowISO
+			resolved++
+			changed = true
+		}
+	}
+	return created, resolved, changed
 }
 
 func (s *Store) ListDevices() []Device {
@@ -1546,9 +1920,14 @@ func (s *Store) RegisterAgent(req AgentRegisterRequest) Agent {
 }
 
 func (s *Store) IngestTelemetry(req TelemetryIngestRequest) (Device, *Incident, bool) {
+	device, incident, _, ok := s.IngestTelemetryWithDecision(req)
+	return device, incident, ok
+}
+
+func (s *Store) IngestTelemetryWithDecision(req TelemetryIngestRequest) (Device, *Incident, TelemetryIngestDecision, bool) {
 	deviceID := strings.TrimSpace(req.DeviceID)
 	if deviceID == "" {
-		return Device{}, nil, false
+		return Device{}, nil, TelemetryIngestDecision{}, false
 	}
 
 	now := time.Now()
@@ -1584,9 +1963,12 @@ func (s *Store) IngestTelemetry(req TelemetryIngestRequest) (Device, *Incident, 
 	s.mu.Lock()
 
 	idx := -1
+	var existingOnline *bool
 	for i := range s.Devices {
 		if s.Devices[i].ID == deviceID {
 			idx = i
+			value := s.Devices[i].Online
+			existingOnline = &value
 			break
 		}
 	}
@@ -1611,6 +1993,17 @@ func (s *Store) IngestTelemetry(req TelemetryIngestRequest) (Device, *Incident, 
 	s.Devices[idx].LatencyMs = req.LatencyMs
 	s.Devices[idx].Source = source
 	s.Devices[idx].LastSeen = nowMs
+
+	hasFactPayload := len(req.Interfaces) > 0 || len(req.Neighbors) > 0
+	decision := s.evaluateTelemetryIngestDecisionLocked(deviceID, deviceRole, eventType, req.Online, existingOnline, hasFactPayload, nowMs)
+	if !decision.Accepted {
+		s.updateHAPairWatcherLocked(nowMs)
+		s.applyTelemetryGapDetectionLocked(nowMs)
+		deviceCopy := s.Devices[idx]
+		s.mu.Unlock()
+		s.save()
+		return deviceCopy, nil, decision, true
+	}
 
 	onlineState := online
 	identityID := s.upsertIdentityFromTelemetryLocked(req, source, deviceName, deviceRole, siteID, nowMs, &onlineState)
@@ -1651,11 +2044,12 @@ func (s *Store) IngestTelemetry(req TelemetryIngestRequest) (Device, *Incident, 
 	}
 
 	s.updateHAPairWatcherLocked(nowMs)
+	s.applyTelemetryGapDetectionLocked(nowMs)
 	deviceCopy := s.Devices[idx]
 	s.mu.Unlock()
 
 	s.save()
-	return deviceCopy, created, true
+	return deviceCopy, created, decision, true
 }
 
 func (s *Store) ValidateUser(username, password string) bool {
