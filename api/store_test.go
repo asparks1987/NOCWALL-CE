@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func loadTopologyFixture(t *testing.T, relativePath string) []TelemetryIngestRequest {
@@ -55,6 +56,14 @@ func containsIdentityID(items []DeviceIdentity, identityID string) bool {
 		}
 	}
 	return false
+}
+
+func telemetrySampleIDs(samples []TelemetrySample) map[string]struct{} {
+	out := make(map[string]struct{}, len(samples))
+	for _, sample := range samples {
+		out[sample.SampleID] = struct{}{}
+	}
+	return out
 }
 
 func TestIdentityGuardrailNoAutoMergeOnDistinctKeys(t *testing.T) {
@@ -225,6 +234,170 @@ func TestInterfaceMapperReplacesFactsPerIdentityAndSource(t *testing.T) {
 	}
 }
 
+func TestTelemetryRetentionIngestAddsHotSample(t *testing.T) {
+	s := LoadStore("")
+	s.mu.Lock()
+	s.TelemetryHot = nil
+	s.TelemetryWarm = nil
+	s.TelemetryCold = nil
+	s.mu.Unlock()
+
+	online := true
+	lat := 11.5
+	req := TelemetryIngestRequest{
+		Source:    "retention_test",
+		DeviceID:  "ret-hot-1",
+		Device:    "Retention Hot 1",
+		Role:      "gateway",
+		SiteID:    "ret-site",
+		Online:    &online,
+		LatencyMs: &lat,
+	}
+	if _, _, ok := s.IngestTelemetry(req); !ok {
+		t.Fatalf("ingest failed")
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.TelemetryHot) != 1 {
+		t.Fatalf("expected 1 hot sample, got=%d", len(s.TelemetryHot))
+	}
+	if len(s.TelemetryWarm) != 0 {
+		t.Fatalf("expected 0 warm samples, got=%d", len(s.TelemetryWarm))
+	}
+	if len(s.TelemetryCold) != 0 {
+		t.Fatalf("expected 0 cold samples, got=%d", len(s.TelemetryCold))
+	}
+	sample := s.TelemetryHot[0]
+	if sample.DeviceID != "ret-hot-1" {
+		t.Fatalf("unexpected hot sample device_id=%s", sample.DeviceID)
+	}
+	if sample.Source != "retention_test" {
+		t.Fatalf("unexpected hot sample source=%s", sample.Source)
+	}
+	if sample.DeviceRole != "gateway" {
+		t.Fatalf("unexpected hot sample role=%s", sample.DeviceRole)
+	}
+	if sample.SiteID != "ret-site" {
+		t.Fatalf("unexpected hot sample site=%s", sample.SiteID)
+	}
+	if sample.Online == nil || !*sample.Online {
+		t.Fatalf("expected hot sample online=true")
+	}
+	if sample.LatencyMs == nil || *sample.LatencyMs != 11.5 {
+		t.Fatalf("expected hot sample latency 11.5, got=%v", sample.LatencyMs)
+	}
+}
+
+func TestTelemetryRetentionPromotesAndPrunesByTierAge(t *testing.T) {
+	s := LoadStore("")
+	now := int64(1_700_000_010_000)
+	online := true
+	offline := false
+
+	s.mu.Lock()
+	s.TelemetryRetentionPolicy = TelemetryRetentionPolicy{
+		HotRetentionMs:  1000,
+		WarmRetentionMs: 3000,
+		ColdRetentionMs: 6000,
+		HotMaxSamples:   10,
+		WarmMaxSamples:  10,
+		ColdMaxSamples:  10,
+	}
+	s.TelemetryHot = []TelemetrySample{
+		{SampleID: "hot-old", DeviceID: "dev-hot-old", Source: "retention_test", Online: &online, ObservedAt: now - 2000},
+		{SampleID: "hot-new", DeviceID: "dev-hot-new", Source: "retention_test", Online: &online, ObservedAt: now - 500},
+	}
+	s.TelemetryWarm = []TelemetrySample{
+		{SampleID: "warm-old", DeviceID: "dev-warm-old", Source: "retention_test", Online: &offline, ObservedAt: now - 4000},
+		{SampleID: "warm-new", DeviceID: "dev-warm-new", Source: "retention_test", Online: &online, ObservedAt: now - 2000},
+	}
+	s.TelemetryCold = []TelemetrySample{
+		{SampleID: "cold-expired", DeviceID: "dev-cold-expired", Source: "retention_test", Online: &offline, ObservedAt: now - 7000},
+		{SampleID: "cold-keep", DeviceID: "dev-cold-keep", Source: "retention_test", Online: &online, ObservedAt: now - 5000},
+	}
+	s.applyTelemetryRetentionLocked(now)
+	hot := append([]TelemetrySample(nil), s.TelemetryHot...)
+	warm := append([]TelemetrySample(nil), s.TelemetryWarm...)
+	cold := append([]TelemetrySample(nil), s.TelemetryCold...)
+	s.mu.Unlock()
+
+	if len(hot) != 1 || hot[0].SampleID != "hot-new" {
+		t.Fatalf("expected only hot-new in hot tier, got=%v", hot)
+	}
+
+	warmIDs := telemetrySampleIDs(warm)
+	if len(warmIDs) != 2 {
+		t.Fatalf("expected 2 warm samples after promotion, got=%d", len(warmIDs))
+	}
+	if _, ok := warmIDs["warm-new"]; !ok {
+		t.Fatalf("expected warm-new to remain in warm tier")
+	}
+	if _, ok := warmIDs["hot-old"]; !ok {
+		t.Fatalf("expected hot-old to promote into warm tier")
+	}
+
+	coldIDs := telemetrySampleIDs(cold)
+	if len(coldIDs) != 2 {
+		t.Fatalf("expected 2 cold samples after prune/promotion, got=%d", len(coldIDs))
+	}
+	if _, ok := coldIDs["cold-keep"]; !ok {
+		t.Fatalf("expected cold-keep in cold tier")
+	}
+	if _, ok := coldIDs["warm-old"]; !ok {
+		t.Fatalf("expected warm-old promoted into cold tier")
+	}
+	if _, ok := coldIDs["cold-expired"]; ok {
+		t.Fatalf("expected cold-expired sample pruned from cold tier")
+	}
+}
+
+func TestTelemetryRetentionEnforcesTierCaps(t *testing.T) {
+	s := LoadStore("")
+	now := int64(10_000)
+	online := true
+
+	s.mu.Lock()
+	s.TelemetryRetentionPolicy = TelemetryRetentionPolicy{
+		HotRetentionMs:  100_000,
+		WarmRetentionMs: 200_000,
+		ColdRetentionMs: 300_000,
+		HotMaxSamples:   2,
+		WarmMaxSamples:  2,
+		ColdMaxSamples:  2,
+	}
+	s.TelemetryHot = []TelemetrySample{
+		{SampleID: "h1", DeviceID: "d1", Source: "retention_test", Online: &online, ObservedAt: now - 3},
+		{SampleID: "h2", DeviceID: "d2", Source: "retention_test", Online: &online, ObservedAt: now - 2},
+		{SampleID: "h3", DeviceID: "d3", Source: "retention_test", Online: &online, ObservedAt: now - 1},
+	}
+	s.TelemetryWarm = []TelemetrySample{
+		{SampleID: "w1", DeviceID: "d1", Source: "retention_test", Online: &online, ObservedAt: now - 3},
+		{SampleID: "w2", DeviceID: "d2", Source: "retention_test", Online: &online, ObservedAt: now - 2},
+		{SampleID: "w3", DeviceID: "d3", Source: "retention_test", Online: &online, ObservedAt: now - 1},
+	}
+	s.TelemetryCold = []TelemetrySample{
+		{SampleID: "c1", DeviceID: "d1", Source: "retention_test", Online: &online, ObservedAt: now - 3},
+		{SampleID: "c2", DeviceID: "d2", Source: "retention_test", Online: &online, ObservedAt: now - 2},
+		{SampleID: "c3", DeviceID: "d3", Source: "retention_test", Online: &online, ObservedAt: now - 1},
+	}
+	s.applyTelemetryRetentionLocked(now)
+	hot := append([]TelemetrySample(nil), s.TelemetryHot...)
+	warm := append([]TelemetrySample(nil), s.TelemetryWarm...)
+	cold := append([]TelemetrySample(nil), s.TelemetryCold...)
+	s.mu.Unlock()
+
+	if len(hot) != 2 || hot[0].SampleID != "h2" || hot[1].SampleID != "h3" {
+		t.Fatalf("expected hot tier capped to newest 2 samples [h2 h3], got=%v", hot)
+	}
+	if len(warm) != 2 || warm[0].SampleID != "w2" || warm[1].SampleID != "w3" {
+		t.Fatalf("expected warm tier capped to newest 2 samples [w2 w3], got=%v", warm)
+	}
+	if len(cold) != 2 || cold[0].SampleID != "c2" || cold[1].SampleID != "c3" {
+		t.Fatalf("expected cold tier capped to newest 2 samples [c2 c3], got=%v", cold)
+	}
+}
+
 func TestLoadStoreMigratesLegacyAndReplayStable(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
@@ -256,6 +429,12 @@ func TestLoadStoreMigratesLegacyAndReplayStable(t *testing.T) {
 	firstIdent := first.ListDeviceIdentities()
 	if len(firstIdent) < 2 {
 		t.Fatalf("expected identities backfilled from legacy devices, got=%d", len(firstIdent))
+	}
+	first.mu.RLock()
+	firstTelemetryTotal := len(first.TelemetryHot) + len(first.TelemetryWarm) + len(first.TelemetryCold)
+	first.mu.RUnlock()
+	if firstTelemetryTotal == 0 {
+		t.Fatalf("expected telemetry retention backfill during schema migration")
 	}
 
 	second := LoadStore(path)
@@ -697,5 +876,74 @@ func TestTopologyFixtureBranchIncludesUnknownNeighbors(t *testing.T) {
 	}
 	if health.ManagedNodeCount < 2 {
 		t.Fatalf("expected at least two managed nodes in branch fixture, got=%d", health.ManagedNodeCount)
+	}
+}
+
+func TestRetentionPolicyCompactsWarmAndColdObservations(t *testing.T) {
+	s := LoadStore("")
+	now := time.Now().UnixMilli()
+
+	s.mu.Lock()
+	s.SourceObservations = nil
+	for i := 0; i < 12; i++ {
+		s.SourceObservations = append(s.SourceObservations, SourceObservation{
+			ObservationID: fmt.Sprintf("hot-%d", i),
+			IdentityID:    "ident-a",
+			Source:        "test",
+			DeviceID:      "dev-a",
+			ObservedAt:    now - int64(i)*int64(time.Hour/time.Millisecond),
+		})
+	}
+	for i := 0; i < 12; i++ {
+		s.SourceObservations = append(s.SourceObservations, SourceObservation{
+			ObservationID: fmt.Sprintf("warm-%d", i),
+			IdentityID:    "ident-a",
+			Source:        "test",
+			DeviceID:      "dev-a",
+			ObservedAt:    now - int64(36+i)*int64(time.Hour/time.Millisecond),
+		})
+	}
+	for i := 0; i < 30; i++ {
+		s.SourceObservations = append(s.SourceObservations, SourceObservation{
+			ObservationID: fmt.Sprintf("cold-%d", i),
+			IdentityID:    "ident-a",
+			Source:        "test",
+			DeviceID:      "dev-a",
+			ObservedAt:    now - int64(8*24+i)*int64(time.Hour/time.Millisecond),
+		})
+	}
+	for i := 0; i < 8; i++ {
+		s.SourceObservations = append(s.SourceObservations, SourceObservation{
+			ObservationID: fmt.Sprintf("drop-%d", i),
+			IdentityID:    "ident-a",
+			Source:        "test",
+			DeviceID:      "dev-a",
+			ObservedAt:    now - int64(45*24+i)*int64(time.Hour/time.Millisecond),
+		})
+	}
+
+	summary := s.applyRetentionPolicyLocked(now)
+	s.mu.Unlock()
+
+	if summary.BeforeCount != 62 {
+		t.Fatalf("expected before_count=62 got=%d", summary.BeforeCount)
+	}
+	if summary.DroppedCount <= 0 {
+		t.Fatalf("expected dropped observations")
+	}
+	if summary.AfterCount >= summary.BeforeCount {
+		t.Fatalf("expected compacted result after=%d before=%d", summary.AfterCount, summary.BeforeCount)
+	}
+	if len(summary.Tiers) != 3 {
+		t.Fatalf("expected 3 tiers got=%d", len(summary.Tiers))
+	}
+	if summary.Tiers[0].RetainedCount != 12 {
+		t.Fatalf("expected hot tier to retain all points got=%d", summary.Tiers[0].RetainedCount)
+	}
+	if summary.Tiers[1].RetainedCount != 4 {
+		t.Fatalf("expected warm tier downsample to 4 got=%d", summary.Tiers[1].RetainedCount)
+	}
+	if summary.Tiers[2].RetainedCount != 3 {
+		t.Fatalf("expected cold tier downsample to 3 got=%d", summary.Tiers[2].RetainedCount)
 	}
 }

@@ -35,6 +35,7 @@ Long description:
   - identity stitching (multi-source merge by key hints)
   - source observation history
   - drift fingerprint snapshots
+  - telemetry retention tiering with hot/warm/cold partitions
 - Current connector status:
   - UISP connector implemented first
   - multi-vendor NMS adapter expansion in roadmap
@@ -151,6 +152,7 @@ PRO target:
   - topology graph synthesis from identity + neighbor link inventory
   - topology tab renderer (SVG map) with resolved/unresolved/stale link coloring and path trace controls
   - HA pair watcher with failover-state transitions and recent event history
+  - retention policy engine for telemetry samples (hot/warm/cold promotion + cold-tier pruning + per-tier caps)
 - Docker Compose builds API and web locally from source by default (no private image dependency).
 - Docker Compose wiring uses safe env placeholders (no hardcoded real keys).
 

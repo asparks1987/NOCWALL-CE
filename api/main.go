@@ -125,6 +125,10 @@ func main() {
 		return c.JSON(fiber.Map{"device_id": id, "points": points})
 	})
 
+	app.Get("/telemetry/retention", authMiddleware, func(c *fiber.Ctx) error {
+		return c.JSON(store.LastRetentionSummary())
+	})
+
 	app.Get("/sources/uisp/status", authMiddleware, func(c *fiber.Ctx) error {
 		status := uispConnector.Status()
 		return c.JSON(status)

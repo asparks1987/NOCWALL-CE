@@ -205,6 +205,21 @@ type InventoryObservationsResponse struct {
 	Stub         bool                `json:"stub"`
 }
 
+type TelemetryRetentionTier struct {
+	Name          string `json:"name"`
+	MaxAgeHours   int    `json:"max_age_hours"`
+	KeepEvery     int    `json:"keep_every"`
+	RetainedCount int    `json:"retained_count"`
+}
+
+type TelemetryRetentionSummary struct {
+	ObservedAtMs int64                    `json:"observed_at_ms"`
+	BeforeCount  int                      `json:"before_count"`
+	AfterCount   int                      `json:"after_count"`
+	DroppedCount int                      `json:"dropped_count"`
+	Tiers        []TelemetryRetentionTier `json:"tiers"`
+}
+
 type InventoryInterfacesResponse struct {
 	LastUpdated int64             `json:"last_updated"`
 	Count       int               `json:"count"`
@@ -295,18 +310,18 @@ type HAPairStatus struct {
 }
 
 type HAFailoverEvent struct {
-	EventID               string `json:"event_id"`
-	PairID                string `json:"pair_id"`
-	EventType             string `json:"event_type"` // pair_discovered | failover | recovered | state_change
-	FromState             string `json:"from_state,omitempty"`
-	ToState               string `json:"to_state"`
-	FromActiveIdentityID  string `json:"from_active_identity_id,omitempty"`
-	ToActiveIdentityID    string `json:"to_active_identity_id,omitempty"`
-	NodeAIdentityID       string `json:"node_a_identity_id,omitempty"`
-	NodeBIdentityID       string `json:"node_b_identity_id,omitempty"`
-	ObservedAt            int64  `json:"observed_at"`
-	ObservedAtISO         string `json:"observed_at_iso"`
-	Message               string `json:"message,omitempty"`
+	EventID              string `json:"event_id"`
+	PairID               string `json:"pair_id"`
+	EventType            string `json:"event_type"` // pair_discovered | failover | recovered | state_change
+	FromState            string `json:"from_state,omitempty"`
+	ToState              string `json:"to_state"`
+	FromActiveIdentityID string `json:"from_active_identity_id,omitempty"`
+	ToActiveIdentityID   string `json:"to_active_identity_id,omitempty"`
+	NodeAIdentityID      string `json:"node_a_identity_id,omitempty"`
+	NodeBIdentityID      string `json:"node_b_identity_id,omitempty"`
+	ObservedAt           int64  `json:"observed_at"`
+	ObservedAtISO        string `json:"observed_at_iso"`
+	Message              string `json:"message,omitempty"`
 }
 
 type TopologyNodesResponse struct {
