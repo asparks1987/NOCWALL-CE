@@ -398,6 +398,181 @@ func TestTelemetryRetentionEnforcesTierCaps(t *testing.T) {
 	}
 }
 
+func TestTelemetrySamplingGovernorDropsFrequentSamplesByClass(t *testing.T) {
+	s := LoadStore("")
+	online := true
+	offline := false
+
+	s.mu.Lock()
+	s.TelemetryGovernorRules = normalizeTelemetryGovernorRules([]TelemetryClassGovernorRule{
+		{
+			DeviceClass:         "access",
+			MinSampleIntervalMs: int64((1 * time.Hour) / time.Millisecond),
+			QueuePriority:       2,
+			Roles:               []string{"ap"},
+		},
+		{
+			DeviceClass:         "default",
+			MinSampleIntervalMs: int64((1 * time.Hour) / time.Millisecond),
+			QueuePriority:       9,
+			Roles:               []string{"device"},
+		},
+	})
+	s.TelemetryHot = nil
+	s.TelemetryWarm = nil
+	s.TelemetryCold = nil
+	s.TelemetryLastByDevice = map[string]int64{}
+	s.TelemetryAcceptedSamples = 0
+	s.TelemetryDroppedSamples = 0
+	s.mu.Unlock()
+
+	req := TelemetryIngestRequest{
+		Source:   "sampling_governor_test",
+		DeviceID: "sample-ap-1",
+		Device:   "Sample AP 1",
+		Role:     "ap",
+		Online:   &online,
+	}
+	_, _, firstDecision, ok := s.IngestTelemetryWithDecision(req)
+	if !ok {
+		t.Fatalf("first ingest failed")
+	}
+	if !firstDecision.Accepted {
+		t.Fatalf("expected first ingest accepted, decision=%+v", firstDecision)
+	}
+	_, _, secondDecision, ok := s.IngestTelemetryWithDecision(req)
+	if !ok {
+		t.Fatalf("second ingest failed")
+	}
+	if secondDecision.Accepted {
+		t.Fatalf("expected second ingest dropped by governor, decision=%+v", secondDecision)
+	}
+
+	req.EventType = "device_down"
+	req.Online = &offline
+	_, incident, thirdDecision, ok := s.IngestTelemetryWithDecision(req)
+	if !ok {
+		t.Fatalf("third ingest failed")
+	}
+	if !thirdDecision.Accepted {
+		t.Fatalf("expected transition ingest accepted, decision=%+v", thirdDecision)
+	}
+	if incident == nil {
+		t.Fatalf("expected offline transition to create incident")
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.TelemetryHot) != 2 {
+		t.Fatalf("expected 2 accepted telemetry samples in hot tier, got=%d", len(s.TelemetryHot))
+	}
+	if s.TelemetryAcceptedSamples != 2 {
+		t.Fatalf("expected accepted_samples=2, got=%d", s.TelemetryAcceptedSamples)
+	}
+	if s.TelemetryDroppedSamples != 1 {
+		t.Fatalf("expected dropped_samples=1, got=%d", s.TelemetryDroppedSamples)
+	}
+}
+
+func TestPrioritizeTelemetryQueueByClassPriority(t *testing.T) {
+	s := LoadStore("")
+	s.mu.Lock()
+	s.TelemetryGovernorRules = normalizeTelemetryGovernorRules([]TelemetryClassGovernorRule{
+		{
+			DeviceClass:         "core",
+			MinSampleIntervalMs: 1000,
+			QueuePriority:       0,
+			Roles:               []string{"gateway"},
+		},
+		{
+			DeviceClass:         "access",
+			MinSampleIntervalMs: 1000,
+			QueuePriority:       2,
+			Roles:               []string{"switch"},
+		},
+		{
+			DeviceClass:         "edge",
+			MinSampleIntervalMs: 1000,
+			QueuePriority:       4,
+			Roles:               []string{"station"},
+		},
+		{
+			DeviceClass:         "default",
+			MinSampleIntervalMs: 1000,
+			QueuePriority:       9,
+			Roles:               []string{"device"},
+		},
+	})
+	s.mu.Unlock()
+
+	ordered := s.PrioritizeTelemetryQueue([]TelemetryIngestRequest{
+		{DeviceID: "edge-1", Role: "station"},
+		{DeviceID: "core-1", Role: "gateway"},
+		{DeviceID: "access-1", Role: "switch"},
+	})
+	if len(ordered) != 3 {
+		t.Fatalf("expected 3 prioritized events, got=%d", len(ordered))
+	}
+	if ordered[0].DeviceID != "core-1" || ordered[1].DeviceID != "access-1" || ordered[2].DeviceID != "edge-1" {
+		t.Fatalf("unexpected queue order: %#v", ordered)
+	}
+}
+
+func TestDetectTelemetryGapsCreatesAndResolvesIncidents(t *testing.T) {
+	s := LoadStore("")
+	online := true
+	req := TelemetryIngestRequest{
+		Source:   "gap_detector_test",
+		DeviceID: "gap-node-1",
+		Device:   "Gap Node 1",
+		Role:     "gateway",
+		Online:   &online,
+	}
+	if _, _, ok := s.IngestTelemetry(req); !ok {
+		t.Fatalf("initial ingest failed")
+	}
+
+	nowMs := time.Now().UnixMilli()
+	s.mu.Lock()
+	for i := range s.Devices {
+		if s.Devices[i].ID == "gap-node-1" {
+			s.Devices[i].LastSeen = nowMs - int64((45*time.Minute)/time.Millisecond)
+		}
+	}
+	s.mu.Unlock()
+
+	created, resolved := s.DetectTelemetryGaps(nowMs)
+	if created != 1 || resolved != 0 {
+		t.Fatalf("expected gap detector create=1 resolved=0, got create=%d resolved=%d", created, resolved)
+	}
+
+	s.mu.RLock()
+	activeGap := false
+	for _, inc := range s.Incidents {
+		if inc.DeviceID == "gap-node-1" && inc.Type == "telemetry_gap" && inc.Resolved == nil {
+			activeGap = true
+			break
+		}
+	}
+	s.mu.RUnlock()
+	if !activeGap {
+		t.Fatalf("expected active telemetry_gap incident")
+	}
+
+	s.mu.Lock()
+	for i := range s.Devices {
+		if s.Devices[i].ID == "gap-node-1" {
+			s.Devices[i].LastSeen = nowMs
+		}
+	}
+	s.mu.Unlock()
+
+	created, resolved = s.DetectTelemetryGaps(nowMs)
+	if created != 0 || resolved != 1 {
+		t.Fatalf("expected gap detector create=0 resolved=1, got create=%d resolved=%d", created, resolved)
+	}
+}
+
 func TestLoadStoreMigratesLegacyAndReplayStable(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()

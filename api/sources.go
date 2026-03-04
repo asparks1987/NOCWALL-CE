@@ -618,12 +618,18 @@ func (u *UISPConnector) setStatus(status SourceStatus) {
 	u.mu.Unlock()
 }
 
-func ingestSourceEvents(store *Store, events []TelemetryIngestRequest) (int, int) {
+func ingestSourceEvents(store *Store, events []TelemetryIngestRequest) (int, int, int) {
 	ingested := 0
 	incidents := 0
-	for _, ev := range events {
-		_, inc, ok := store.IngestTelemetry(ev)
+	dropped := 0
+	ordered := store.PrioritizeTelemetryQueue(events)
+	for _, ev := range ordered {
+		_, inc, decision, ok := store.IngestTelemetryWithDecision(ev)
 		if !ok {
+			continue
+		}
+		if !decision.Accepted {
+			dropped++
 			continue
 		}
 		ingested++
@@ -631,7 +637,7 @@ func ingestSourceEvents(store *Store, events []TelemetryIngestRequest) (int, int
 			incidents++
 		}
 	}
-	return ingested, incidents
+	return ingested, incidents, dropped
 }
 
 func runSourcePoller(ctx context.Context, connector SourceConnector, store *Store, logger *slog.Logger, interval time.Duration, retries int) {
@@ -646,14 +652,18 @@ func runSourcePoller(ctx context.Context, connector SourceConnector, store *Stor
 			logger.Warn("source_poller_poll_failed", "source", connector.Name(), "error", err.Error())
 			return
 		}
-		ingested, incidents := ingestSourceEvents(store, batch.Events)
+		ingested, incidents, dropped := ingestSourceEvents(store, batch.Events)
+		gapsCreated, gapsResolved := store.DetectTelemetryGaps(time.Now().UnixMilli())
 		logger.Info("source_poller_poll_ok",
 			"source", connector.Name(),
 			"fetched", batch.Response.Fetched,
 			"normalized", batch.Response.Normalized,
 			"emitted", batch.Response.Emitted,
 			"ingested", ingested,
+			"dropped_by_governor", dropped,
 			"incidents", incidents,
+			"gap_incidents_created", gapsCreated,
+			"gap_incidents_resolved", gapsResolved,
 			"demo", batch.Response.Demo,
 		)
 	}
