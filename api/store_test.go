@@ -66,6 +66,42 @@ func telemetrySampleIDs(samples []TelemetrySample) map[string]struct{} {
 	return out
 }
 
+func findQualityCard(cards []TelemetrySourceQualityScorecard, source string) (TelemetrySourceQualityScorecard, bool) {
+	for _, card := range cards {
+		if card.Source == source {
+			return card, true
+		}
+	}
+	return TelemetrySourceQualityScorecard{}, false
+}
+
+func findBaselineGroup(groups []TelemetryRoleSiteBaseline, role, siteID string) (TelemetryRoleSiteBaseline, bool) {
+	for _, group := range groups {
+		if group.Role == role && group.SiteID == siteID {
+			return group, true
+		}
+	}
+	return TelemetryRoleSiteBaseline{}, false
+}
+
+func findBaselineMetric(metrics []TelemetryBaselineMetric, metric string) (TelemetryBaselineMetric, bool) {
+	for _, item := range metrics {
+		if item.Metric == metric {
+			return item, true
+		}
+	}
+	return TelemetryBaselineMetric{}, false
+}
+
+func findAlertByDeviceID(alerts []TelemetryAlertRecord, deviceID string) (TelemetryAlertRecord, bool) {
+	for _, alert := range alerts {
+		if alert.Incident.DeviceID == deviceID {
+			return alert, true
+		}
+	}
+	return TelemetryAlertRecord{}, false
+}
+
 func TestIdentityGuardrailNoAutoMergeOnDistinctKeys(t *testing.T) {
 	s := LoadStore("")
 	reqA := TelemetryIngestRequest{
@@ -570,6 +606,412 @@ func TestDetectTelemetryGapsCreatesAndResolvesIncidents(t *testing.T) {
 	created, resolved = s.DetectTelemetryGaps(nowMs)
 	if created != 0 || resolved != 1 {
 		t.Fatalf("expected gap detector create=0 resolved=1, got create=%d resolved=%d", created, resolved)
+	}
+}
+
+func TestIngestTelemetryNormalizesSkewedObservedTimestamp(t *testing.T) {
+	s := LoadStore("")
+	online := true
+	ingestStart := time.Now().UnixMilli()
+	sourceObserved := ingestStart + int64((3*time.Hour)/time.Millisecond)
+	req := TelemetryIngestRequest{
+		Source:       "skew_test",
+		EventType:    "telemetry",
+		ObservedAtMs: sourceObserved,
+		DeviceID:     "skew-device-1",
+		Device:       "Skew Device 1",
+		Role:         "gateway",
+		SiteID:       "site-skew",
+		Online:       &online,
+	}
+
+	if _, _, ok := s.IngestTelemetry(req); !ok {
+		t.Fatalf("ingest failed")
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.TelemetryHot) == 0 {
+		t.Fatalf("expected telemetry sample after ingest")
+	}
+	sample := s.TelemetryHot[len(s.TelemetryHot)-1]
+	if !sample.TimestampCorrected {
+		t.Fatalf("expected timestamp correction for large future skew")
+	}
+	if sample.SourceObservedAt != sourceObserved {
+		t.Fatalf("expected source observed timestamp retained, got=%d want=%d", sample.SourceObservedAt, sourceObserved)
+	}
+	if sample.ClockSkewMs <= 0 {
+		t.Fatalf("expected positive clock skew, got=%d", sample.ClockSkewMs)
+	}
+	if sample.TimestampConfidence > 0.2 {
+		t.Fatalf("expected low confidence for corrected timestamp, got=%f", sample.TimestampConfidence)
+	}
+	if sample.ObservedAt < ingestStart-5000 || sample.ObservedAt > time.Now().UnixMilli()+5000 {
+		t.Fatalf("expected normalized observed_at near ingest time, got=%d", sample.ObservedAt)
+	}
+}
+
+func TestIngestTelemetryUsesObservedAtStringWhenValid(t *testing.T) {
+	s := LoadStore("")
+	online := true
+	observed := time.Now().Add(-25 * time.Second).UTC()
+	req := TelemetryIngestRequest{
+		Source:     "skew_test_string",
+		EventType:  "telemetry",
+		ObservedAt: observed.Format(time.RFC3339),
+		DeviceID:   "skew-device-2",
+		Device:     "Skew Device 2",
+		Role:       "switch",
+		SiteID:     "site-skew",
+		Online:     &online,
+	}
+	if _, _, ok := s.IngestTelemetry(req); !ok {
+		t.Fatalf("ingest failed")
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.TelemetryHot) == 0 {
+		t.Fatalf("expected telemetry sample")
+	}
+	sample := s.TelemetryHot[len(s.TelemetryHot)-1]
+	if sample.TimestampCorrected {
+		t.Fatalf("did not expect correction for small skew")
+	}
+	expectedMs := observed.UnixMilli()
+	if absInt64(sample.ObservedAt-expectedMs) > 1500 {
+		t.Fatalf("expected observed_at to use source timestamp, got=%d want~=%d", sample.ObservedAt, expectedMs)
+	}
+	if sample.TimestampConfidence < 0.85 {
+		t.Fatalf("expected confidence >= 0.85 for small skew, got=%f", sample.TimestampConfidence)
+	}
+}
+
+func TestTelemetryQualityReportAggregatesSourceStats(t *testing.T) {
+	s := LoadStore("")
+	online := true
+	s.mu.Lock()
+	s.TelemetryGovernorRules = normalizeTelemetryGovernorRules([]TelemetryClassGovernorRule{
+		{
+			DeviceClass:         "access",
+			MinSampleIntervalMs: int64((1 * time.Hour) / time.Millisecond),
+			QueuePriority:       1,
+			Roles:               []string{"ap"},
+		},
+		{
+			DeviceClass:         "default",
+			MinSampleIntervalMs: int64((1 * time.Hour) / time.Millisecond),
+			QueuePriority:       9,
+			Roles:               []string{"device"},
+		},
+	})
+	s.mu.Unlock()
+
+	req := TelemetryIngestRequest{
+		Source:   "quality_test",
+		DeviceID: "quality-device-1",
+		Device:   "Quality Device 1",
+		Role:     "ap",
+		SiteID:   "quality-site",
+		Online:   &online,
+	}
+	if _, _, ok := s.IngestTelemetry(req); !ok {
+		t.Fatalf("first ingest failed")
+	}
+	if _, _, ok := s.IngestTelemetry(req); !ok {
+		t.Fatalf("second ingest failed")
+	}
+	nowMs := time.Now().UnixMilli()
+	s.RecordSourcePollOutcome("quality_test", true, "", nowMs)
+	s.RecordSourcePollOutcome("quality_test", false, "timeout", nowMs)
+
+	report := s.TelemetryQualityReport()
+	if report.Health.SourceCount < 1 {
+		t.Fatalf("expected at least one source in quality report")
+	}
+	card, ok := findQualityCard(report.Scorecards, "quality_test")
+	if !ok {
+		t.Fatalf("expected quality scorecard for source quality_test")
+	}
+	if card.Stats.TotalSamples != 2 {
+		t.Fatalf("expected total samples=2, got=%d", card.Stats.TotalSamples)
+	}
+	if card.Stats.AcceptedSamples != 1 {
+		t.Fatalf("expected accepted samples=1, got=%d", card.Stats.AcceptedSamples)
+	}
+	if card.Stats.DroppedSamples != 1 {
+		t.Fatalf("expected dropped samples=1, got=%d", card.Stats.DroppedSamples)
+	}
+	if card.Stats.PollAttempts != 2 || card.Stats.PollFailures != 1 {
+		t.Fatalf("expected poll attempts/failures 2/1, got %d/%d", card.Stats.PollAttempts, card.Stats.PollFailures)
+	}
+	if card.ErrorRatePct < 49.9 || card.ErrorRatePct > 50.1 {
+		t.Fatalf("expected error_rate_pct around 50, got=%f", card.ErrorRatePct)
+	}
+}
+
+func TestTelemetryBaselineReportBuildsRoleSiteMetrics(t *testing.T) {
+	s := LoadStore("")
+	online := true
+	offline := false
+	base := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Minute)
+
+	for i := 0; i < 12; i++ {
+		latency := 20.0 + float64(i)
+		state := &online
+		if i%4 == 0 {
+			state = &offline
+		}
+		req := TelemetryIngestRequest{
+			Source:       "baseline_test",
+			DeviceID:     "baseline-ap-1",
+			Device:       "Baseline AP 1",
+			Role:         "ap",
+			SiteID:       "site-baseline",
+			ObservedAtMs: base.Add(time.Duration(i) * 5 * time.Minute).UnixMilli(),
+			Online:       state,
+			LatencyMs:    &latency,
+		}
+		if _, _, ok := s.IngestTelemetry(req); !ok {
+			t.Fatalf("ingest failed at index=%d", i)
+		}
+	}
+
+	report := s.TelemetryBaselineReport(72)
+	if report.GroupCount == 0 {
+		t.Fatalf("expected non-empty baseline groups")
+	}
+	group, ok := findBaselineGroup(report.Groups, "ap", "site-baseline")
+	if !ok {
+		t.Fatalf("expected baseline group role=ap site=site-baseline")
+	}
+	if group.SampleCount < 12 {
+		t.Fatalf("expected at least 12 samples in group, got=%d", group.SampleCount)
+	}
+
+	latencyMetric, ok := findBaselineMetric(group.Metrics, "latency_ms")
+	if !ok {
+		t.Fatalf("expected latency baseline metric")
+	}
+	if latencyMetric.SampleCount < 12 {
+		t.Fatalf("expected latency sample_count>=12, got=%d", latencyMetric.SampleCount)
+	}
+	if latencyMetric.UpperBound <= latencyMetric.LowerBound {
+		t.Fatalf("expected latency upper bound > lower bound, got upper=%f lower=%f", latencyMetric.UpperBound, latencyMetric.LowerBound)
+	}
+
+	availabilityMetric, ok := findBaselineMetric(group.Metrics, "availability_pct")
+	if !ok {
+		t.Fatalf("expected availability baseline metric")
+	}
+	if availabilityMetric.Mean <= 0 || availabilityMetric.Mean >= 100 {
+		t.Fatalf("expected availability mean between 0 and 100, got=%f", availabilityMetric.Mean)
+	}
+}
+
+func TestTelemetryBaselineReportBuildsDayHourAnomalyWindows(t *testing.T) {
+	s := LoadStore("")
+	online := true
+	base := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Hour)
+	day := base.Weekday()
+	dayHourA := base.Hour()
+	dayHourB := (base.Hour() + 1) % 24
+
+	for i := 0; i < 6; i++ {
+		latency := 10.0 + float64(i)
+		req := TelemetryIngestRequest{
+			Source:       "anomaly_window_test",
+			DeviceID:     "window-switch-1",
+			Device:       "Window Switch 1",
+			Role:         "switch",
+			SiteID:       "site-window",
+			ObservedAtMs: base.Add(time.Duration(i) * 7 * time.Minute).UnixMilli(),
+			Online:       &online,
+			LatencyMs:    &latency,
+		}
+		if _, _, ok := s.IngestTelemetry(req); !ok {
+			t.Fatalf("window A ingest failed index=%d", i)
+		}
+	}
+	for i := 0; i < 6; i++ {
+		latency := 50.0 + float64(i)
+		req := TelemetryIngestRequest{
+			Source:       "anomaly_window_test",
+			DeviceID:     "window-switch-1",
+			Device:       "Window Switch 1",
+			Role:         "switch",
+			SiteID:       "site-window",
+			ObservedAtMs: base.Add(1*time.Hour + time.Duration(i)*7*time.Minute).UnixMilli(),
+			Online:       &online,
+			LatencyMs:    &latency,
+		}
+		if _, _, ok := s.IngestTelemetry(req); !ok {
+			t.Fatalf("window B ingest failed index=%d", i)
+		}
+	}
+
+	report := s.TelemetryBaselineReport(72)
+	group, ok := findBaselineGroup(report.Groups, "switch", "site-window")
+	if !ok {
+		t.Fatalf("expected switch/site-window baseline group")
+	}
+	if len(group.Windows) < 2 {
+		t.Fatalf("expected at least 2 anomaly windows, got=%d", len(group.Windows))
+	}
+
+	foundA := false
+	foundB := false
+	for _, window := range group.Windows {
+		if window.DayOfWeek != int(day) {
+			continue
+		}
+		if window.HourOfDay == dayHourA && window.SampleCount >= 6 {
+			foundA = true
+		}
+		if window.HourOfDay == dayHourB && window.SampleCount >= 6 {
+			foundB = true
+		}
+	}
+	if !foundA || !foundB {
+		t.Fatalf("expected both anomaly windows present, foundA=%v foundB=%v", foundA, foundB)
+	}
+}
+
+func TestTelemetryAlertIntelligenceBuildsConfidenceImpactAndStormSummary(t *testing.T) {
+	s := LoadStore("")
+	online := true
+	offline := false
+
+	for i := 1; i <= 5; i++ {
+		deviceID := fmt.Sprintf("storm-node-%d", i)
+		name := fmt.Sprintf("Storm Node %d", i)
+		mac := fmt.Sprintf("aa:bb:cc:00:10:%02d", i)
+		req := TelemetryIngestRequest{
+			Source:   "storm_test",
+			DeviceID: deviceID,
+			Device:   name,
+			Role:     "gateway",
+			SiteID:   "storm-site",
+			Mac:      mac,
+			Serial:   "SER-" + deviceID,
+			Online:   &online,
+		}
+		if _, _, ok := s.IngestTelemetry(req); !ok {
+			t.Fatalf("seed ingest failed for %s", deviceID)
+		}
+	}
+
+	coreNeighbors := []TelemetryNeighborFact{
+		{NeighborIdentityHint: "storm-node-2", Protocol: "lldp"},
+		{NeighborIdentityHint: "storm-node-3", Protocol: "lldp"},
+		{NeighborIdentityHint: "storm-node-4", Protocol: "lldp"},
+		{NeighborIdentityHint: "storm-node-5", Protocol: "lldp"},
+	}
+	if _, _, ok := s.IngestTelemetry(TelemetryIngestRequest{
+		Source:    "storm_test",
+		DeviceID:  "storm-node-1",
+		Device:    "Storm Node 1",
+		Role:      "gateway",
+		SiteID:    "storm-site",
+		EventType: "telemetry",
+		Online:    &online,
+		Neighbors: coreNeighbors,
+	}); !ok {
+		t.Fatalf("core neighbor ingest failed")
+	}
+
+	for i := 1; i <= 5; i++ {
+		deviceID := fmt.Sprintf("storm-node-%d", i)
+		if _, incident, ok := s.IngestTelemetry(TelemetryIngestRequest{
+			Source:    "storm_test",
+			DeviceID:  deviceID,
+			Device:    fmt.Sprintf("Storm Node %d", i),
+			Role:      "gateway",
+			SiteID:    "storm-site",
+			EventType: "offline",
+			Online:    &offline,
+		}); !ok || incident == nil {
+			t.Fatalf("expected offline incident for %s", deviceID)
+		}
+	}
+
+	report := s.TelemetryAlertIntelligence(50, 30, 3)
+	if report.ActiveCount < 5 {
+		t.Fatalf("expected at least 5 active alerts, got=%d", report.ActiveCount)
+	}
+	if report.RawAlertCount < 5 {
+		t.Fatalf("expected raw alert count >= 5, got=%d", report.RawAlertCount)
+	}
+	if report.SummarizedAlertCount >= report.RawAlertCount {
+		t.Fatalf("expected summarized alerts < raw alerts, raw=%d summarized=%d", report.RawAlertCount, report.SummarizedAlertCount)
+	}
+	if len(report.StormBursts) == 0 {
+		t.Fatalf("expected at least one storm burst summary")
+	}
+
+	coreAlert, ok := findAlertByDeviceID(report.Alerts, "storm-node-1")
+	if !ok {
+		t.Fatalf("expected alert record for storm-node-1")
+	}
+	if coreAlert.ConfidenceScore < 0.60 {
+		t.Fatalf("expected confidence >= 0.60 for sustained offline core node, got=%f", coreAlert.ConfidenceScore)
+	}
+	if coreAlert.Impact.ManagedReach < 5 {
+		t.Fatalf("expected impact managed reach >= 5, got=%d", coreAlert.Impact.ManagedReach)
+	}
+	if coreAlert.Impact.Scope == "" || coreAlert.Impact.Scope == "unknown" {
+		t.Fatalf("expected non-empty impact scope, got=%s", coreAlert.Impact.Scope)
+	}
+}
+
+func TestTelemetryAlertIntelligenceLowerConfidenceForConflictingSample(t *testing.T) {
+	s := LoadStore("")
+	now := time.Now().UTC()
+	nowMs := now.UnixMilli()
+	online := true
+	s.mu.Lock()
+	s.Devices = append(s.Devices, Device{
+		ID:       "confidence-conflict-1",
+		Name:     "Confidence Conflict 1",
+		Role:     "ap",
+		SiteID:   "conflict-site",
+		Online:   true,
+		Source:   "conflict_test",
+		LastSeen: nowMs,
+	})
+	s.Incidents = append(s.Incidents, Incident{
+		ID:       "inc-confidence-conflict",
+		DeviceID: "confidence-conflict-1",
+		Type:     "offline",
+		Severity: "critical",
+		Started:  now.Add(-2 * time.Minute).Format(time.RFC3339),
+		Source:   "conflict_test",
+	})
+	s.TelemetryHot = append(s.TelemetryHot, TelemetrySample{
+		SampleID:            "ts-confidence-conflict",
+		DeviceID:            "confidence-conflict-1",
+		Source:              "conflict_test",
+		EventType:           "telemetry",
+		DeviceRole:          "ap",
+		SiteID:              "conflict-site",
+		Online:              &online,
+		ObservedAt:          nowMs,
+		ObservedISO:         now.Format(time.RFC3339),
+		TimestampConfidence: 0.25,
+	})
+	s.mu.Unlock()
+
+	report := s.TelemetryAlertIntelligence(20, 30, 4)
+	alert, ok := findAlertByDeviceID(report.Alerts, "confidence-conflict-1")
+	if !ok {
+		t.Fatalf("expected alert record for confidence-conflict-1")
+	}
+	if alert.ConfidenceLevel != "low" {
+		t.Fatalf("expected low confidence level for conflicting online sample, got=%s", alert.ConfidenceLevel)
+	}
+	if alert.ConfidenceScore >= 0.60 {
+		t.Fatalf("expected confidence score below 0.60 for conflict case, got=%f", alert.ConfidenceScore)
 	}
 }
 

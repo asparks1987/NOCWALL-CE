@@ -141,6 +141,10 @@ Legend:
 - [x] Per-account subscription licensing with CE/PRO feature entitlement checks
 - [x] Stripe billing wired through official `stripe-php` SDK (checkout, portal, webhook verify)
 - [x] Dockerized local stack
+- [x] Beta auth hardening: CSRF protection, session fixation mitigation, secure session cookies, and login throttling  
+  - Notes: Added CSRF token validation for login/register/logout and mutating AJAX routes, session cookie hardening (`HttpOnly` + `SameSite=Lax` + HTTPS-secure), session ID regeneration on login/register, and file-backed login lockout controls.
+- [x] Stripe-managed trial + payment-link tier checkout flow  
+  - Notes: Removed server-managed signup trial assignment; billing now supports Stripe payment-link tiers (env-configured) so trial windows and plan flows are owned by Stripe checkout/webhooks.
 - [ ] Planned product split change: move non-minimal CE capabilities behind PRO gates.
 
 ## 25 New CE Adoption Features (Strictly Non-PRO)
@@ -336,21 +340,34 @@ They avoid PRO-only domains (team workflows, correlation, automation, enterprise
   - Notes: Added normalized per-device-class governor rules with queue priorities, sample-interval enforcement in telemetry ingest, source-event priority ordering, drop accounting, and telemetry governor diagnostics at `GET /telemetry/governor`.
 - [x] R19 Add telemetry gap detector and missing-signal incident generation.
   - Notes: Added class-threshold-based telemetry gap detection with `telemetry_gap` incident create/resolve flow, poller gap-evaluation hooks, and regression tests for incident lifecycle behavior.
-- [ ] R20 Add clock skew checks at ingest and normalize timestamps with source confidence.
-- [ ] R21 Compute source quality scorecards (freshness, completeness, error rate).
-- [ ] R22 Add API and UI views for data-quality and ingestion health.
-- [ ] R23 Add load tests for retention compaction and sampling controls.
-- [ ] R24 Add runbooks for skew recovery and source degradation events.
+- [x] R20 Add clock skew checks at ingest and normalize timestamps with source confidence.
+  - Notes: Added ingest timestamp normalization (`observed_at`/`observed_at_ms`) with skew checks, correction rules, confidence scoring, and persisted timestamp metadata on telemetry samples and source observations.
+- [x] R21 Compute source quality scorecards (freshness, completeness, error rate).
+  - Notes: Added per-source quality aggregation (freshness, completeness, poll error rate, skew metrics, warning signals) and generated source scorecards with overall health classification.
+- [x] R22 Add API and UI views for data-quality and ingestion health.
+  - Notes: Added `/telemetry/quality` and `/telemetry/ingestion/health` API views, app proxy `?ajax=telemetry_quality`, and topology-tab UI panels for source quality scorecards and ingestion health.
+- [x] R23 Add load tests for retention compaction and sampling controls.
+  - Notes: Added benchmark load tests for retention compaction and sampling-governed ingest in `api/store_benchmark_test.go`.
+- [x] R24 Add runbooks for skew recovery and source degradation events.
+  - Notes: Added telemetry skew/degradation operations runbook in `docs/telemetry_skew_recovery.md`.
 
 ### Epic 4 - Smart Alert Signal Processing (F16-F20)
-- [ ] R25 Build dynamic baseline model per metric/device role/site.
-- [ ] R26 Add anomaly windows for day-of-week/hour-of-day behavior.
-- [ ] R27 Add alert confidence score pipeline and visible confidence badges.
-- [ ] R28 Add impact-radius estimator using topology dependencies.
-- [ ] R29 Add storm shield summarizer for large simultaneous event bursts.
-- [ ] R30 Add per-feature toggle flags to keep CE and PRO boundaries explicit.
-- [ ] R31 Add comparison dashboard: raw alerts vs summarized alerts.
-- [ ] R32 Add unit/integration tests for false positive/negative behavior.
+- [x] R25 Build dynamic baseline model per metric/device role/site.
+  - Notes: Added API baseline aggregation across telemetry tiers with per role+site metric baselines (`latency_ms`, `availability_pct`) including dynamic bounds (`mean ± sigma`) and summary endpoint `GET /telemetry/baselines`.
+- [x] R26 Add anomaly windows for day-of-week/hour-of-day behavior.
+  - Notes: Added per role+site day/hour anomaly windows in baseline reports and exposed those windows in the topology telemetry UI for operator visibility.
+- [x] R27 Add alert confidence score pipeline and visible confidence badges.  
+  - Notes: Added telemetry alert-intelligence scoring pipeline with per-incident confidence score/level/reasons and surfaced confidence badges in the topology UI.
+- [x] R28 Add impact-radius estimator using topology dependencies.  
+  - Notes: Added topology-graph-based impact radius estimation per active alert (managed reach, reach %, scope classification).
+- [x] R29 Add storm shield summarizer for large simultaneous event bursts.  
+  - Notes: Added burst grouping by alert type/source/site with thresholded storm summaries and summarized-count compaction output.
+- [x] R30 Add per-feature toggle flags to keep CE and PRO boundaries explicit.  
+  - Notes: Added explicit feature flags for alert confidence, impact radius, storm shield, and alert comparison in API/mobile flags and UI feature gating.
+- [x] R31 Add comparison dashboard: raw alerts vs summarized alerts.  
+  - Notes: Added raw-vs-summarized alert comparison metrics in the alert intelligence API and topology “Storm Shield Summary” UI section.
+- [x] R32 Add unit/integration tests for false positive/negative behavior.  
+  - Notes: Added store tests validating confidence scoring, impact estimation, storm summarization reduction, and low-confidence handling for conflicting signal cases.
 
 ## Phase 3 - Incident Operations and Wallboard UX
 

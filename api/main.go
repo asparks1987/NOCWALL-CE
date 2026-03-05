@@ -72,18 +72,26 @@ func main() {
 			UispBaseURL: uispBase,
 			APIBaseURL:  apiBase,
 			FeatureFlags: map[string]bool{
-				"native_api":                  true,
-				"agent_ingest":                true,
-				"events_ingest":               true,
-				"source_uisp_poll":            true,
-				"topology_api":                true,
-				"topology_path_trace":         true,
-				"topology_ha_watcher":         true,
-				"telemetry_sampling_governor": true,
-				"telemetry_gap_detector":      true,
-				"source_poll_background":      pollSec > 0,
-				"cloud_multi_tenant_stub":     true,
-				"connector_multivendor_stub":  true,
+				"native_api":                   true,
+				"agent_ingest":                 true,
+				"events_ingest":                true,
+				"source_uisp_poll":             true,
+				"topology_api":                 true,
+				"topology_path_trace":          true,
+				"topology_ha_watcher":          true,
+				"telemetry_sampling_governor":  true,
+				"telemetry_gap_detector":       true,
+				"telemetry_quality_scorecards": true,
+				"telemetry_ingestion_health":   true,
+				"telemetry_dynamic_baseline":   true,
+				"telemetry_anomaly_windows":    true,
+				"telemetry_alert_confidence":   true,
+				"telemetry_impact_radius":      true,
+				"telemetry_storm_shield":       true,
+				"telemetry_alert_comparison":   true,
+				"source_poll_background":       pollSec > 0,
+				"cloud_multi_tenant_stub":      true,
+				"connector_multivendor_stub":   true,
 			},
 			PushRegister: apiBase + "/push/register",
 			Environment:  getenv("APP_ENV", "dev"),
@@ -133,6 +141,26 @@ func main() {
 
 	app.Get("/telemetry/governor", authMiddleware, func(c *fiber.Ctx) error {
 		return c.JSON(store.TelemetryGovernorStatus())
+	})
+
+	app.Get("/telemetry/quality", authMiddleware, func(c *fiber.Ctx) error {
+		return c.JSON(store.TelemetryQualityReport())
+	})
+
+	app.Get("/telemetry/ingestion/health", authMiddleware, func(c *fiber.Ctx) error {
+		return c.JSON(store.TelemetryIngestionHealth())
+	})
+
+	app.Get("/telemetry/baselines", authMiddleware, func(c *fiber.Ctx) error {
+		windowHours := c.QueryInt("window_hours", defaultBaselineHours)
+		return c.JSON(store.TelemetryBaselineReport(windowHours))
+	})
+
+	app.Get("/telemetry/alerts/intelligence", authMiddleware, func(c *fiber.Ctx) error {
+		limit := c.QueryInt("limit", 40)
+		windowMinutes := c.QueryInt("window_minutes", defaultAlertWindowMins)
+		burstThreshold := c.QueryInt("burst_threshold", defaultBurstThreshold)
+		return c.JSON(store.TelemetryAlertIntelligence(limit, windowMinutes, burstThreshold))
 	})
 
 	app.Get("/sources/uisp/status", authMiddleware, func(c *fiber.Ctx) error {
@@ -354,11 +382,15 @@ func main() {
 
 		batch, err := uispConnector.Poll(c.Context(), req)
 		if err != nil {
+			store.RecordSourcePollOutcome("uisp", false, err.Error(), time.Now().UnixMilli())
+			store.DetectTelemetryGaps(time.Now().UnixMilli())
 			resp := batch.Response
 			resp.Stub = true
 			return c.Status(http.StatusBadGateway).JSON(resp)
 		}
+		store.RecordSourcePollOutcome("uisp", true, "", time.Now().UnixMilli())
 		ingested, incidents, dropped := ingestSourceEvents(store, batch.Events)
+		gapsCreated, gapsResolved := store.DetectTelemetryGaps(time.Now().UnixMilli())
 		batch.Response.Ingested = ingested
 		batch.Response.DroppedByGovernor = dropped
 		batch.Response.IncidentsCreated = incidents
@@ -371,6 +403,8 @@ func main() {
 			"ingested", ingested,
 			"dropped_by_governor", dropped,
 			"incidents", incidents,
+			"gap_incidents_created", gapsCreated,
+			"gap_incidents_resolved", gapsResolved,
 			"demo", batch.Response.Demo,
 		)
 		return c.JSON(batch.Response)

@@ -289,6 +289,10 @@ const FEATURE_FLAGS = (() => {
     topology: !!raw.topology,
     inventory: !!raw.inventory,
     history: !!raw.history,
+    telemetry_alert_confidence: !!raw.telemetry_alert_confidence,
+    telemetry_impact_radius: !!raw.telemetry_impact_radius,
+    telemetry_storm_shield: !!raw.telemetry_storm_shield,
+    telemetry_alert_comparison: !!raw.telemetry_alert_comparison,
     ack: !!raw.ack,
     simulate: !!raw.simulate,
     cpe_history: !!raw.cpe_history
@@ -337,6 +341,9 @@ let demoModeToggleBusy = false;
 let browserNotificationsToggleBusy = false;
 let topologyCache = { nodes: [], edges: [], health: null, fetched_at: "" };
 let topologyHACache = { pairs: [], events: [], fetched_at: "" };
+let telemetryQualityCache = { scorecards: [], health: null, governor: null, fetched_at: "" };
+let telemetryBaselineCache = { groups: [], window_hours: 0, fetched_at: "" };
+let telemetryAlertCache = { alerts: [], storm_bursts: [], raw_alert_count: 0, summarized_alert_count: 0, active_count: 0, window_minutes: 0, burst_threshold: 0, fetched_at: "" };
 let topologyLoading = false;
 let topologyLastFetchMs = 0;
 let topologyTrace = null;
@@ -1972,6 +1979,27 @@ function setTopologyHAStatus(msg, isError){
   el.classList.toggle("error", !!isError);
 }
 
+function setTelemetryQualityStatus(msg, isError){
+  const el = document.getElementById("telemetryQualityStatus");
+  if(!el) return;
+  el.textContent = msg || "";
+  el.classList.toggle("error", !!isError);
+}
+
+function setTelemetryBaselineStatus(msg, isError){
+  const el = document.getElementById("telemetryBaselineStatus");
+  if(!el) return;
+  el.textContent = msg || "";
+  el.classList.toggle("error", !!isError);
+}
+
+function setTelemetryAlertStatus(msg, isError){
+  const el = document.getElementById("telemetryAlertStatus");
+  if(!el) return;
+  el.textContent = msg || "";
+  el.classList.toggle("error", !!isError);
+}
+
 function topologyEdgeState(edge){
   if(!edge || edge.resolved !== true) return "unresolved";
   const updated = edge.updated_at ? Date.parse(edge.updated_at) : NaN;
@@ -2118,6 +2146,290 @@ function renderTopologyHA(){
   }
 }
 
+function telemetryQualityBadgeClass(status){
+  const normalized = String(status || "").trim().toLowerCase();
+  if(normalized === "healthy") return "good";
+  if(normalized === "degraded") return "warn";
+  return "bad";
+}
+
+function renderTelemetryQuality(){
+  const summaryEl = document.getElementById("telemetryQualitySummary");
+  const listEl = document.getElementById("telemetryQualityList");
+  const healthEl = document.getElementById("telemetryIngestionHealth");
+  if(!summaryEl || !listEl || !healthEl) return;
+
+  const scorecards = Array.isArray(telemetryQualityCache.scorecards) ? telemetryQualityCache.scorecards : [];
+  const health = telemetryQualityCache.health && typeof telemetryQualityCache.health === "object"
+    ? telemetryQualityCache.health
+    : null;
+  const governor = telemetryQualityCache.governor && typeof telemetryQualityCache.governor === "object"
+    ? telemetryQualityCache.governor
+    : null;
+
+  if(!health){
+    summaryEl.innerHTML = "";
+    listEl.innerHTML = `<div class="topology-ha-empty">Telemetry quality data not available.</div>`;
+    healthEl.innerHTML = `<div class="topology-ha-empty">Ingestion health data not available.</div>`;
+    return;
+  }
+
+  summaryEl.innerHTML = [
+    `<span class="badge good">Sources: ${health.source_count ?? 0}</span>`,
+    `<span class="badge good">Healthy: ${health.healthy_sources ?? 0}</span>`,
+    `<span class="badge ${(health.degraded_sources ?? 0) > 0 ? "warn" : "good"}">Degraded: ${health.degraded_sources ?? 0}</span>`,
+    `<span class="badge ${(health.failed_sources ?? 0) > 0 ? "bad" : "good"}">Failing: ${health.failed_sources ?? 0}</span>`,
+    `<span class="badge ${(health.active_gap_incidents ?? 0) > 0 ? "warn" : "good"}">Active Gaps: ${health.active_gap_incidents ?? 0}</span>`
+  ].join(" ");
+
+  if(scorecards.length === 0){
+    listEl.innerHTML = `<div class="topology-ha-empty">No source scorecards available yet. Poll and ingest telemetry to build quality metrics.</div>`;
+  } else {
+    listEl.innerHTML = scorecards.slice(0, 30).map(card=>{
+      const source = escapeHtml(card && card.source || "--");
+      const status = String(card && card.status || "failing").toLowerCase();
+      const overall = Number(card && card.overall_score || 0);
+      const fresh = Number(card && card.freshness_score || 0);
+      const complete = Number(card && card.completeness_score || 0);
+      const errRate = Number(card && card.error_rate_pct || 0).toFixed(2);
+      const skewAvg = Number(card && card.skew_avg_ms || 0);
+      const skewMax = Number(card && card.skew_max_ms || 0);
+      const warns = Array.isArray(card && card.warnings) ? card.warnings : [];
+      return `<div class="topology-ha-item">
+        <div><strong>${source}</strong></div>
+        <div class="topology-ha-meta">
+          <span class="badge ${telemetryQualityBadgeClass(status)}">${escapeHtml(status)}</span>
+          <span>Overall: <strong>${overall}</strong></span>
+          <span>Freshness: ${fresh}</span>
+          <span>Completeness: ${complete}</span>
+          <span>Error Rate: ${errRate}%</span>
+        </div>
+        <div class="topology-ha-note">Clock skew avg/max: ${skewAvg}ms / ${skewMax}ms</div>
+        ${warns.length ? `<div class="topology-ha-note">Warnings: ${escapeHtml(warns.join(", "))}</div>` : ""}
+      </div>`;
+    }).join("");
+  }
+
+  const accepted = Number(health.accepted_samples || 0);
+  const dropped = Number(health.dropped_samples || 0);
+  const attempts = Number(health.poll_attempts || 0);
+  const failures = Number(health.poll_failures || 0);
+  const dropPct = (accepted + dropped) > 0 ? ((dropped / (accepted + dropped)) * 100) : 0;
+  const failPct = attempts > 0 ? ((failures / attempts) * 100) : 0;
+  const govAccepted = Number(governor && governor.accepted_samples || 0);
+  const govDropped = Number(governor && governor.dropped_samples || 0);
+  const govGaps = Number(governor && governor.active_gap_incidents || 0);
+
+  healthEl.innerHTML = `<div class="topology-ha-item">
+    <div class="topology-ha-meta">
+      <span class="badge good">Accepted Samples: ${accepted}</span>
+      <span class="badge ${dropped > 0 ? "warn" : "good"}">Dropped Samples: ${dropped} (${dropPct.toFixed(2)}%)</span>
+    </div>
+    <div class="topology-ha-meta">
+      <span class="badge ${failures > 0 ? "warn" : "good"}">Poll Failures: ${failures}/${attempts} (${failPct.toFixed(2)}%)</span>
+      <span class="badge ${govGaps > 0 ? "warn" : "good"}">Governor Active Gaps: ${govGaps}</span>
+    </div>
+    <div class="topology-ha-note">Governor counters: accepted=${govAccepted}, dropped=${govDropped}.</div>
+  </div>`;
+}
+
+function renderTelemetryBaselines(){
+  const summaryEl = document.getElementById("telemetryBaselineSummary");
+  const groupsEl = document.getElementById("telemetryBaselineGroups");
+  const windowsEl = document.getElementById("telemetryBaselineWindows");
+  if(!summaryEl || !groupsEl || !windowsEl) return;
+
+  const groups = Array.isArray(telemetryBaselineCache.groups) ? telemetryBaselineCache.groups : [];
+  const windowHours = Number(telemetryBaselineCache.window_hours || 0);
+  const totalWindows = groups.reduce((acc, group)=>{
+    const windows = Array.isArray(group && group.windows) ? group.windows : [];
+    return acc + windows.length;
+  }, 0);
+
+  summaryEl.innerHTML = [
+    `<span class="badge good">Groups: ${groups.length}</span>`,
+    `<span class="badge good">Baseline Window: ${windowHours || "--"}h</span>`,
+    `<span class="badge ${(totalWindows > 0) ? "good" : "warn"}">Anomaly Windows: ${totalWindows}</span>`
+  ].join(" ");
+
+  if(groups.length === 0){
+    groupsEl.innerHTML = `<div class="topology-ha-empty">No baseline groups available yet. Keep telemetry flowing to build dynamic baselines.</div>`;
+    windowsEl.innerHTML = `<div class="topology-ha-empty">No day/hour anomaly windows available yet.</div>`;
+    return;
+  }
+
+  groupsEl.innerHTML = groups.slice(0, 24).map(group=>{
+    const role = escapeHtml(group && group.role || "unknown");
+    const site = escapeHtml(group && group.site_id || "unspecified");
+    const sampleCount = Number(group && group.sample_count || 0);
+    const metrics = Array.isArray(group && group.metrics) ? group.metrics : [];
+    const metricHtml = metrics.length
+      ? metrics.map(metric=>{
+          const name = escapeHtml(metric && metric.metric || "metric");
+          const mean = Number(metric && metric.mean || 0).toFixed(2);
+          const stddev = Number(metric && metric.stddev || 0).toFixed(2);
+          const lower = Number(metric && metric.lower_bound || 0).toFixed(2);
+          const upper = Number(metric && metric.upper_bound || 0).toFixed(2);
+          const p95 = Number(metric && metric.p95 || 0).toFixed(2);
+          const unit = escapeHtml(metric && metric.unit || "");
+          return `<div class="topology-ha-note">${name}: mean=${mean}${unit ? " " + unit : ""}, p95=${p95}${unit ? " " + unit : ""}, bounds=${lower}-${upper}${unit ? " " + unit : ""}, stddev=${stddev}</div>`;
+        }).join("")
+      : `<div class="topology-ha-note">Insufficient samples for baseline metrics.</div>`;
+    return `<div class="topology-ha-item">
+      <div><strong>${role}</strong> @ <strong>${site}</strong></div>
+      <div class="topology-ha-meta">
+        <span class="badge good">Samples: ${sampleCount}</span>
+        <span class="badge ${metrics.length > 0 ? "good" : "warn"}">Metrics: ${metrics.length}</span>
+      </div>
+      ${metricHtml}
+    </div>`;
+  }).join("");
+
+  const windowRows = [];
+  groups.slice(0, 16).forEach(group=>{
+    const role = escapeHtml(group && group.role || "unknown");
+    const site = escapeHtml(group && group.site_id || "unspecified");
+    const windows = Array.isArray(group && group.windows) ? group.windows : [];
+    windows.slice(0, 5).forEach(window=>{
+      const day = Number(window && window.day_of_week || 0);
+      const hour = Number(window && window.hour_of_day || 0);
+      const count = Number(window && window.sample_count || 0);
+      const lat = Number(window && window.latency_mean_ms || 0).toFixed(2);
+      const avail = Number(window && window.availability_mean_pct || 0).toFixed(2);
+      windowRows.push(`<div class="topology-ha-item">
+        <div><strong>${role}</strong> @ <strong>${site}</strong></div>
+        <div class="topology-ha-meta">
+          <span class="badge good">D${day} H${hour}</span>
+          <span>Samples: ${count}</span>
+          <span>Latency Mean: ${lat}ms</span>
+          <span>Availability Mean: ${avail}%</span>
+        </div>
+      </div>`);
+    });
+  });
+  windowsEl.innerHTML = windowRows.length
+    ? windowRows.join("")
+    : `<div class="topology-ha-empty">No anomaly windows met sample minimums yet.</div>`;
+}
+
+function telemetryConfidenceBadgeClass(level){
+  const normalized = String(level || "").trim().toLowerCase();
+  if(normalized === "high") return "good";
+  if(normalized === "medium") return "warn";
+  return "bad";
+}
+
+function telemetryImpactBadgeClass(scope){
+  const normalized = String(scope || "").trim().toLowerCase();
+  if(normalized === "network") return "bad";
+  if(normalized === "site") return "warn";
+  if(normalized === "local") return "good";
+  return "warn";
+}
+
+function renderTelemetryAlertIntelligence(){
+  const summaryEl = document.getElementById("telemetryAlertSummary");
+  const listEl = document.getElementById("telemetryAlertList");
+  const stormEl = document.getElementById("telemetryStormSummary");
+  if(!summaryEl || !listEl || !stormEl) return;
+
+  const alerts = Array.isArray(telemetryAlertCache.alerts) ? telemetryAlertCache.alerts : [];
+  const bursts = Array.isArray(telemetryAlertCache.storm_bursts) ? telemetryAlertCache.storm_bursts : [];
+  const activeCount = Number(telemetryAlertCache.active_count || alerts.length || 0);
+  const rawCount = Number(telemetryAlertCache.raw_alert_count || 0);
+  const summarizedCount = Number(telemetryAlertCache.summarized_alert_count || 0);
+  const windowMinutes = Number(telemetryAlertCache.window_minutes || 0);
+  const burstThreshold = Number(telemetryAlertCache.burst_threshold || 0);
+  const reductionPct = rawCount > 0 ? ((Math.max(0, rawCount - summarizedCount) / rawCount) * 100) : 0;
+
+  summaryEl.innerHTML = [
+    `<span class="badge ${activeCount > 0 ? "warn" : "good"}">Active Alerts: ${activeCount}</span>`,
+    `<span class="badge ${rawCount > summarizedCount ? "warn" : "good"}">Raw: ${rawCount}</span>`,
+    `<span class="badge good">Summarized: ${summarizedCount}</span>`,
+    `<span class="badge ${reductionPct >= 20 ? "good" : "warn"}">Reduction: ${reductionPct.toFixed(1)}%</span>`,
+    `<span class="badge good">Window: ${windowMinutes || "--"}m</span>`
+  ].join(" ");
+
+  if(alerts.length === 0){
+    listEl.innerHTML = `<div class="topology-ha-empty">No active telemetry alerts right now.</div>`;
+  } else {
+    listEl.innerHTML = alerts.slice(0, 40).map(item=>{
+      const incident = item && item.incident ? item.incident : {};
+      const name = escapeHtml(item && (item.device_name || incident.device_id) || incident.device_id || "--");
+      const role = escapeHtml(item && item.device_role || "--");
+      const site = escapeHtml(item && item.site_id || "--");
+      const alertType = escapeHtml(incident && incident.type || "alert");
+      const severity = escapeHtml(incident && incident.severity || "unknown");
+      const source = escapeHtml(incident && incident.source || "--");
+      const confidence = Number(item && item.confidence_score || 0).toFixed(2);
+      const level = String(item && item.confidence_level || "low").toLowerCase();
+      const reasons = Array.isArray(item && item.confidence_reasons) ? item.confidence_reasons : [];
+      const impact = item && item.impact ? item.impact : {};
+      const scope = String(impact && impact.scope || "unknown").toLowerCase();
+      const managedReach = Number(impact && impact.managed_reach || 0);
+      const totalManaged = Number(impact && impact.total_managed || 0);
+      const reachPct = Number(impact && impact.reach_pct || 0).toFixed(2);
+      const started = incident && incident.started_at ? new Date(incident.started_at).toLocaleString() : "--";
+      return `<div class="topology-ha-item">
+        <div><strong>${name}</strong> <span class="topology-ha-sep">(${alertType})</span></div>
+        <div class="topology-ha-meta">
+          <span class="badge ${telemetryConfidenceBadgeClass(level)}">${escapeHtml(level)} ${confidence}</span>
+          <span class="badge ${telemetryImpactBadgeClass(scope)}">Impact: ${escapeHtml(scope)}</span>
+          <span>Role/Site: ${role} @ ${site}</span>
+        </div>
+        <div class="topology-ha-meta">
+          <span>Severity: ${severity}</span>
+          <span>Source: ${source}</span>
+          <span>Started: ${escapeHtml(started)}</span>
+        </div>
+        <div class="topology-ha-note">Impact radius: managed reach ${managedReach}/${totalManaged} (${reachPct}%).</div>
+        ${reasons.length ? `<div class="topology-ha-note">Confidence factors: ${escapeHtml(reasons.join(", "))}</div>` : ""}
+      </div>`;
+    }).join("");
+  }
+
+  if(rawCount === 0){
+    stormEl.innerHTML = `<div class="topology-ha-empty">No recent alerts in the current storm window.</div>`;
+    return;
+  }
+
+  const header = `<div class="topology-ha-item">
+    <div class="topology-ha-meta">
+      <span class="badge ${bursts.length > 0 ? "warn" : "good"}">Bursts: ${bursts.length}</span>
+      <span class="badge ${rawCount > summarizedCount ? "warn" : "good"}">Raw ${rawCount} -> Summarized ${summarizedCount}</span>
+      <span>Threshold: ${burstThreshold || "--"} alerts</span>
+    </div>
+    <div class="topology-ha-note">Comparison dashboard: raw alerts versus storm-shield summarization over the trailing ${windowMinutes || "--"} minutes.</div>
+  </div>`;
+
+  if(bursts.length === 0){
+    stormEl.innerHTML = `${header}<div class="topology-ha-empty">No alert bursts crossed the summarization threshold.</div>`;
+    return;
+  }
+
+  stormEl.innerHTML = header + bursts.slice(0, 30).map(burst=>{
+    const type = escapeHtml(burst && burst.alert_type || "alert");
+    const source = escapeHtml(burst && burst.source || "--");
+    const site = escapeHtml(burst && burst.site_id || "--");
+    const severity = escapeHtml(burst && burst.severity || "unknown");
+    const deviceCount = Number(burst && burst.device_count || 0);
+    const alertCount = Number(burst && burst.alert_count || 0);
+    const durationMin = Number(burst && burst.duration_min || 0).toFixed(2);
+    const started = burst && burst.started_at ? new Date(burst.started_at).toLocaleString() : "--";
+    const ended = burst && burst.ended_at ? new Date(burst.ended_at).toLocaleString() : "--";
+    return `<div class="topology-ha-item">
+      <div><strong>${type}</strong> burst @ <strong>${site}</strong></div>
+      <div class="topology-ha-meta">
+        <span class="badge ${alertCount >= (burstThreshold * 2) ? "bad" : "warn"}">Alerts: ${alertCount}</span>
+        <span>Devices: ${deviceCount}</span>
+        <span>Source: ${source}</span>
+        <span>Severity: ${severity}</span>
+      </div>
+      <div class="topology-ha-note">Window: ${escapeHtml(started)} to ${escapeHtml(ended)} (${durationMin} minutes).</div>
+    </div>`;
+  }).join("");
+}
+
 function populateTopologySelectors(){
   const sourceEl = document.getElementById("topologySourceSelect");
   const targetEl = document.getElementById("topologyTargetSelect");
@@ -2183,6 +2495,9 @@ function renderTopologyGraph(){
 function renderTopology(){
   renderTopologyHealth();
   renderTopologyHA();
+  renderTelemetryQuality();
+  renderTelemetryBaselines();
+  renderTelemetryAlertIntelligence();
   populateTopologySelectors();
   renderTopologyGraph();
 }
@@ -2191,15 +2506,29 @@ async function loadTopology(force){
   if(!featureEnabled("topology")) return;
   if(topologyLoading) return;
   if(!force && (Date.now() - topologyLastFetchMs) < TOPOLOGY_REFRESH_MS) return;
+  const loadAlertIntelligence = featureEnabled("telemetry_alert_confidence")
+    || featureEnabled("telemetry_impact_radius")
+    || featureEnabled("telemetry_storm_shield")
+    || featureEnabled("telemetry_alert_comparison");
   topologyLoading = true;
   setTopologyStatus("Loading topology...", false);
   setTopologyHAStatus("Loading HA watcher...", false);
+  setTelemetryQualityStatus("Loading telemetry quality...", false);
+  setTelemetryBaselineStatus("Loading telemetry baselines...", false);
+  if(loadAlertIntelligence){
+    setTelemetryAlertStatus("Loading alert intelligence...", false);
+  }
   try{
-    const [resp, haResp] = await Promise.all([
+    const [resp, haResp, qualityResp, baselineResp, alertResp] = await Promise.all([
       fetch(`?ajax=topology_overview&t=${Date.now()}`, { cache:"no-store" }),
-      fetch(`?ajax=topology_ha&t=${Date.now()}`, { cache:"no-store" })
+      fetch(`?ajax=topology_ha&t=${Date.now()}`, { cache:"no-store" }),
+      fetch(`?ajax=telemetry_quality&t=${Date.now()}`, { cache:"no-store" }),
+      fetch(`?ajax=telemetry_baselines&window_hours=${14 * 24}&t=${Date.now()}`, { cache:"no-store" }),
+      loadAlertIntelligence
+        ? fetch(`?ajax=telemetry_alert_intelligence&window_minutes=15&burst_threshold=4&limit=50&t=${Date.now()}`, { cache:"no-store" })
+        : Promise.resolve(null)
     ]);
-    if(resp.status===401 || haResp.status===401){ location.reload(); return; }
+    if(resp.status===401 || haResp.status===401 || qualityResp.status===401 || baselineResp.status===401 || (alertResp && alertResp.status===401)){ location.reload(); return; }
 
     const payload = await resp.json().catch(()=>null);
     if(!payload || !payload.ok){
@@ -2221,6 +2550,58 @@ async function loadTopology(force){
       setTopologyHAStatus((haPayload && (haPayload.message || haPayload.error)) || "HA watcher unavailable.", true);
     }
 
+    const qualityPayload = await qualityResp.json().catch(()=>null);
+    if(qualityPayload && qualityPayload.ok){
+      telemetryQualityCache = {
+        scorecards: Array.isArray(qualityPayload.scorecards) ? qualityPayload.scorecards : [],
+        health: (qualityPayload.health && typeof qualityPayload.health === "object") ? qualityPayload.health : null,
+        governor: (qualityPayload.governor && typeof qualityPayload.governor === "object") ? qualityPayload.governor : null,
+        fetched_at: qualityPayload.fetched_at || ""
+      };
+      const srcCount = telemetryQualityCache.scorecards.length;
+      const degraded = Number(telemetryQualityCache.health && telemetryQualityCache.health.degraded_sources || 0);
+      const failing = Number(telemetryQualityCache.health && telemetryQualityCache.health.failed_sources || 0);
+      setTelemetryQualityStatus(`Telemetry quality loaded: ${srcCount} sources (${degraded} degraded, ${failing} failing).`, false);
+    } else {
+      telemetryQualityCache = { scorecards: [], health: null, governor: null, fetched_at: "" };
+      setTelemetryQualityStatus((qualityPayload && (qualityPayload.message || qualityPayload.error)) || "Telemetry quality unavailable.", true);
+    }
+
+    const baselinePayload = await baselineResp.json().catch(()=>null);
+    if(baselinePayload && baselinePayload.ok){
+      telemetryBaselineCache = {
+        groups: Array.isArray(baselinePayload.groups) ? baselinePayload.groups : [],
+        window_hours: Number(baselinePayload.window_hours || 0),
+        fetched_at: baselinePayload.fetched_at || ""
+      };
+      setTelemetryBaselineStatus(`Telemetry baselines loaded: ${telemetryBaselineCache.groups.length} role/site groups.`, false);
+    } else {
+      telemetryBaselineCache = { groups: [], window_hours: 0, fetched_at: "" };
+      setTelemetryBaselineStatus((baselinePayload && (baselinePayload.message || baselinePayload.error)) || "Telemetry baselines unavailable.", true);
+    }
+
+    if(loadAlertIntelligence && alertResp){
+      const alertPayload = await alertResp.json().catch(()=>null);
+      if(alertPayload && alertPayload.ok){
+        telemetryAlertCache = {
+          alerts: Array.isArray(alertPayload.alerts) ? alertPayload.alerts : [],
+          storm_bursts: Array.isArray(alertPayload.storm_bursts) ? alertPayload.storm_bursts : [],
+          raw_alert_count: Number(alertPayload.raw_alert_count || 0),
+          summarized_alert_count: Number(alertPayload.summarized_alert_count || 0),
+          active_count: Number(alertPayload.active_count || 0),
+          window_minutes: Number(alertPayload.window_minutes || 0),
+          burst_threshold: Number(alertPayload.burst_threshold || 0),
+          fetched_at: alertPayload.fetched_at || ""
+        };
+        setTelemetryAlertStatus(`Alert intelligence loaded: ${telemetryAlertCache.active_count} active, ${telemetryAlertCache.storm_bursts.length} storm bursts.`, false);
+      } else {
+        telemetryAlertCache = { alerts: [], storm_bursts: [], raw_alert_count: 0, summarized_alert_count: 0, active_count: 0, window_minutes: 0, burst_threshold: 0, fetched_at: "" };
+        setTelemetryAlertStatus((alertPayload && (alertPayload.message || alertPayload.error)) || "Alert intelligence unavailable.", true);
+      }
+    } else {
+      telemetryAlertCache = { alerts: [], storm_bursts: [], raw_alert_count: 0, summarized_alert_count: 0, active_count: 0, window_minutes: 0, burst_threshold: 0, fetched_at: "" };
+    }
+
     topologyCache = {
       nodes: Array.isArray(payload.nodes) ? payload.nodes : [],
       edges: Array.isArray(payload.edges) ? payload.edges : [],
@@ -2233,6 +2614,11 @@ async function loadTopology(force){
   }catch(_){
     setTopologyStatus("Topology request failed.", true);
     setTopologyHAStatus("HA watcher request failed.", true);
+    setTelemetryQualityStatus("Telemetry quality request failed.", true);
+    setTelemetryBaselineStatus("Telemetry baselines request failed.", true);
+    if(loadAlertIntelligence){
+      setTelemetryAlertStatus("Alert intelligence request failed.", true);
+    }
   } finally {
     topologyLoading = false;
   }
@@ -3009,7 +3395,12 @@ function manageUispToken(){
   manageUispSources();
 }
 function logout(){
-  window.location.href='?action=logout';
+  const token = (typeof window.NOCWALL_CSRF_TOKEN === "string") ? window.NOCWALL_CSRF_TOKEN : "";
+  const params = new URLSearchParams({ action: "logout" });
+  if(token){
+    params.set("_csrf", token);
+  }
+  window.location.href='?'+params.toString();
 }
 
 function buildMetricBadges(device, latencyVal){

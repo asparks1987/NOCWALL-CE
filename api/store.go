@@ -5,22 +5,25 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	storeSchemaVersion      = 4
+	storeSchemaVersion      = 5
 	maxSourceObservations   = 10000
 	maxDriftSnapshots       = 4000
 	maxDeviceInterfaces     = 20000
 	maxNeighborLinks        = 20000
 	maxHAFailoverEvents     = 4000
 	maxSamplingStateDevices = 20000
+	maxQualitySources       = 200
 	defaultHotRetentionMs   = int64((6 * time.Hour) / time.Millisecond)
 	defaultWarmRetentionMs  = int64((7 * 24 * time.Hour) / time.Millisecond)
 	defaultColdRetentionMs  = int64((90 * 24 * time.Hour) / time.Millisecond)
@@ -34,11 +37,22 @@ const (
 	defaultGenericSampleMs  = int64((20 * time.Second) / time.Millisecond)
 	telemetryGapMultiplier  = int64(4)
 	minTelemetryGapMs       = int64((2 * time.Minute) / time.Millisecond)
+	maxFutureObservedSkewMs = int64((2 * time.Minute) / time.Millisecond)
+	maxPastObservedAgeMs    = int64((7 * 24 * time.Hour) / time.Millisecond)
+	clockSkewViolationMs    = int64((2 * time.Minute) / time.Millisecond)
+	lowTimestampConfidence  = 0.60
 	identityBackfillSource  = "store_migration"
 	defaultDeviceSourceName = "ingest"
 	retentionHotHours       = 24
 	retentionWarmHours      = 7 * 24
 	retentionColdHours      = 30 * 24
+	defaultBaselineHours    = 14 * 24
+	maxBaselineGroups       = 120
+	minBaselineSamples      = 6
+	defaultAlertWindowMins  = 15
+	defaultBurstThreshold   = 4
+	maxAlertReportIncidents = 120
+	maxStormBursts          = 40
 )
 
 var (
@@ -57,45 +71,50 @@ type TelemetryRetentionPolicy struct {
 }
 
 type TelemetrySample struct {
-	SampleID    string   `json:"sample_id"`
-	DeviceID    string   `json:"device_id"`
-	IdentityID  string   `json:"identity_id,omitempty"`
-	Source      string   `json:"source"`
-	EventType   string   `json:"event_type"`
-	DeviceRole  string   `json:"device_role,omitempty"`
-	SiteID      string   `json:"site_id,omitempty"`
-	Online      *bool    `json:"online,omitempty"`
-	LatencyMs   *float64 `json:"latency_ms,omitempty"`
-	ObservedAt  int64    `json:"observed_at"`
-	ObservedISO string   `json:"observed_at_iso,omitempty"`
+	SampleID            string   `json:"sample_id"`
+	DeviceID            string   `json:"device_id"`
+	IdentityID          string   `json:"identity_id,omitempty"`
+	Source              string   `json:"source"`
+	EventType           string   `json:"event_type"`
+	DeviceRole          string   `json:"device_role,omitempty"`
+	SiteID              string   `json:"site_id,omitempty"`
+	Online              *bool    `json:"online,omitempty"`
+	LatencyMs           *float64 `json:"latency_ms,omitempty"`
+	ObservedAt          int64    `json:"observed_at"`
+	SourceObservedAt    int64    `json:"source_observed_at,omitempty"`
+	ClockSkewMs         int64    `json:"clock_skew_ms,omitempty"`
+	TimestampConfidence float64  `json:"timestamp_confidence,omitempty"`
+	TimestampCorrected  bool     `json:"timestamp_corrected,omitempty"`
+	ObservedISO         string   `json:"observed_at_iso,omitempty"`
 }
 
 type Store struct {
 	mu sync.RWMutex
 
-	Version                     int                          `json:"version"`
-	Devices                     []Device                     `json:"devices"`
-	Incidents                   []Incident                   `json:"incidents"`
-	Agents                      []Agent                      `json:"agents"`
-	PushTokens                  []PushRegisterRequest        `json:"push_tokens"`
-	Users                       []User                       `json:"users"`
-	DeviceIdentities            []DeviceIdentity             `json:"device_identities"`
-	DeviceInterfaces            []DeviceInterface            `json:"device_interfaces"`
-	NeighborLinks               []NeighborLink               `json:"neighbor_links"`
-	HardwareProfiles            []HardwareProfile            `json:"hardware_profiles"`
-	SourceObservations          []SourceObservation          `json:"source_observations"`
-	DriftSnapshots              []DriftSnapshot              `json:"drift_snapshots"`
-	HAPairs                     []HAPairStatus               `json:"ha_pairs"`
-	HAFailoverEvents            []HAFailoverEvent            `json:"ha_failover_events"`
-	TelemetryRetentionPolicy    TelemetryRetentionPolicy     `json:"telemetry_retention_policy"`
-	TelemetryGovernorRules      []TelemetryClassGovernorRule `json:"telemetry_governor_rules"`
-	TelemetryAcceptedSamples    int64                        `json:"telemetry_accepted_samples"`
-	TelemetryDroppedSamples     int64                        `json:"telemetry_dropped_samples"`
-	TelemetryGovernorLastEvalMs int64                        `json:"telemetry_governor_last_eval_ms"`
-	TelemetryHot                []TelemetrySample            `json:"telemetry_hot"`
-	TelemetryWarm               []TelemetrySample            `json:"telemetry_warm"`
-	TelemetryCold               []TelemetrySample            `json:"telemetry_cold"`
-	TelemetryLastByDevice       map[string]int64             `json:"telemetry_last_by_device,omitempty"`
+	Version                     int                                    `json:"version"`
+	Devices                     []Device                               `json:"devices"`
+	Incidents                   []Incident                             `json:"incidents"`
+	Agents                      []Agent                                `json:"agents"`
+	PushTokens                  []PushRegisterRequest                  `json:"push_tokens"`
+	Users                       []User                                 `json:"users"`
+	DeviceIdentities            []DeviceIdentity                       `json:"device_identities"`
+	DeviceInterfaces            []DeviceInterface                      `json:"device_interfaces"`
+	NeighborLinks               []NeighborLink                         `json:"neighbor_links"`
+	HardwareProfiles            []HardwareProfile                      `json:"hardware_profiles"`
+	SourceObservations          []SourceObservation                    `json:"source_observations"`
+	DriftSnapshots              []DriftSnapshot                        `json:"drift_snapshots"`
+	HAPairs                     []HAPairStatus                         `json:"ha_pairs"`
+	HAFailoverEvents            []HAFailoverEvent                      `json:"ha_failover_events"`
+	TelemetryRetentionPolicy    TelemetryRetentionPolicy               `json:"telemetry_retention_policy"`
+	TelemetryGovernorRules      []TelemetryClassGovernorRule           `json:"telemetry_governor_rules"`
+	TelemetryAcceptedSamples    int64                                  `json:"telemetry_accepted_samples"`
+	TelemetryDroppedSamples     int64                                  `json:"telemetry_dropped_samples"`
+	TelemetryGovernorLastEvalMs int64                                  `json:"telemetry_governor_last_eval_ms"`
+	TelemetryHot                []TelemetrySample                      `json:"telemetry_hot"`
+	TelemetryWarm               []TelemetrySample                      `json:"telemetry_warm"`
+	TelemetryCold               []TelemetrySample                      `json:"telemetry_cold"`
+	TelemetryLastByDevice       map[string]int64                       `json:"telemetry_last_by_device,omitempty"`
+	TelemetryQualityBySource    map[string]TelemetrySourceQualityStats `json:"telemetry_quality_by_source,omitempty"`
 
 	filePath      string
 	identityIndex map[string]string
@@ -103,29 +122,30 @@ type Store struct {
 }
 
 type storePersist struct {
-	Version                     int                          `json:"version"`
-	Devices                     []Device                     `json:"devices"`
-	Incidents                   []Incident                   `json:"incidents"`
-	Agents                      []Agent                      `json:"agents"`
-	PushTokens                  []PushRegisterRequest        `json:"push_tokens"`
-	Users                       []User                       `json:"users"`
-	DeviceIdentities            []DeviceIdentity             `json:"device_identities"`
-	DeviceInterfaces            []DeviceInterface            `json:"device_interfaces"`
-	NeighborLinks               []NeighborLink               `json:"neighbor_links"`
-	HardwareProfiles            []HardwareProfile            `json:"hardware_profiles"`
-	SourceObservations          []SourceObservation          `json:"source_observations"`
-	DriftSnapshots              []DriftSnapshot              `json:"drift_snapshots"`
-	HAPairs                     []HAPairStatus               `json:"ha_pairs"`
-	HAFailoverEvents            []HAFailoverEvent            `json:"ha_failover_events"`
-	TelemetryRetentionPolicy    TelemetryRetentionPolicy     `json:"telemetry_retention_policy"`
-	TelemetryGovernorRules      []TelemetryClassGovernorRule `json:"telemetry_governor_rules"`
-	TelemetryAcceptedSamples    int64                        `json:"telemetry_accepted_samples"`
-	TelemetryDroppedSamples     int64                        `json:"telemetry_dropped_samples"`
-	TelemetryGovernorLastEvalMs int64                        `json:"telemetry_governor_last_eval_ms"`
-	TelemetryHot                []TelemetrySample            `json:"telemetry_hot"`
-	TelemetryWarm               []TelemetrySample            `json:"telemetry_warm"`
-	TelemetryCold               []TelemetrySample            `json:"telemetry_cold"`
-	TelemetryLastByDevice       map[string]int64             `json:"telemetry_last_by_device,omitempty"`
+	Version                     int                                    `json:"version"`
+	Devices                     []Device                               `json:"devices"`
+	Incidents                   []Incident                             `json:"incidents"`
+	Agents                      []Agent                                `json:"agents"`
+	PushTokens                  []PushRegisterRequest                  `json:"push_tokens"`
+	Users                       []User                                 `json:"users"`
+	DeviceIdentities            []DeviceIdentity                       `json:"device_identities"`
+	DeviceInterfaces            []DeviceInterface                      `json:"device_interfaces"`
+	NeighborLinks               []NeighborLink                         `json:"neighbor_links"`
+	HardwareProfiles            []HardwareProfile                      `json:"hardware_profiles"`
+	SourceObservations          []SourceObservation                    `json:"source_observations"`
+	DriftSnapshots              []DriftSnapshot                        `json:"drift_snapshots"`
+	HAPairs                     []HAPairStatus                         `json:"ha_pairs"`
+	HAFailoverEvents            []HAFailoverEvent                      `json:"ha_failover_events"`
+	TelemetryRetentionPolicy    TelemetryRetentionPolicy               `json:"telemetry_retention_policy"`
+	TelemetryGovernorRules      []TelemetryClassGovernorRule           `json:"telemetry_governor_rules"`
+	TelemetryAcceptedSamples    int64                                  `json:"telemetry_accepted_samples"`
+	TelemetryDroppedSamples     int64                                  `json:"telemetry_dropped_samples"`
+	TelemetryGovernorLastEvalMs int64                                  `json:"telemetry_governor_last_eval_ms"`
+	TelemetryHot                []TelemetrySample                      `json:"telemetry_hot"`
+	TelemetryWarm               []TelemetrySample                      `json:"telemetry_warm"`
+	TelemetryCold               []TelemetrySample                      `json:"telemetry_cold"`
+	TelemetryLastByDevice       map[string]int64                       `json:"telemetry_last_by_device,omitempty"`
+	TelemetryQualityBySource    map[string]TelemetrySourceQualityStats `json:"telemetry_quality_by_source,omitempty"`
 }
 
 func LoadStore(path string) *Store {
@@ -183,6 +203,7 @@ func (s *Store) save() {
 		TelemetryWarm:               append([]TelemetrySample(nil), s.TelemetryWarm...),
 		TelemetryCold:               append([]TelemetrySample(nil), s.TelemetryCold...),
 		TelemetryLastByDevice:       cloneStringInt64Map(s.TelemetryLastByDevice),
+		TelemetryQualityBySource:    cloneTelemetrySourceQualityMap(s.TelemetryQualityBySource),
 	}
 	s.mu.RUnlock()
 
@@ -231,6 +252,10 @@ func (s *Store) ensureDefaultsAndMigrateLocked() {
 	if s.TelemetryLastByDevice == nil {
 		s.TelemetryLastByDevice = map[string]int64{}
 	}
+	s.TelemetryQualityBySource = cloneTelemetrySourceQualityMap(s.TelemetryQualityBySource)
+	if s.TelemetryQualityBySource == nil {
+		s.TelemetryQualityBySource = map[string]TelemetrySourceQualityStats{}
+	}
 	if s.TelemetryGovernorLastEvalMs <= 0 {
 		s.TelemetryGovernorLastEvalMs = time.Now().UnixMilli()
 	}
@@ -239,6 +264,7 @@ func (s *Store) ensureDefaultsAndMigrateLocked() {
 	}
 	s.applyTelemetryRetentionLocked(time.Now().UnixMilli())
 	s.pruneSamplingStateLocked(time.Now().UnixMilli())
+	s.pruneTelemetrySourceQualityLocked(time.Now().UnixMilli())
 
 	if len(s.SourceObservations) > maxSourceObservations {
 		s.SourceObservations = append([]SourceObservation(nil), s.SourceObservations[len(s.SourceObservations)-maxSourceObservations:]...)
@@ -281,6 +307,860 @@ func (s *Store) TelemetryGovernorStatus() TelemetryGovernorStatus {
 	}
 	status.ActiveGapIncidents = activeGaps
 	return status
+}
+
+func (s *Store) TelemetryQualityReport() TelemetryQualityResponse {
+	nowMs := time.Now().UnixMilli()
+	s.mu.RLock()
+	sourceStats := cloneTelemetrySourceQualityMap(s.TelemetryQualityBySource)
+	accepted := s.TelemetryAcceptedSamples
+	dropped := s.TelemetryDroppedSamples
+	activeGaps := 0
+	for _, inc := range s.Incidents {
+		if inc.Type == "telemetry_gap" && inc.Resolved == nil {
+			activeGaps++
+		}
+	}
+	s.mu.RUnlock()
+
+	sources := make([]string, 0, len(sourceStats))
+	for source := range sourceStats {
+		sources = append(sources, source)
+	}
+	sort.Strings(sources)
+
+	cards := make([]TelemetrySourceQualityScorecard, 0, len(sources))
+	health := TelemetryIngestionHealth{
+		LastEvaluatedAtMs:  nowMs,
+		SourceCount:        len(sources),
+		ActiveGapIncidents: activeGaps,
+		AcceptedSamples:    accepted,
+		DroppedSamples:     dropped,
+	}
+	for _, source := range sources {
+		stats := sourceStats[source]
+		stats.Source = source
+		fresh := freshnessScore(stats.LastIngestAtMs, nowMs)
+		complete := completenessScore(stats)
+		errRate := pollErrorRatePct(stats)
+		reliability := clampScore(int(math.Round(100 - errRate)))
+		overall := clampScore(int(math.Round((0.40 * float64(fresh)) + (0.35 * float64(complete)) + (0.25 * float64(reliability)))))
+		status := qualityStatusForScore(overall)
+		if stats.ConsecutivePollFailures >= 3 {
+			status = "failing"
+		}
+
+		skewAvg := int64(0)
+		if stats.TotalSamples > 0 {
+			skewAvg = int64(math.Round(float64(stats.SumAbsClockSkewMs) / float64(stats.TotalSamples)))
+		}
+
+		warnings := make([]string, 0, 4)
+		if errRate >= 10 {
+			warnings = append(warnings, "high_poll_error_rate")
+		}
+		if stats.LowConfidenceSamples > 0 && stats.TotalSamples > 0 && (float64(stats.LowConfidenceSamples)/float64(stats.TotalSamples)) > 0.25 {
+			warnings = append(warnings, "low_timestamp_confidence")
+		}
+		if fresh < 60 {
+			warnings = append(warnings, "stale_ingest")
+		}
+		if complete < 70 {
+			warnings = append(warnings, "low_completeness")
+		}
+
+		cards = append(cards, TelemetrySourceQualityScorecard{
+			Source:            source,
+			Status:            status,
+			OverallScore:      overall,
+			FreshnessScore:    fresh,
+			CompletenessScore: complete,
+			ErrorRatePct:      math.Round(errRate*100) / 100,
+			SkewAvgMs:         skewAvg,
+			SkewMaxMs:         stats.MaxAbsClockSkewMs,
+			Stats:             stats,
+			Warnings:          warnings,
+		})
+
+		health.PollAttempts += stats.PollAttempts
+		health.PollFailures += stats.PollFailures
+		switch status {
+		case "healthy":
+			health.HealthySources++
+		case "degraded":
+			health.DegradedSources++
+		default:
+			health.FailedSources++
+		}
+	}
+
+	return TelemetryQualityResponse{
+		LastUpdatedMs: nowMs,
+		Health:        health,
+		Scorecards:    cards,
+		Stub:          true,
+	}
+}
+
+func (s *Store) TelemetryIngestionHealth() TelemetryIngestionHealth {
+	return s.TelemetryQualityReport().Health
+}
+
+type baselineGroupAccumulator struct {
+	role         string
+	siteID       string
+	sampleCount  int
+	latencies    []float64
+	availability []float64
+	windows      map[string]*baselineWindowAccumulator
+}
+
+type baselineWindowAccumulator struct {
+	dayOfWeek    int
+	hourOfDay    int
+	sampleCount  int
+	latencies    []float64
+	availability []float64
+}
+
+type stormGroupAccumulator struct {
+	key        string
+	alertType  string
+	source     string
+	siteID     string
+	severity   string
+	alertCount int
+	startedMs  int64
+	endedMs    int64
+	deviceIDs  map[string]struct{}
+}
+
+func (s *Store) TelemetryBaselineReport(windowHours int) TelemetryBaselineReport {
+	nowMs := time.Now().UnixMilli()
+	if windowHours <= 0 {
+		windowHours = defaultBaselineHours
+	}
+	if windowHours > (90 * 24) {
+		windowHours = 90 * 24
+	}
+	windowMs := int64(windowHours) * int64(time.Hour/time.Millisecond)
+	windowStart := nowMs - windowMs
+
+	s.mu.RLock()
+	samples := make([]TelemetrySample, 0, len(s.TelemetryHot)+len(s.TelemetryWarm)+len(s.TelemetryCold))
+	samples = append(samples, s.TelemetryHot...)
+	samples = append(samples, s.TelemetryWarm...)
+	samples = append(samples, s.TelemetryCold...)
+	s.mu.RUnlock()
+
+	grouped := map[string]*baselineGroupAccumulator{}
+	for _, raw := range samples {
+		sample := normalizeTelemetrySample(raw, nowMs)
+		if sample.ObservedAt < windowStart || sample.ObservedAt > nowMs {
+			continue
+		}
+		role := strings.ToLower(strings.TrimSpace(sample.DeviceRole))
+		if role == "" {
+			role = "unknown"
+		}
+		site := strings.TrimSpace(sample.SiteID)
+		if site == "" {
+			site = "unspecified"
+		}
+		key := role + "|" + site
+		group := grouped[key]
+		if group == nil {
+			group = &baselineGroupAccumulator{
+				role:    role,
+				siteID:  site,
+				windows: map[string]*baselineWindowAccumulator{},
+			}
+			grouped[key] = group
+		}
+		group.sampleCount++
+
+		var latencyVal *float64
+		if sample.LatencyMs != nil && *sample.LatencyMs >= 0 && *sample.LatencyMs <= 1_000_000 {
+			v := *sample.LatencyMs
+			group.latencies = append(group.latencies, v)
+			latencyVal = &v
+		}
+		var availabilityVal *float64
+		if sample.Online != nil {
+			if *sample.Online {
+				v := 100.0
+				group.availability = append(group.availability, v)
+				availabilityVal = &v
+			} else {
+				v := 0.0
+				group.availability = append(group.availability, v)
+				availabilityVal = &v
+			}
+		}
+
+		observedAt := time.UnixMilli(sample.ObservedAt).UTC()
+		day := int(observedAt.Weekday())
+		hour := observedAt.Hour()
+		windowKey := strconv.Itoa(day) + "-" + strconv.Itoa(hour)
+		window := group.windows[windowKey]
+		if window == nil {
+			window = &baselineWindowAccumulator{
+				dayOfWeek: day,
+				hourOfDay: hour,
+			}
+			group.windows[windowKey] = window
+		}
+		window.sampleCount++
+		if latencyVal != nil {
+			window.latencies = append(window.latencies, *latencyVal)
+		}
+		if availabilityVal != nil {
+			window.availability = append(window.availability, *availabilityVal)
+		}
+	}
+
+	type rankedGroup struct {
+		key   string
+		group *baselineGroupAccumulator
+	}
+	ranked := make([]rankedGroup, 0, len(grouped))
+	for key, group := range grouped {
+		if group.sampleCount < minBaselineSamples {
+			continue
+		}
+		ranked = append(ranked, rankedGroup{key: key, group: group})
+	}
+	sort.Slice(ranked, func(i, j int) bool {
+		if ranked[i].group.sampleCount == ranked[j].group.sampleCount {
+			if ranked[i].group.role == ranked[j].group.role {
+				return ranked[i].group.siteID < ranked[j].group.siteID
+			}
+			return ranked[i].group.role < ranked[j].group.role
+		}
+		return ranked[i].group.sampleCount > ranked[j].group.sampleCount
+	})
+	if len(ranked) > maxBaselineGroups {
+		ranked = ranked[:maxBaselineGroups]
+	}
+
+	out := make([]TelemetryRoleSiteBaseline, 0, len(ranked))
+	for _, item := range ranked {
+		group := item.group
+		metrics := make([]TelemetryBaselineMetric, 0, 2)
+		if metric, ok := baselineMetricFromValues("latency_ms", "ms", group.latencies); ok {
+			metrics = append(metrics, metric)
+		}
+		if metric, ok := baselineMetricFromValues("availability_pct", "pct", group.availability); ok {
+			metrics = append(metrics, metric)
+		}
+
+		windows := make([]TelemetryAnomalyWindow, 0, len(group.windows))
+		for _, acc := range group.windows {
+			latMean, latStd, _, _ := telemetryStatsFromValues(acc.latencies)
+			availMean, availStd, _, _ := telemetryStatsFromValues(acc.availability)
+			if len(acc.latencies) < minBaselineSamples && len(acc.availability) < minBaselineSamples {
+				continue
+			}
+			windows = append(windows, TelemetryAnomalyWindow{
+				DayOfWeek:             acc.dayOfWeek,
+				HourOfDay:             acc.hourOfDay,
+				SampleCount:           acc.sampleCount,
+				LatencyMeanMs:         roundMetric(latMean),
+				LatencyStdDevMs:       roundMetric(latStd),
+				AvailabilityMeanPct:   roundMetric(availMean),
+				AvailabilityStdDevPct: roundMetric(availStd),
+			})
+		}
+		sort.Slice(windows, func(i, j int) bool {
+			if windows[i].DayOfWeek == windows[j].DayOfWeek {
+				return windows[i].HourOfDay < windows[j].HourOfDay
+			}
+			return windows[i].DayOfWeek < windows[j].DayOfWeek
+		})
+
+		out = append(out, TelemetryRoleSiteBaseline{
+			Role:        group.role,
+			SiteID:      group.siteID,
+			SampleCount: group.sampleCount,
+			WindowStart: windowStart,
+			WindowEnd:   nowMs,
+			Metrics:     metrics,
+			Windows:     windows,
+		})
+	}
+
+	return TelemetryBaselineReport{
+		LastUpdatedMs: nowMs,
+		WindowHours:   windowHours,
+		GroupCount:    len(out),
+		Groups:        out,
+		Stub:          true,
+	}
+}
+
+func (s *Store) TelemetryAlertIntelligence(limit, windowMinutes, burstThreshold int) TelemetryAlertIntelligenceReport {
+	nowMs := time.Now().UnixMilli()
+	if limit <= 0 {
+		limit = 40
+	}
+	if limit > maxAlertReportIncidents {
+		limit = maxAlertReportIncidents
+	}
+	if windowMinutes <= 0 {
+		windowMinutes = defaultAlertWindowMins
+	}
+	if windowMinutes > (24 * 60) {
+		windowMinutes = 24 * 60
+	}
+	if burstThreshold <= 1 {
+		burstThreshold = defaultBurstThreshold
+	}
+	if burstThreshold > 100 {
+		burstThreshold = 100
+	}
+
+	nodes, _, _ := s.ListTopologyNodes(4000, "")
+	edges, _, _ := s.ListTopologyEdges(8000, "")
+
+	s.mu.RLock()
+	incidents := append([]Incident(nil), s.Incidents...)
+	devices := append([]Device(nil), s.Devices...)
+	identities := append([]DeviceIdentity(nil), s.DeviceIdentities...)
+	qualityBySource := cloneTelemetrySourceQualityMap(s.TelemetryQualityBySource)
+	samples := make([]TelemetrySample, 0, len(s.TelemetryHot)+len(s.TelemetryWarm)+len(s.TelemetryCold))
+	samples = append(samples, s.TelemetryHot...)
+	samples = append(samples, s.TelemetryWarm...)
+	samples = append(samples, s.TelemetryCold...)
+	s.mu.RUnlock()
+
+	deviceByID := make(map[string]Device, len(devices))
+	for _, dev := range devices {
+		deviceByID[dev.ID] = dev
+	}
+	identityByDevice := map[string]DeviceIdentity{}
+	for _, ident := range identities {
+		primary := strings.TrimSpace(ident.PrimaryDeviceID)
+		if primary == "" {
+			continue
+		}
+		current, exists := identityByDevice[primary]
+		if !exists || ident.LastSeen >= current.LastSeen {
+			identityByDevice[primary] = ident
+		}
+	}
+
+	sourceScoreByName := map[string]int{}
+	for source, stats := range qualityBySource {
+		sourceScoreByName[source] = telemetrySourceOverallScore(stats, nowMs)
+	}
+
+	latestSampleByDevice := map[string]TelemetrySample{}
+	for _, raw := range samples {
+		sample := normalizeTelemetrySample(raw, nowMs)
+		current, exists := latestSampleByDevice[sample.DeviceID]
+		if !exists || sample.ObservedAt >= current.ObservedAt {
+			latestSampleByDevice[sample.DeviceID] = sample
+		}
+	}
+
+	managedNodeSet := map[string]struct{}{}
+	for _, node := range nodes {
+		if node.Kind == "managed" {
+			managedNodeSet[node.NodeID] = struct{}{}
+		}
+	}
+	adjacency := map[string][]string{}
+	for nodeID := range managedNodeSet {
+		adjacency[nodeID] = nil
+	}
+	for _, edge := range edges {
+		fromNodeID := strings.TrimSpace(edge.FromNodeID)
+		toNodeID := strings.TrimSpace(edge.ToNodeID)
+		if fromNodeID == "" || toNodeID == "" {
+			continue
+		}
+		adjacency[fromNodeID] = appendUnique(adjacency[fromNodeID], toNodeID)
+		adjacency[toNodeID] = appendUnique(adjacency[toNodeID], fromNodeID)
+	}
+
+	activeAlerts := make([]TelemetryAlertRecord, 0, len(incidents))
+	for _, inc := range incidents {
+		if inc.Resolved != nil {
+			continue
+		}
+		device, hasDevice := deviceByID[inc.DeviceID]
+		sample, hasSample := latestSampleByDevice[inc.DeviceID]
+		sourceKey := strings.TrimSpace(inc.Source)
+		if sourceKey == "" && hasSample {
+			sourceKey = strings.TrimSpace(sample.Source)
+		}
+		sourceScore := 60
+		if score, ok := sourceScoreByName[sourceKey]; ok {
+			sourceScore = score
+		}
+		confidenceScore, confidenceLevel, confidenceReasons := scoreIncidentConfidence(inc, hasDevice, device, hasSample, sample, sourceScore, nowMs)
+		nodeID := ""
+		if ident, ok := identityByDevice[inc.DeviceID]; ok {
+			nodeID = topologyNodeIDForIdentity(ident.IdentityID)
+		}
+		impact := estimateImpactRadius(nodeID, adjacency, managedNodeSet)
+
+		record := TelemetryAlertRecord{
+			Incident:          inc,
+			ConfidenceScore:   confidenceScore,
+			ConfidenceLevel:   confidenceLevel,
+			ConfidenceReasons: confidenceReasons,
+			Impact:            impact,
+		}
+		if hasDevice {
+			record.DeviceName = device.Name
+			record.DeviceRole = device.Role
+			record.SiteID = device.SiteID
+		}
+		activeAlerts = append(activeAlerts, record)
+	}
+	sort.SliceStable(activeAlerts, func(i, j int) bool {
+		if activeAlerts[i].ConfidenceScore == activeAlerts[j].ConfidenceScore {
+			iStarted := incidentTimestampMs(activeAlerts[i].Incident, nowMs)
+			jStarted := incidentTimestampMs(activeAlerts[j].Incident, nowMs)
+			return iStarted > jStarted
+		}
+		return activeAlerts[i].ConfidenceScore > activeAlerts[j].ConfidenceScore
+	})
+	if len(activeAlerts) > limit {
+		activeAlerts = activeAlerts[:limit]
+	}
+
+	windowStartMs := nowMs - (int64(windowMinutes) * int64(time.Minute/time.Millisecond))
+	groupsByKey := map[string]*stormGroupAccumulator{}
+	rawAlertCount := 0
+	for _, inc := range incidents {
+		startedMs := incidentTimestampMs(inc, nowMs)
+		if startedMs < windowStartMs {
+			continue
+		}
+		rawAlertCount++
+		device, hasDevice := deviceByID[inc.DeviceID]
+		siteID := "unspecified"
+		if hasDevice && strings.TrimSpace(device.SiteID) != "" {
+			siteID = strings.TrimSpace(device.SiteID)
+		}
+		source := strings.TrimSpace(inc.Source)
+		if source == "" {
+			source = "unspecified"
+		}
+		alertType := strings.ToLower(strings.TrimSpace(inc.Type))
+		if alertType == "" {
+			alertType = "generic"
+		}
+		key := alertType + "|" + source + "|" + siteID
+		group := groupsByKey[key]
+		if group == nil {
+			group = &stormGroupAccumulator{
+				key:       key,
+				alertType: alertType,
+				source:    source,
+				siteID:    siteID,
+				severity:  strings.TrimSpace(inc.Severity),
+				startedMs: startedMs,
+				endedMs:   startedMs,
+				deviceIDs: map[string]struct{}{},
+			}
+			groupsByKey[key] = group
+		}
+		group.alertCount++
+		if startedMs < group.startedMs {
+			group.startedMs = startedMs
+		}
+		if startedMs > group.endedMs {
+			group.endedMs = startedMs
+		}
+		if group.severity == "" || strings.EqualFold(group.severity, "warning") {
+			nextSeverity := strings.TrimSpace(inc.Severity)
+			if nextSeverity != "" {
+				group.severity = nextSeverity
+			}
+		}
+		if strings.TrimSpace(inc.DeviceID) != "" {
+			group.deviceIDs[inc.DeviceID] = struct{}{}
+		}
+	}
+	groupList := make([]*stormGroupAccumulator, 0, len(groupsByKey))
+	for _, group := range groupsByKey {
+		groupList = append(groupList, group)
+	}
+	sort.SliceStable(groupList, func(i, j int) bool {
+		if groupList[i].alertCount == groupList[j].alertCount {
+			return groupList[i].startedMs > groupList[j].startedMs
+		}
+		return groupList[i].alertCount > groupList[j].alertCount
+	})
+
+	stormBursts := make([]TelemetryStormBurst, 0, len(groupList))
+	summarizedAlertCount := rawAlertCount
+	for _, group := range groupList {
+		if group.alertCount < burstThreshold {
+			continue
+		}
+		durationMin := math.Max(0, float64(group.endedMs-group.startedMs)/float64(time.Minute/time.Millisecond))
+		stormBursts = append(stormBursts, TelemetryStormBurst{
+			Key:         group.key,
+			AlertType:   group.alertType,
+			Source:      group.source,
+			SiteID:      group.siteID,
+			Severity:    strings.ToLower(strings.TrimSpace(group.severity)),
+			DeviceCount: len(group.deviceIDs),
+			AlertCount:  group.alertCount,
+			StartedAt:   time.UnixMilli(group.startedMs).UTC().Format(time.RFC3339),
+			EndedAt:     time.UnixMilli(group.endedMs).UTC().Format(time.RFC3339),
+			DurationMin: roundMetric(durationMin),
+		})
+		if group.alertCount > 1 {
+			summarizedAlertCount -= group.alertCount - 1
+		}
+		if len(stormBursts) >= maxStormBursts {
+			break
+		}
+	}
+	if summarizedAlertCount < 0 {
+		summarizedAlertCount = 0
+	}
+
+	return TelemetryAlertIntelligenceReport{
+		LastUpdatedMs:        nowMs,
+		WindowMinutes:        windowMinutes,
+		BurstThreshold:       burstThreshold,
+		RawAlertCount:        rawAlertCount,
+		SummarizedAlertCount: summarizedAlertCount,
+		ActiveCount:          len(activeAlerts),
+		Alerts:               activeAlerts,
+		StormBursts:          stormBursts,
+		Stub:                 true,
+	}
+}
+
+func incidentTimestampMs(inc Incident, nowMs int64) int64 {
+	started := strings.TrimSpace(inc.Started)
+	if started == "" {
+		return nowMs
+	}
+	parsed, err := time.Parse(time.RFC3339, started)
+	if err != nil {
+		return nowMs
+	}
+	return parsed.UnixMilli()
+}
+
+func telemetrySourceOverallScore(stats TelemetrySourceQualityStats, nowMs int64) int {
+	fresh := freshnessScore(stats.LastIngestAtMs, nowMs)
+	complete := completenessScore(stats)
+	reliability := clampScore(int(math.Round(100 - pollErrorRatePct(stats))))
+	return clampScore(int(math.Round((0.40 * float64(fresh)) + (0.35 * float64(complete)) + (0.25 * float64(reliability)))))
+}
+
+func scoreIncidentConfidence(inc Incident, hasDevice bool, device Device, hasSample bool, sample TelemetrySample, sourceScore int, nowMs int64) (float64, string, []string) {
+	score := 0.45
+	reasons := make([]string, 0, 6)
+	alertType := strings.ToLower(strings.TrimSpace(inc.Type))
+	severity := strings.ToLower(strings.TrimSpace(inc.Severity))
+
+	switch severity {
+	case "critical":
+		score += 0.18
+		reasons = append(reasons, "critical_severity")
+	case "warning":
+		score += 0.08
+		reasons = append(reasons, "warning_severity")
+	case "info":
+		score -= 0.05
+		reasons = append(reasons, "info_severity")
+	}
+
+	switch alertType {
+	case "offline":
+		score += 0.18
+		reasons = append(reasons, "offline_transition")
+	case "telemetry_gap":
+		score += 0.12
+		reasons = append(reasons, "gap_detector_triggered")
+	default:
+		score += 0.08
+	}
+
+	startedMs := incidentTimestampMs(inc, nowMs)
+	durationMin := math.Max(0, float64(nowMs-startedMs)/float64(time.Minute/time.Millisecond))
+	switch alertType {
+	case "offline":
+		score += math.Min(0.12, (durationMin/20.0)*0.12)
+	case "telemetry_gap":
+		score += math.Min(0.15, (durationMin/30.0)*0.15)
+	default:
+		score += math.Min(0.10, (durationMin/30.0)*0.10)
+	}
+
+	if hasSample {
+		if sample.TimestampConfidence >= 0.85 {
+			score += 0.06
+			reasons = append(reasons, "high_timestamp_confidence")
+		} else if sample.TimestampConfidence > 0 && sample.TimestampConfidence < 0.60 {
+			score -= 0.10
+			reasons = append(reasons, "low_timestamp_confidence")
+		}
+		if alertType == "offline" && sample.Online != nil {
+			if !*sample.Online {
+				score += 0.10
+				reasons = append(reasons, "latest_sample_offline")
+			} else {
+				score -= 0.12
+				reasons = append(reasons, "latest_sample_online")
+			}
+		}
+	}
+
+	switch {
+	case sourceScore >= 80:
+		score += 0.08
+		reasons = append(reasons, "source_quality_healthy")
+	case sourceScore >= 60:
+		score += 0.03
+		reasons = append(reasons, "source_quality_degraded")
+	case sourceScore < 40:
+		score -= 0.09
+		reasons = append(reasons, "source_quality_failing")
+	}
+
+	if hasDevice {
+		role := strings.ToLower(strings.TrimSpace(device.Role))
+		if role == "gateway" || role == "router" || role == "switch" {
+			score += 0.03
+			reasons = append(reasons, "core_role_weight")
+		}
+	}
+
+	if score < 0.05 {
+		score = 0.05
+	}
+	if score > 0.99 {
+		score = 0.99
+	}
+	score = roundMetric(score)
+	return score, confidenceLevelFromScore(score), reasons
+}
+
+func confidenceLevelFromScore(score float64) string {
+	switch {
+	case score >= 0.80:
+		return "high"
+	case score >= 0.60:
+		return "medium"
+	default:
+		return "low"
+	}
+}
+
+func estimateImpactRadius(nodeID string, adjacency map[string][]string, managedNodeSet map[string]struct{}) TelemetryImpactRadius {
+	nodeID = strings.TrimSpace(nodeID)
+	totalManaged := len(managedNodeSet)
+	if nodeID == "" || totalManaged == 0 {
+		return TelemetryImpactRadius{
+			NodeID:       nodeID,
+			ManagedReach: 0,
+			TotalManaged: totalManaged,
+			ReachPct:     0,
+			Scope:        "unknown",
+		}
+	}
+	if _, ok := adjacency[nodeID]; !ok {
+		adjacency[nodeID] = nil
+	}
+	neighborSet := map[string]struct{}{}
+	for _, neighbor := range adjacency[nodeID] {
+		if strings.TrimSpace(neighbor) == "" {
+			continue
+		}
+		neighborSet[neighbor] = struct{}{}
+	}
+
+	visited := map[string]bool{}
+	queue := []string{nodeID}
+	visited[nodeID] = true
+	managedReach := 0
+	componentSize := 0
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		componentSize++
+		if _, managed := managedNodeSet[current]; managed {
+			managedReach++
+		}
+		for _, next := range adjacency[current] {
+			next = strings.TrimSpace(next)
+			if next == "" || visited[next] {
+				continue
+			}
+			visited[next] = true
+			queue = append(queue, next)
+		}
+	}
+
+	reachPct := 0.0
+	if totalManaged > 0 {
+		reachPct = (float64(managedReach) / float64(totalManaged)) * 100
+	}
+	scope := "local"
+	switch {
+	case reachPct >= 60 || managedReach >= 25:
+		scope = "network"
+	case reachPct >= 25 || managedReach >= 5:
+		scope = "site"
+	default:
+		scope = "local"
+	}
+
+	return TelemetryImpactRadius{
+		NodeID:        nodeID,
+		ManagedReach:  managedReach,
+		TotalManaged:  totalManaged,
+		ReachPct:      roundMetric(reachPct),
+		NeighborCount: len(neighborSet),
+		ComponentSize: componentSize,
+		Scope:         scope,
+	}
+}
+
+func telemetryStatsFromValues(values []float64) (float64, float64, float64, float64) {
+	if len(values) == 0 {
+		return 0, 0, 0, 0
+	}
+	sorted := append([]float64(nil), values...)
+	sort.Float64s(sorted)
+
+	sum := 0.0
+	for _, v := range sorted {
+		sum += v
+	}
+	mean := sum / float64(len(sorted))
+
+	varianceSum := 0.0
+	for _, v := range sorted {
+		diff := v - mean
+		varianceSum += diff * diff
+	}
+	stdDev := math.Sqrt(varianceSum / float64(len(sorted)))
+	p50 := percentileLinear(sorted, 0.50)
+	p95 := percentileLinear(sorted, 0.95)
+	return mean, stdDev, p50, p95
+}
+
+func percentileLinear(sorted []float64, percentile float64) float64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	if percentile <= 0 {
+		return sorted[0]
+	}
+	if percentile >= 1 {
+		return sorted[len(sorted)-1]
+	}
+	pos := percentile * float64(len(sorted)-1)
+	lower := int(math.Floor(pos))
+	upper := int(math.Ceil(pos))
+	if lower == upper {
+		return sorted[lower]
+	}
+	weight := pos - float64(lower)
+	return sorted[lower]*(1-weight) + sorted[upper]*weight
+}
+
+func baselineMetricFromValues(metric, unit string, values []float64) (TelemetryBaselineMetric, bool) {
+	if len(values) < minBaselineSamples {
+		return TelemetryBaselineMetric{}, false
+	}
+	mean, stdDev, p50, p95 := telemetryStatsFromValues(values)
+	lower, upper := baselineBounds(metric, mean, stdDev)
+	return TelemetryBaselineMetric{
+		Metric:      metric,
+		Unit:        unit,
+		SampleCount: len(values),
+		Mean:        roundMetric(mean),
+		StdDev:      roundMetric(stdDev),
+		P50:         roundMetric(p50),
+		P95:         roundMetric(p95),
+		LowerBound:  roundMetric(lower),
+		UpperBound:  roundMetric(upper),
+	}, true
+}
+
+func baselineBounds(metric string, mean, stdDev float64) (float64, float64) {
+	sigma := stdDev
+	switch metric {
+	case "availability_pct":
+		if sigma <= 0 {
+			sigma = maxFloat64(2.5, (100-mean)*0.35)
+		}
+		lower := mean - (2 * sigma)
+		upper := mean + (2 * sigma)
+		if lower < 0 {
+			lower = 0
+		}
+		if upper > 100 {
+			upper = 100
+		}
+		return lower, upper
+	default:
+		if sigma <= 0 {
+			sigma = maxFloat64(1, mean*0.15)
+		}
+		lower := mean - (2 * sigma)
+		if lower < 0 {
+			lower = 0
+		}
+		upper := mean + (2 * sigma)
+		return lower, upper
+	}
+}
+
+func maxFloat64(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func roundMetric(v float64) float64 {
+	return math.Round(v*100) / 100
+}
+
+func (s *Store) RecordSourcePollOutcome(source string, success bool, errText string, nowMs int64) {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		source = defaultDeviceSourceName
+	}
+	if nowMs <= 0 {
+		nowMs = time.Now().UnixMilli()
+	}
+
+	s.mu.Lock()
+	if s.TelemetryQualityBySource == nil {
+		s.TelemetryQualityBySource = map[string]TelemetrySourceQualityStats{}
+	}
+	stats := s.TelemetryQualityBySource[source]
+	stats.Source = source
+	stats.PollAttempts++
+	stats.LastPollAtMs = nowMs
+	stats.UpdatedAtMs = nowMs
+	if success {
+		stats.ConsecutivePollFailures = 0
+		stats.LastPollError = ""
+	} else {
+		stats.PollFailures++
+		stats.ConsecutivePollFailures++
+		stats.LastPollError = strings.TrimSpace(errText)
+	}
+	s.TelemetryQualityBySource[source] = stats
+	s.pruneTelemetrySourceQualityLocked(nowMs)
+	s.mu.Unlock()
+	s.save()
 }
 
 func (s *Store) PrioritizeTelemetryQueue(events []TelemetryIngestRequest) []TelemetryIngestRequest {
@@ -404,6 +1284,135 @@ func cloneStringInt64Map(in map[string]int64) map[string]int64 {
 		out[k] = v
 	}
 	return out
+}
+
+func cloneTelemetrySourceQualityMap(in map[string]TelemetrySourceQualityStats) map[string]TelemetrySourceQualityStats {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]TelemetrySourceQualityStats, len(in))
+	for source, stats := range in {
+		key := strings.TrimSpace(source)
+		if key == "" {
+			continue
+		}
+		normalized := stats
+		normalized.Source = key
+		out[key] = normalized
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func absInt64(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func clampScore(v int) int {
+	if v < 0 {
+		return 0
+	}
+	if v > 100 {
+		return 100
+	}
+	return v
+}
+
+func qualityStatusForScore(score int) string {
+	if score >= 85 {
+		return "healthy"
+	}
+	if score >= 60 {
+		return "degraded"
+	}
+	return "failing"
+}
+
+func freshnessScore(lastIngestAtMs, nowMs int64) int {
+	if lastIngestAtMs <= 0 || nowMs <= 0 {
+		return 0
+	}
+	ageMs := nowMs - lastIngestAtMs
+	switch {
+	case ageMs <= int64((1*time.Minute)/time.Millisecond):
+		return 100
+	case ageMs <= int64((5*time.Minute)/time.Millisecond):
+		return 90
+	case ageMs <= int64((15*time.Minute)/time.Millisecond):
+		return 75
+	case ageMs <= int64((1*time.Hour)/time.Millisecond):
+		return 55
+	case ageMs <= int64((6*time.Hour)/time.Millisecond):
+		return 30
+	default:
+		return 10
+	}
+}
+
+func completenessScore(stats TelemetrySourceQualityStats) int {
+	if stats.TotalSamples <= 0 {
+		return 0
+	}
+	base := stats.CompletenessScoreSum / float64(stats.TotalSamples)
+	return clampScore(int(math.Round(base * 100)))
+}
+
+func pollErrorRatePct(stats TelemetrySourceQualityStats) float64 {
+	if stats.PollAttempts <= 0 {
+		return 0
+	}
+	return (float64(stats.PollFailures) / float64(stats.PollAttempts)) * 100
+}
+
+func (s *Store) pruneTelemetrySourceQualityLocked(nowMs int64) {
+	if len(s.TelemetryQualityBySource) == 0 {
+		return
+	}
+
+	expireBefore := nowMs - int64((30*24*time.Hour)/time.Millisecond)
+	for source, stats := range s.TelemetryQualityBySource {
+		lastTouched := stats.UpdatedAtMs
+		if stats.LastPollAtMs > lastTouched {
+			lastTouched = stats.LastPollAtMs
+		}
+		if stats.LastIngestAtMs > lastTouched {
+			lastTouched = stats.LastIngestAtMs
+		}
+		if lastTouched > 0 && lastTouched < expireBefore {
+			delete(s.TelemetryQualityBySource, source)
+		}
+	}
+	if len(s.TelemetryQualityBySource) <= maxQualitySources {
+		return
+	}
+
+	type sourceTouch struct {
+		source string
+		touch  int64
+	}
+	order := make([]sourceTouch, 0, len(s.TelemetryQualityBySource))
+	for source, stats := range s.TelemetryQualityBySource {
+		lastTouched := stats.UpdatedAtMs
+		if stats.LastPollAtMs > lastTouched {
+			lastTouched = stats.LastPollAtMs
+		}
+		if stats.LastIngestAtMs > lastTouched {
+			lastTouched = stats.LastIngestAtMs
+		}
+		order = append(order, sourceTouch{source: source, touch: lastTouched})
+	}
+	sort.Slice(order, func(i, j int) bool {
+		return order[i].touch < order[j].touch
+	})
+	toDrop := len(s.TelemetryQualityBySource) - maxQualitySources
+	for i := 0; i < toDrop && i < len(order); i++ {
+		delete(s.TelemetryQualityBySource, order[i].source)
+	}
 }
 
 func defaultTelemetryGovernorRules() []TelemetryClassGovernorRule {
@@ -619,6 +1628,12 @@ func normalizeTelemetrySample(sample TelemetrySample, nowMs int64) TelemetrySamp
 	}
 	sample.DeviceRole = strings.TrimSpace(sample.DeviceRole)
 	sample.SiteID = strings.TrimSpace(sample.SiteID)
+	if sample.TimestampConfidence < 0 {
+		sample.TimestampConfidence = 0
+	}
+	if sample.TimestampConfidence > 1 {
+		sample.TimestampConfidence = 1
+	}
 	sample.ObservedISO = time.UnixMilli(sample.ObservedAt).UTC().Format(time.RFC3339)
 	sample.Online = cloneBoolPtr(sample.Online)
 	sample.LatencyMs = cloneFloat64Ptr(sample.LatencyMs)
@@ -709,16 +1724,20 @@ func (s *Store) backfillTelemetryRetentionFromObservationsLocked() {
 			source = defaultDeviceSourceName
 		}
 		sample := TelemetrySample{
-			SampleID:   "ts-" + randomID(),
-			DeviceID:   deviceID,
-			IdentityID: strings.TrimSpace(obs.IdentityID),
-			Source:     source,
-			EventType:  eventType,
-			DeviceRole: strings.TrimSpace(obs.Role),
-			SiteID:     strings.TrimSpace(obs.SiteID),
-			Online:     cloneBoolPtr(obs.Online),
-			LatencyMs:  cloneFloat64Ptr(obs.LatencyMs),
-			ObservedAt: obs.ObservedAt,
+			SampleID:            "ts-" + randomID(),
+			DeviceID:            deviceID,
+			IdentityID:          strings.TrimSpace(obs.IdentityID),
+			Source:              source,
+			EventType:           eventType,
+			DeviceRole:          strings.TrimSpace(obs.Role),
+			SiteID:              strings.TrimSpace(obs.SiteID),
+			Online:              cloneBoolPtr(obs.Online),
+			LatencyMs:           cloneFloat64Ptr(obs.LatencyMs),
+			ObservedAt:          obs.ObservedAt,
+			SourceObservedAt:    obs.SourceObservedAt,
+			ClockSkewMs:         obs.ClockSkewMs,
+			TimestampConfidence: obs.TimestampConfidence,
+			TimestampCorrected:  obs.TimestampCorrected,
 		}
 		if sample.ObservedAt <= 0 {
 			sample.ObservedAt = nowMs
@@ -726,6 +1745,132 @@ func (s *Store) backfillTelemetryRetentionFromObservationsLocked() {
 		sample.ObservedISO = time.UnixMilli(sample.ObservedAt).UTC().Format(time.RFC3339)
 		s.TelemetryHot = append(s.TelemetryHot, sample)
 	}
+}
+
+func normalizeTelemetryTimestamp(req TelemetryIngestRequest, ingestNowMs int64) TelemetryTimestampNormalization {
+	out := TelemetryTimestampNormalization{
+		NormalizedObservedAtMs: ingestNowMs,
+		Confidence:             0.55,
+		Corrected:              false,
+		Reason:                 "ingest_time",
+	}
+
+	sourceObservedAtMs := req.ObservedAtMs
+	if sourceObservedAtMs <= 0 {
+		raw := strings.TrimSpace(req.ObservedAt)
+		if raw != "" {
+			if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+				sourceObservedAtMs = parsed.UnixMilli()
+			}
+		}
+	}
+	if sourceObservedAtMs <= 0 {
+		return out
+	}
+
+	out.SourceObservedAtMs = sourceObservedAtMs
+	out.ClockSkewMs = sourceObservedAtMs - ingestNowMs
+	skewAbs := absInt64(out.ClockSkewMs)
+	switch {
+	case skewAbs <= int64((5*time.Second)/time.Millisecond):
+		out.Confidence = 1.0
+	case skewAbs <= int64((30*time.Second)/time.Millisecond):
+		out.Confidence = 0.95
+	case skewAbs <= int64((2*time.Minute)/time.Millisecond):
+		out.Confidence = 0.85
+	case skewAbs <= int64((10*time.Minute)/time.Millisecond):
+		out.Confidence = 0.70
+	case skewAbs <= int64((1*time.Hour)/time.Millisecond):
+		out.Confidence = 0.45
+	default:
+		out.Confidence = 0.20
+	}
+
+	tooFarFuture := sourceObservedAtMs > ingestNowMs+maxFutureObservedSkewMs
+	tooOld := sourceObservedAtMs < ingestNowMs-maxPastObservedAgeMs
+	if tooFarFuture || tooOld {
+		out.Corrected = true
+		out.NormalizedObservedAtMs = ingestNowMs
+		if out.Confidence > 0.20 {
+			out.Confidence = 0.20
+		}
+		if tooFarFuture {
+			out.Reason = "future_source_time_corrected"
+		} else {
+			out.Reason = "stale_source_time_corrected"
+		}
+		return out
+	}
+
+	out.NormalizedObservedAtMs = sourceObservedAtMs
+	out.Reason = "source_time"
+	return out
+}
+
+func (s *Store) recordTelemetryQualityFromIngestLocked(req TelemetryIngestRequest, source string, ingestAtMs int64, decision TelemetryIngestDecision, ts TelemetryTimestampNormalization) {
+	if s.TelemetryQualityBySource == nil {
+		s.TelemetryQualityBySource = map[string]TelemetrySourceQualityStats{}
+	}
+	key := strings.TrimSpace(source)
+	if key == "" {
+		key = defaultDeviceSourceName
+	}
+
+	stats := s.TelemetryQualityBySource[key]
+	stats.Source = key
+	stats.UpdatedAtMs = ingestAtMs
+	stats.TotalSamples++
+	stats.LastIngestAtMs = ingestAtMs
+	if decision.Accepted {
+		stats.AcceptedSamples++
+	} else {
+		stats.DroppedSamples++
+	}
+
+	presenceCount := 0
+	expectedPresence := 4
+	if strings.TrimSpace(req.Role) != "" {
+		presenceCount++
+	} else {
+		stats.MissingRoleSamples++
+	}
+	if strings.TrimSpace(req.SiteID) != "" {
+		presenceCount++
+	} else {
+		stats.MissingSiteSamples++
+	}
+	if req.Online != nil {
+		presenceCount++
+	} else {
+		stats.MissingOnlineSamples++
+	}
+	if strings.TrimSpace(req.Device) != "" || strings.TrimSpace(req.Hostname) != "" || strings.TrimSpace(req.Mac) != "" || strings.TrimSpace(req.Serial) != "" {
+		presenceCount++
+	}
+	if presenceCount == expectedPresence {
+		stats.CompleteSamples++
+	}
+	stats.CompletenessScoreSum += float64(presenceCount) / float64(expectedPresence)
+
+	if ts.SourceObservedAtMs > 0 {
+		skewAbs := absInt64(ts.ClockSkewMs)
+		stats.SumAbsClockSkewMs += skewAbs
+		if skewAbs > stats.MaxAbsClockSkewMs {
+			stats.MaxAbsClockSkewMs = skewAbs
+		}
+		if skewAbs > clockSkewViolationMs {
+			stats.ClockSkewViolationCount++
+		}
+	}
+	if ts.Confidence < lowTimestampConfidence {
+		stats.LowConfidenceSamples++
+	}
+	if ts.Corrected {
+		stats.TimestampCorrectedCount++
+	}
+
+	s.TelemetryQualityBySource[key] = stats
+	s.pruneTelemetrySourceQualityLocked(ingestAtMs)
 }
 
 func (s *Store) evaluateTelemetryIngestDecisionLocked(deviceID, deviceRole, eventType string, incomingOnline, currentOnline *bool, hasFactPayload bool, nowMs int64) TelemetryIngestDecision {
@@ -1841,7 +2986,8 @@ func (s *Store) InventorySchema() InventorySchemaResponse {
 		},
 		Observation: []string{
 			"observation_id", "identity_id", "source", "device_id", "name", "role", "site_id", "hostname", "mac_address",
-			"serial_number", "vendor", "model", "online", "latency_ms", "observed_at",
+			"serial_number", "vendor", "model", "online", "latency_ms", "observed_at", "source_observed_at",
+			"clock_skew_ms", "timestamp_confidence", "timestamp_corrected",
 		},
 		Notes: map[string]string{
 			"stitching": "identity keys use mac, serial, hostname+site, and source+device_id hints",
@@ -1932,6 +3078,8 @@ func (s *Store) IngestTelemetryWithDecision(req TelemetryIngestRequest) (Device,
 
 	now := time.Now()
 	nowMs := now.UnixMilli()
+	tsNorm := normalizeTelemetryTimestamp(req, nowMs)
+	observedAtMs := tsNorm.NormalizedObservedAtMs
 	eventType := strings.ToLower(strings.TrimSpace(req.EventType))
 	source := strings.TrimSpace(req.Source)
 	if source == "" {
@@ -1981,7 +3129,7 @@ func (s *Store) IngestTelemetryWithDecision(req TelemetryIngestRequest) (Device,
 			SiteID:   siteID,
 			Online:   online,
 			Source:   source,
-			LastSeen: nowMs,
+			LastSeen: observedAtMs,
 		})
 		idx = len(s.Devices) - 1
 	}
@@ -1992,10 +3140,11 @@ func (s *Store) IngestTelemetryWithDecision(req TelemetryIngestRequest) (Device,
 	s.Devices[idx].Online = online
 	s.Devices[idx].LatencyMs = req.LatencyMs
 	s.Devices[idx].Source = source
-	s.Devices[idx].LastSeen = nowMs
+	s.Devices[idx].LastSeen = observedAtMs
 
 	hasFactPayload := len(req.Interfaces) > 0 || len(req.Neighbors) > 0
 	decision := s.evaluateTelemetryIngestDecisionLocked(deviceID, deviceRole, eventType, req.Online, existingOnline, hasFactPayload, nowMs)
+	s.recordTelemetryQualityFromIngestLocked(req, source, nowMs, decision, tsNorm)
 	if !decision.Accepted {
 		s.updateHAPairWatcherLocked(nowMs)
 		s.applyTelemetryGapDetectionLocked(nowMs)
@@ -2006,8 +3155,8 @@ func (s *Store) IngestTelemetryWithDecision(req TelemetryIngestRequest) (Device,
 	}
 
 	onlineState := online
-	identityID := s.upsertIdentityFromTelemetryLocked(req, source, deviceName, deviceRole, siteID, nowMs, &onlineState)
-	s.appendTelemetrySampleLocked(req, source, deviceID, identityID, deviceRole, siteID, onlineState, nowMs)
+	identityID := s.upsertIdentityFromTelemetryLocked(req, source, deviceName, deviceRole, siteID, observedAtMs, &onlineState, tsNorm)
+	s.appendTelemetrySampleLocked(req, source, deviceID, identityID, deviceRole, siteID, onlineState, observedAtMs, tsNorm)
 	s.applyTelemetryRetentionLocked(nowMs)
 
 	var created *Incident
@@ -2063,17 +3212,21 @@ func (s *Store) ValidateUser(username, password string) bool {
 	return false
 }
 
-func (s *Store) appendTelemetrySampleLocked(req TelemetryIngestRequest, source, deviceID, identityID, deviceRole, siteID string, online bool, nowMs int64) {
+func (s *Store) appendTelemetrySampleLocked(req TelemetryIngestRequest, source, deviceID, identityID, deviceRole, siteID string, online bool, observedAtMs int64, tsNorm TelemetryTimestampNormalization) {
 	sample := TelemetrySample{
-		SampleID:   "ts-" + randomID(),
-		DeviceID:   strings.TrimSpace(deviceID),
-		IdentityID: strings.TrimSpace(identityID),
-		Source:     strings.TrimSpace(source),
-		EventType:  strings.ToLower(strings.TrimSpace(req.EventType)),
-		DeviceRole: strings.TrimSpace(deviceRole),
-		SiteID:     strings.TrimSpace(siteID),
-		Online:     &online,
-		ObservedAt: nowMs,
+		SampleID:            "ts-" + randomID(),
+		DeviceID:            strings.TrimSpace(deviceID),
+		IdentityID:          strings.TrimSpace(identityID),
+		Source:              strings.TrimSpace(source),
+		EventType:           strings.ToLower(strings.TrimSpace(req.EventType)),
+		DeviceRole:          strings.TrimSpace(deviceRole),
+		SiteID:              strings.TrimSpace(siteID),
+		Online:              &online,
+		ObservedAt:          observedAtMs,
+		SourceObservedAt:    tsNorm.SourceObservedAtMs,
+		ClockSkewMs:         tsNorm.ClockSkewMs,
+		TimestampConfidence: tsNorm.Confidence,
+		TimestampCorrected:  tsNorm.Corrected,
 	}
 	if sample.EventType == "" {
 		sample.EventType = "telemetry"
@@ -2087,7 +3240,7 @@ func (s *Store) appendTelemetrySampleLocked(req TelemetryIngestRequest, source, 
 	if req.LatencyMs != nil {
 		sample.LatencyMs = cloneFloat64Ptr(req.LatencyMs)
 	}
-	sample.ObservedISO = time.UnixMilli(nowMs).UTC().Format(time.RFC3339)
+	sample.ObservedISO = time.UnixMilli(observedAtMs).UTC().Format(time.RFC3339)
 	s.TelemetryHot = append(s.TelemetryHot, sample)
 }
 
@@ -2104,26 +3257,31 @@ func (s *Store) backfillInventoryFromDevicesLocked(source string) {
 			Online:    &online,
 			LatencyMs: dev.LatencyMs,
 		}
-		_ = s.upsertIdentityFromTelemetryLocked(req, source, dev.Name, dev.Role, dev.SiteID, nowMs, &online)
+		tsNorm := normalizeTelemetryTimestamp(req, nowMs)
+		_ = s.upsertIdentityFromTelemetryLocked(req, source, dev.Name, dev.Role, dev.SiteID, nowMs, &online, tsNorm)
 	}
 }
 
-func (s *Store) upsertIdentityFromTelemetryLocked(req TelemetryIngestRequest, source, deviceName, deviceRole, siteID string, nowMs int64, online *bool) string {
+func (s *Store) upsertIdentityFromTelemetryLocked(req TelemetryIngestRequest, source, deviceName, deviceRole, siteID string, observedAtMs int64, online *bool, tsNorm TelemetryTimestampNormalization) string {
 	obs := SourceObservation{
-		ObservationID: "obs-" + randomID(),
-		Source:        source,
-		DeviceID:      strings.TrimSpace(req.DeviceID),
-		Name:          strings.TrimSpace(deviceName),
-		Role:          strings.TrimSpace(deviceRole),
-		SiteID:        strings.TrimSpace(siteID),
-		Hostname:      normalizeKeyToken(req.Hostname),
-		MacAddress:    normalizeKeyToken(req.Mac),
-		SerialNumber:  normalizeKeyToken(req.Serial),
-		Vendor:        strings.TrimSpace(req.Vendor),
-		Model:         strings.TrimSpace(req.Model),
-		Online:        online,
-		LatencyMs:     req.LatencyMs,
-		ObservedAt:    nowMs,
+		ObservationID:       "obs-" + randomID(),
+		Source:              source,
+		DeviceID:            strings.TrimSpace(req.DeviceID),
+		Name:                strings.TrimSpace(deviceName),
+		Role:                strings.TrimSpace(deviceRole),
+		SiteID:              strings.TrimSpace(siteID),
+		Hostname:            normalizeKeyToken(req.Hostname),
+		MacAddress:          normalizeKeyToken(req.Mac),
+		SerialNumber:        normalizeKeyToken(req.Serial),
+		Vendor:              strings.TrimSpace(req.Vendor),
+		Model:               strings.TrimSpace(req.Model),
+		Online:              online,
+		LatencyMs:           req.LatencyMs,
+		ObservedAt:          observedAtMs,
+		SourceObservedAt:    tsNorm.SourceObservedAtMs,
+		ClockSkewMs:         tsNorm.ClockSkewMs,
+		TimestampConfidence: tsNorm.Confidence,
+		TimestampCorrected:  tsNorm.Corrected,
 	}
 	if obs.Name == "" {
 		obs.Name = obs.DeviceID
@@ -2145,7 +3303,7 @@ func (s *Store) upsertIdentityFromTelemetryLocked(req TelemetryIngestRequest, so
 			Vendor:          obs.Vendor,
 			Model:           obs.Model,
 			SourceRefs:      []string{source},
-			LastSeen:        nowMs,
+			LastSeen:        observedAtMs,
 			CreatedAt:       nowISO,
 			UpdatedAt:       nowISO,
 		})
@@ -2156,7 +3314,7 @@ func (s *Store) upsertIdentityFromTelemetryLocked(req TelemetryIngestRequest, so
 		return ""
 	}
 	identity := &s.DeviceIdentities[idx]
-	identity.LastSeen = nowMs
+	identity.LastSeen = observedAtMs
 	identity.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if identity.PrimaryDeviceID == "" {
 		identity.PrimaryDeviceID = obs.DeviceID
@@ -2188,12 +3346,12 @@ func (s *Store) upsertIdentityFromTelemetryLocked(req TelemetryIngestRequest, so
 	identity.SourceRefs = appendUnique(identity.SourceRefs, source)
 	obs.IdentityID = identity.IdentityID
 
-	s.recordDriftSnapshotLocked(*identity, nowMs)
+	s.recordDriftSnapshotLocked(*identity, observedAtMs)
 	s.upsertHardwareProfileLocked(identity.IdentityID, obs.Vendor, obs.Model)
 	s.upsertInterfaceFactsLocked(identity.IdentityID, source, req.Interfaces)
 	s.upsertNeighborFactsLocked(identity.IdentityID, source, req.Neighbors)
 	s.SourceObservations = append(s.SourceObservations, obs)
-	s.retentionLast = s.applyRetentionPolicyLocked(nowMs)
+	s.retentionLast = s.applyRetentionPolicyLocked(time.Now().UnixMilli())
 
 	for _, key := range identityKeysFromObservation(obs) {
 		s.identityIndex[key] = identity.IdentityID
