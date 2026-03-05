@@ -55,23 +55,25 @@ type AgentRegisterRequest struct {
 }
 
 type TelemetryIngestRequest struct {
-	Source     string                   `json:"source,omitempty"`
-	AgentID    string                   `json:"agent_id,omitempty"`
-	EventType  string                   `json:"event_type,omitempty"`
-	DeviceID   string                   `json:"device_id"`
-	Device     string                   `json:"device,omitempty"`
-	Hostname   string                   `json:"hostname,omitempty"`
-	Mac        string                   `json:"mac,omitempty"`
-	Serial     string                   `json:"serial,omitempty"`
-	Model      string                   `json:"model,omitempty"`
-	Vendor     string                   `json:"vendor,omitempty"`
-	Role       string                   `json:"role,omitempty"`
-	SiteID     string                   `json:"site_id,omitempty"`
-	Online     *bool                    `json:"online,omitempty"`
-	LatencyMs  *float64                 `json:"latency_ms,omitempty"`
-	Message    string                   `json:"message,omitempty"`
-	Interfaces []TelemetryInterfaceFact `json:"interfaces,omitempty"`
-	Neighbors  []TelemetryNeighborFact  `json:"neighbors,omitempty"`
+	Source       string                   `json:"source,omitempty"`
+	AgentID      string                   `json:"agent_id,omitempty"`
+	EventType    string                   `json:"event_type,omitempty"`
+	ObservedAt   string                   `json:"observed_at,omitempty"`
+	ObservedAtMs int64                    `json:"observed_at_ms,omitempty"`
+	DeviceID     string                   `json:"device_id"`
+	Device       string                   `json:"device,omitempty"`
+	Hostname     string                   `json:"hostname,omitempty"`
+	Mac          string                   `json:"mac,omitempty"`
+	Serial       string                   `json:"serial,omitempty"`
+	Model        string                   `json:"model,omitempty"`
+	Vendor       string                   `json:"vendor,omitempty"`
+	Role         string                   `json:"role,omitempty"`
+	SiteID       string                   `json:"site_id,omitempty"`
+	Online       *bool                    `json:"online,omitempty"`
+	LatencyMs    *float64                 `json:"latency_ms,omitempty"`
+	Message      string                   `json:"message,omitempty"`
+	Interfaces   []TelemetryInterfaceFact `json:"interfaces,omitempty"`
+	Neighbors    []TelemetryNeighborFact  `json:"neighbors,omitempty"`
 }
 
 type TelemetryInterfaceFact struct {
@@ -143,21 +145,25 @@ type HardwareProfile struct {
 }
 
 type SourceObservation struct {
-	ObservationID string   `json:"observation_id"`
-	IdentityID    string   `json:"identity_id"`
-	Source        string   `json:"source"`
-	DeviceID      string   `json:"device_id"`
-	Name          string   `json:"name,omitempty"`
-	Role          string   `json:"role,omitempty"`
-	SiteID        string   `json:"site_id,omitempty"`
-	Hostname      string   `json:"hostname,omitempty"`
-	MacAddress    string   `json:"mac_address,omitempty"`
-	SerialNumber  string   `json:"serial_number,omitempty"`
-	Vendor        string   `json:"vendor,omitempty"`
-	Model         string   `json:"model,omitempty"`
-	Online        *bool    `json:"online,omitempty"`
-	LatencyMs     *float64 `json:"latency_ms,omitempty"`
-	ObservedAt    int64    `json:"observed_at"`
+	ObservationID       string   `json:"observation_id"`
+	IdentityID          string   `json:"identity_id"`
+	Source              string   `json:"source"`
+	DeviceID            string   `json:"device_id"`
+	Name                string   `json:"name,omitempty"`
+	Role                string   `json:"role,omitempty"`
+	SiteID              string   `json:"site_id,omitempty"`
+	Hostname            string   `json:"hostname,omitempty"`
+	MacAddress          string   `json:"mac_address,omitempty"`
+	SerialNumber        string   `json:"serial_number,omitempty"`
+	Vendor              string   `json:"vendor,omitempty"`
+	Model               string   `json:"model,omitempty"`
+	Online              *bool    `json:"online,omitempty"`
+	LatencyMs           *float64 `json:"latency_ms,omitempty"`
+	ObservedAt          int64    `json:"observed_at"`
+	SourceObservedAt    int64    `json:"source_observed_at,omitempty"`
+	ClockSkewMs         int64    `json:"clock_skew_ms,omitempty"`
+	TimestampConfidence float64  `json:"timestamp_confidence,omitempty"`
+	TimestampCorrected  bool     `json:"timestamp_corrected,omitempty"`
 }
 
 type DriftSnapshot struct {
@@ -235,12 +241,164 @@ type TelemetryIngestDecision struct {
 	Reason              string `json:"reason,omitempty"`
 }
 
+type TelemetryTimestampNormalization struct {
+	NormalizedObservedAtMs int64   `json:"normalized_observed_at_ms"`
+	SourceObservedAtMs     int64   `json:"source_observed_at_ms,omitempty"`
+	ClockSkewMs            int64   `json:"clock_skew_ms,omitempty"`
+	Confidence             float64 `json:"confidence"`
+	Corrected              bool    `json:"corrected"`
+	Reason                 string  `json:"reason,omitempty"`
+}
+
 type TelemetryGovernorStatus struct {
 	LastEvaluatedAtMs  int64                        `json:"last_evaluated_at_ms"`
 	AcceptedSamples    int64                        `json:"accepted_samples"`
 	DroppedSamples     int64                        `json:"dropped_samples"`
 	ActiveGapIncidents int                          `json:"active_gap_incidents"`
 	Rules              []TelemetryClassGovernorRule `json:"rules"`
+}
+
+type TelemetrySourceQualityStats struct {
+	Source                  string  `json:"source"`
+	LastPollAtMs            int64   `json:"last_poll_at_ms,omitempty"`
+	LastIngestAtMs          int64   `json:"last_ingest_at_ms,omitempty"`
+	LastPollError           string  `json:"last_poll_error,omitempty"`
+	PollAttempts            int64   `json:"poll_attempts"`
+	PollFailures            int64   `json:"poll_failures"`
+	ConsecutivePollFailures int64   `json:"consecutive_poll_failures"`
+	AcceptedSamples         int64   `json:"accepted_samples"`
+	DroppedSamples          int64   `json:"dropped_samples"`
+	TotalSamples            int64   `json:"total_samples"`
+	CompleteSamples         int64   `json:"complete_samples"`
+	MissingRoleSamples      int64   `json:"missing_role_samples"`
+	MissingSiteSamples      int64   `json:"missing_site_samples"`
+	MissingOnlineSamples    int64   `json:"missing_online_samples"`
+	LowConfidenceSamples    int64   `json:"low_confidence_samples"`
+	TimestampCorrectedCount int64   `json:"timestamp_corrected_count"`
+	ClockSkewViolationCount int64   `json:"clock_skew_violation_count"`
+	SumAbsClockSkewMs       int64   `json:"sum_abs_clock_skew_ms"`
+	MaxAbsClockSkewMs       int64   `json:"max_abs_clock_skew_ms"`
+	CompletenessScoreSum    float64 `json:"completeness_score_sum"`
+	UpdatedAtMs             int64   `json:"updated_at_ms,omitempty"`
+}
+
+type TelemetrySourceQualityScorecard struct {
+	Source            string                      `json:"source"`
+	Status            string                      `json:"status"`
+	OverallScore      int                         `json:"overall_score"`
+	FreshnessScore    int                         `json:"freshness_score"`
+	CompletenessScore int                         `json:"completeness_score"`
+	ErrorRatePct      float64                     `json:"error_rate_pct"`
+	SkewAvgMs         int64                       `json:"skew_avg_ms"`
+	SkewMaxMs         int64                       `json:"skew_max_ms"`
+	Stats             TelemetrySourceQualityStats `json:"stats"`
+	Warnings          []string                    `json:"warnings,omitempty"`
+}
+
+type TelemetryIngestionHealth struct {
+	LastEvaluatedAtMs  int64 `json:"last_evaluated_at_ms"`
+	SourceCount        int   `json:"source_count"`
+	HealthySources     int   `json:"healthy_sources"`
+	DegradedSources    int   `json:"degraded_sources"`
+	FailedSources      int   `json:"failed_sources"`
+	ActiveGapIncidents int   `json:"active_gap_incidents"`
+	PollAttempts       int64 `json:"poll_attempts"`
+	PollFailures       int64 `json:"poll_failures"`
+	AcceptedSamples    int64 `json:"accepted_samples"`
+	DroppedSamples     int64 `json:"dropped_samples"`
+}
+
+type TelemetryQualityResponse struct {
+	LastUpdatedMs int64                             `json:"last_updated_ms"`
+	Health        TelemetryIngestionHealth          `json:"health"`
+	Scorecards    []TelemetrySourceQualityScorecard `json:"scorecards"`
+	Stub          bool                              `json:"stub"`
+}
+
+type TelemetryBaselineMetric struct {
+	Metric      string  `json:"metric"`
+	Unit        string  `json:"unit,omitempty"`
+	SampleCount int     `json:"sample_count"`
+	Mean        float64 `json:"mean"`
+	StdDev      float64 `json:"stddev"`
+	P50         float64 `json:"p50"`
+	P95         float64 `json:"p95"`
+	LowerBound  float64 `json:"lower_bound"`
+	UpperBound  float64 `json:"upper_bound"`
+}
+
+type TelemetryAnomalyWindow struct {
+	DayOfWeek            int     `json:"day_of_week"`
+	HourOfDay            int     `json:"hour_of_day"`
+	SampleCount          int     `json:"sample_count"`
+	LatencyMeanMs        float64 `json:"latency_mean_ms,omitempty"`
+	LatencyStdDevMs      float64 `json:"latency_stddev_ms,omitempty"`
+	AvailabilityMeanPct  float64 `json:"availability_mean_pct,omitempty"`
+	AvailabilityStdDevPct float64 `json:"availability_stddev_pct,omitempty"`
+}
+
+type TelemetryRoleSiteBaseline struct {
+	Role        string                  `json:"role"`
+	SiteID      string                  `json:"site_id"`
+	SampleCount int                     `json:"sample_count"`
+	WindowStart int64                   `json:"window_start_ms"`
+	WindowEnd   int64                   `json:"window_end_ms"`
+	Metrics     []TelemetryBaselineMetric `json:"metrics"`
+	Windows     []TelemetryAnomalyWindow  `json:"windows"`
+}
+
+type TelemetryBaselineReport struct {
+	LastUpdatedMs int64                      `json:"last_updated_ms"`
+	WindowHours   int                        `json:"window_hours"`
+	GroupCount    int                        `json:"group_count"`
+	Groups        []TelemetryRoleSiteBaseline `json:"groups"`
+	Stub          bool                       `json:"stub"`
+}
+
+type TelemetryImpactRadius struct {
+	NodeID        string  `json:"node_id,omitempty"`
+	ManagedReach  int     `json:"managed_reach"`
+	TotalManaged  int     `json:"total_managed"`
+	ReachPct      float64 `json:"reach_pct"`
+	NeighborCount int     `json:"neighbor_count"`
+	ComponentSize int     `json:"component_size"`
+	Scope         string  `json:"scope"` // local | site | network | unknown
+}
+
+type TelemetryAlertRecord struct {
+	Incident          Incident              `json:"incident"`
+	DeviceName        string                `json:"device_name,omitempty"`
+	DeviceRole        string                `json:"device_role,omitempty"`
+	SiteID            string                `json:"site_id,omitempty"`
+	ConfidenceScore   float64               `json:"confidence_score"`
+	ConfidenceLevel   string                `json:"confidence_level"`
+	ConfidenceReasons []string              `json:"confidence_reasons,omitempty"`
+	Impact            TelemetryImpactRadius `json:"impact"`
+}
+
+type TelemetryStormBurst struct {
+	Key         string  `json:"key"`
+	AlertType   string  `json:"alert_type"`
+	Source      string  `json:"source,omitempty"`
+	SiteID      string  `json:"site_id,omitempty"`
+	Severity    string  `json:"severity,omitempty"`
+	DeviceCount int     `json:"device_count"`
+	AlertCount  int     `json:"alert_count"`
+	StartedAt   string  `json:"started_at,omitempty"`
+	EndedAt     string  `json:"ended_at,omitempty"`
+	DurationMin float64 `json:"duration_min"`
+}
+
+type TelemetryAlertIntelligenceReport struct {
+	LastUpdatedMs       int64                  `json:"last_updated_ms"`
+	WindowMinutes       int                    `json:"window_minutes"`
+	BurstThreshold      int                    `json:"burst_threshold"`
+	RawAlertCount       int                    `json:"raw_alert_count"`
+	SummarizedAlertCount int                   `json:"summarized_alert_count"`
+	ActiveCount         int                    `json:"active_count"`
+	Alerts              []TelemetryAlertRecord `json:"alerts"`
+	StormBursts         []TelemetryStormBurst  `json:"storm_bursts"`
+	Stub                bool                   `json:"stub"`
 }
 
 type InventoryInterfacesResponse struct {

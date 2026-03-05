@@ -25,19 +25,20 @@ type sourcePollBatch struct {
 }
 
 type uiSPDeviceRecord struct {
-	ID      string
-	Name    string
-	Role    string
-	SiteID  string
-	Host    string
-	Mac     string
-	Serial  string
-	Model   string
-	Vendor  string
-	Ifaces  []TelemetryInterfaceFact
-	Neighs  []TelemetryNeighborFact
-	Online  bool
-	Latency *float64
+	ID           string
+	Name         string
+	Role         string
+	SiteID       string
+	Host         string
+	Mac          string
+	Serial       string
+	Model        string
+	Vendor       string
+	Ifaces       []TelemetryInterfaceFact
+	Neighs       []TelemetryNeighborFact
+	Online       bool
+	Latency      *float64
+	ObservedAtMs int64
 }
 
 type UISPConnector struct {
@@ -181,22 +182,23 @@ func (u *UISPConnector) Poll(ctx context.Context, req SourcePollRequest) (source
 
 		online := rec.Online
 		events = append(events, TelemetryIngestRequest{
-			Source:     "uisp",
-			EventType:  eventType,
-			DeviceID:   rec.ID,
-			Device:     rec.Name,
-			Hostname:   rec.Host,
-			Mac:        rec.Mac,
-			Serial:     rec.Serial,
-			Model:      rec.Model,
-			Vendor:     rec.Vendor,
-			Role:       rec.Role,
-			SiteID:     rec.SiteID,
-			Online:     &online,
-			LatencyMs:  rec.Latency,
-			Message:    fmt.Sprintf("UISP poll state=%t", rec.Online),
-			Interfaces: rec.Ifaces,
-			Neighbors:  rec.Neighs,
+			Source:       "uisp",
+			EventType:    eventType,
+			ObservedAtMs: rec.ObservedAtMs,
+			DeviceID:     rec.ID,
+			Device:       rec.Name,
+			Hostname:     rec.Host,
+			Mac:          rec.Mac,
+			Serial:       rec.Serial,
+			Model:        rec.Model,
+			Vendor:       rec.Vendor,
+			Role:         rec.Role,
+			SiteID:       rec.SiteID,
+			Online:       &online,
+			LatencyMs:    rec.Latency,
+			Message:      fmt.Sprintf("UISP poll state=%t", rec.Online),
+			Interfaces:   rec.Ifaces,
+			Neighbors:    rec.Neighs,
 		})
 		emitted++
 	}
@@ -359,6 +361,13 @@ func parseUISPDevices(body []byte) ([]uiSPDeviceRecord, error) {
 			[]string{"overview", "latency"},
 			[]string{"overview", "ping"},
 		)
+		observedAtMs := pickTimestampMs(item,
+			[]string{"overview", "lastSeen"},
+			[]string{"overview", "lastUpdate"},
+			[]string{"lastSeen"},
+			[]string{"updatedAt"},
+			[]string{"timestamp"},
+		)
 
 		records = append(records, uiSPDeviceRecord{
 			ID:     id,
@@ -387,10 +396,11 @@ func parseUISPDevices(body []byte) ([]uiSPDeviceRecord, error) {
 				[]string{"identification", "vendor"},
 				[]string{"vendor"},
 			),
-			Ifaces:  parseUISPInterfaces(item),
-			Neighs:  parseUISPNeighbors(item),
-			Online:  online,
-			Latency: latency,
+			Ifaces:       parseUISPInterfaces(item),
+			Neighs:       parseUISPNeighbors(item),
+			Online:       online,
+			Latency:      latency,
+			ObservedAtMs: observedAtMs,
 		})
 	}
 
@@ -584,6 +594,54 @@ func pickFloat(m map[string]any, paths ...[]string) *float64 {
 	return nil
 }
 
+func pickTimestampMs(m map[string]any, paths ...[]string) int64 {
+	for _, p := range paths {
+		if v, ok := nestedValue(m, p...); ok {
+			switch t := v.(type) {
+			case float64:
+				if t <= 0 {
+					continue
+				}
+				if t < 1e11 {
+					return int64(t * 1000)
+				}
+				return int64(t)
+			case int:
+				if t <= 0 {
+					continue
+				}
+				if t < 1e11 {
+					return int64(t) * 1000
+				}
+				return int64(t)
+			case int64:
+				if t <= 0 {
+					continue
+				}
+				if t < 1e11 {
+					return t * 1000
+				}
+				return t
+			case string:
+				raw := strings.TrimSpace(t)
+				if raw == "" {
+					continue
+				}
+				if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed > 0 {
+					if parsed < 1e11 {
+						return parsed * 1000
+					}
+					return parsed
+				}
+				if parsedTime, err := time.Parse(time.RFC3339, raw); err == nil {
+					return parsedTime.UnixMilli()
+				}
+			}
+		}
+	}
+	return 0
+}
+
 func nestedValue(m map[string]any, keys ...string) (any, bool) {
 	var current any = m
 	for _, k := range keys {
@@ -649,9 +707,17 @@ func runSourcePoller(ctx context.Context, connector SourceConnector, store *Stor
 	run := func() {
 		batch, err := connector.Poll(ctx, SourcePollRequest{Retries: retries})
 		if err != nil {
+			store.RecordSourcePollOutcome(connector.Name(), false, err.Error(), time.Now().UnixMilli())
+			gapsCreated, gapsResolved := store.DetectTelemetryGaps(time.Now().UnixMilli())
 			logger.Warn("source_poller_poll_failed", "source", connector.Name(), "error", err.Error())
+			logger.Info("source_poller_gap_eval",
+				"source", connector.Name(),
+				"gap_incidents_created", gapsCreated,
+				"gap_incidents_resolved", gapsResolved,
+			)
 			return
 		}
+		store.RecordSourcePollOutcome(connector.Name(), true, "", time.Now().UnixMilli())
 		ingested, incidents, dropped := ingestSourceEvents(store, batch.Events)
 		gapsCreated, gapsResolved := store.DetectTelemetryGaps(time.Now().UnixMilli())
 		logger.Info("source_poller_poll_ok",

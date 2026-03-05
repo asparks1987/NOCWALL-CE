@@ -1,6 +1,28 @@
 <?php
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
+
+$sessionIsHttps = false;
+if(
+    (!empty($_SERVER['HTTPS']) && strtolower((string)$_SERVER['HTTPS']) !== 'off')
+    || (isset($_SERVER['SERVER_PORT']) && (int)$_SERVER['SERVER_PORT'] === 443)
+    || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && strtolower(trim((string)$_SERVER['HTTP_X_FORWARDED_PROTO'])) === 'https')
+){
+    $sessionIsHttps = true;
+}
+ini_set('session.use_strict_mode', '1');
+ini_set('session.cookie_httponly', '1');
+ini_set('session.cookie_samesite', 'Lax');
+if($sessionIsHttps){
+    ini_set('session.cookie_secure', '1');
+}
+session_set_cookie_params([
+    'lifetime' => 0,
+    'path' => '/',
+    'secure' => $sessionIsHttps,
+    'httponly' => true,
+    'samesite' => 'Lax'
+]);
 session_start();
 
 date_default_timezone_set('America/Chicago');
@@ -51,6 +73,9 @@ if(!preg_match('/^\d+(\.\d{1,2})?$/', $NOCWALL_PRO_MONTHLY_USD)){
 $NOCWALL_STRIPE_SECRET_KEY = trim((string)(getenv("NOCWALL_STRIPE_SECRET_KEY") ?: ""));
 $NOCWALL_STRIPE_WEBHOOK_SECRET = trim((string)(getenv("NOCWALL_STRIPE_WEBHOOK_SECRET") ?: ""));
 $NOCWALL_STRIPE_PRICE_ID = trim((string)(getenv("NOCWALL_STRIPE_PRICE_ID") ?: ""));
+$NOCWALL_STRIPE_PAYMENT_LINK = trim((string)(getenv("NOCWALL_STRIPE_PAYMENT_LINK") ?: ""));
+$NOCWALL_STRIPE_PAYMENT_LINKS = trim((string)(getenv("NOCWALL_STRIPE_PAYMENT_LINKS") ?: ""));
+$NOCWALL_BILLING_DEFAULT_TIER = strtolower(trim((string)(getenv("NOCWALL_BILLING_DEFAULT_TIER") ?: "pro_monthly")));
 $NOCWALL_STRIPE_SUCCESS_URL = trim((string)(getenv("NOCWALL_STRIPE_SUCCESS_URL") ?: ""));
 $NOCWALL_STRIPE_CANCEL_URL = trim((string)(getenv("NOCWALL_STRIPE_CANCEL_URL") ?: ""));
 $NOCWALL_STRIPE_PORTAL_RETURN_URL = trim((string)(getenv("NOCWALL_STRIPE_PORTAL_RETURN_URL") ?: ""));
@@ -62,6 +87,14 @@ if($NOCWALL_STRIPE_CANCEL_URL === ''){
 }
 if($NOCWALL_STRIPE_PORTAL_RETURN_URL === ''){
     $NOCWALL_STRIPE_PORTAL_RETURN_URL = "./?view=settings&billing=portal";
+}
+$NOCWALL_STRIPE_PAYMENT_LINK_MAP = normalize_stripe_payment_link_map(
+    parse_stripe_payment_links_env($NOCWALL_STRIPE_PAYMENT_LINKS),
+    $NOCWALL_STRIPE_PAYMENT_LINK
+);
+$NOCWALL_BILLING_DEFAULT_TIER = normalize_billing_tier_key($NOCWALL_BILLING_DEFAULT_TIER);
+if($NOCWALL_BILLING_DEFAULT_TIER === ''){
+    $NOCWALL_BILLING_DEFAULT_TIER = 'pro_monthly';
 }
 // Feature flags / UI toggles
 $SHOW_TLS_UI = in_array(strtolower((string)getenv('SHOW_TLS_UI')), ['1','true','yes'], true);
@@ -82,6 +115,10 @@ $CACHE_FILE = $CACHE_DIR . "/status_cache.json";
 $DB_FILE    = $CACHE_DIR . "/metrics.sqlite";
 $AUTH_FILE  = $CACHE_DIR . "/auth.json";
 $USERS_FILE = $CACHE_DIR . "/users.json";
+$LOGIN_ATTEMPTS_FILE = $CACHE_DIR . "/login_attempts.json";
+$LOGIN_MAX_ATTEMPTS = 8;
+$LOGIN_ATTEMPT_WINDOW_SECONDS = 15 * 60;
+$LOGIN_LOCKOUT_SECONDS = 15 * 60;
 
 $FIRST_OFFLINE_THRESHOLD = 30;
 $FLAP_ALERT_THRESHOLD = 3;
@@ -112,6 +149,338 @@ function write_json_file($file, $data){
 
 function normalize_username($value){
     return strtolower(trim((string)$value));
+}
+
+function normalize_billing_tier_key($value){
+    $tier = strtolower(trim((string)$value));
+    if($tier === ''){
+        return '';
+    }
+    $tier = preg_replace('/[^a-z0-9_-]+/', '_', $tier);
+    $tier = trim((string)$tier, '_-');
+    return substr($tier, 0, 48);
+}
+
+function billing_tier_label($tier){
+    $key = normalize_billing_tier_key($tier);
+    if($key === '') return 'Subscription';
+    return ucwords(str_replace(['_','-'], ' ', $key));
+}
+
+function normalize_stripe_payment_link_map($rawMap, $singleLink = ''){
+    $out = [];
+
+    if(is_array($rawMap)){
+        foreach($rawMap as $tier => $url){
+            $t = normalize_billing_tier_key($tier);
+            $u = trim((string)$url);
+            if($t === '' || $u === ''){
+                continue;
+            }
+            if(filter_var($u, FILTER_VALIDATE_URL) === false){
+                continue;
+            }
+            $out[$t] = $u;
+        }
+    }
+
+    $single = trim((string)$singleLink);
+    if($single !== '' && filter_var($single, FILTER_VALIDATE_URL) !== false){
+        $out['pro_monthly'] = $single;
+    }
+
+    return $out;
+}
+
+function parse_stripe_payment_links_env($value){
+    $raw = trim((string)$value);
+    if($raw === ''){
+        return [];
+    }
+    $decoded = json_decode($raw, true);
+    if(is_array($decoded)){
+        return $decoded;
+    }
+
+    $pairs = preg_split('/[;,]/', $raw);
+    $map = [];
+    foreach($pairs as $pair){
+        $piece = trim((string)$pair);
+        if($piece === '' || strpos($piece, '=') === false){
+            continue;
+        }
+        [$k, $v] = array_map('trim', explode('=', $piece, 2));
+        if($k !== '' && $v !== ''){
+            $map[$k] = $v;
+        }
+    }
+    return $map;
+}
+
+function stripe_payment_link_tiers_public($map){
+    $tiers = [];
+    if(!is_array($map)) return $tiers;
+    foreach($map as $tier => $url){
+        $key = normalize_billing_tier_key($tier);
+        $link = trim((string)$url);
+        if($key === '' || $link === ''){
+            continue;
+        }
+        $tiers[] = [
+            'tier' => $key,
+            'label' => billing_tier_label($key)
+        ];
+    }
+    usort($tiers, function($a, $b){
+        return strcmp((string)($a['tier'] ?? ''), (string)($b['tier'] ?? ''));
+    });
+    return $tiers;
+}
+
+function resolve_stripe_payment_link_target($map, $requestedTier, $defaultTier){
+    $tiers = is_array($map) ? $map : [];
+    if(count($tiers) === 0){
+        return ['ok' => false, 'error' => 'payment_links_not_configured'];
+    }
+    $requested = normalize_billing_tier_key($requestedTier);
+    if($requested !== ''){
+        if(isset($tiers[$requested])){
+            return ['ok' => true, 'tier' => $requested, 'url' => (string)$tiers[$requested]];
+        }
+        return ['ok' => false, 'error' => 'invalid_tier'];
+    }
+    $preferred = normalize_billing_tier_key($defaultTier);
+    if($preferred !== '' && isset($tiers[$preferred])){
+        return ['ok' => true, 'tier' => $preferred, 'url' => (string)$tiers[$preferred]];
+    }
+    foreach($tiers as $tier => $url){
+        return ['ok' => true, 'tier' => normalize_billing_tier_key($tier), 'url' => (string)$url];
+    }
+    return ['ok' => false, 'error' => 'payment_links_not_configured'];
+}
+
+function get_client_ip_address(){
+    $forwarded = trim((string)($_SERVER['HTTP_X_FORWARDED_FOR'] ?? ''));
+    if($forwarded !== ''){
+        $parts = explode(',', $forwarded);
+        $first = trim((string)($parts[0] ?? ''));
+        if($first !== ''){
+            return strtolower($first);
+        }
+    }
+    $realIp = trim((string)($_SERVER['HTTP_X_REAL_IP'] ?? ''));
+    if($realIp !== ''){
+        return strtolower($realIp);
+    }
+    $remote = trim((string)($_SERVER['REMOTE_ADDR'] ?? ''));
+    if($remote !== ''){
+        return strtolower($remote);
+    }
+    return 'unknown';
+}
+
+function ensure_csrf_token(){
+    $token = trim((string)($_SESSION['csrf_token'] ?? ''));
+    if($token !== '' && strlen($token) >= 32){
+        return $token;
+    }
+    try{
+        $token = bin2hex(random_bytes(32));
+    } catch(Exception $e){
+        $token = hash('sha256', uniqid('csrf', true) . microtime(true));
+    }
+    $_SESSION['csrf_token'] = $token;
+    return $token;
+}
+
+function get_csrf_token(){
+    return ensure_csrf_token();
+}
+
+function get_csrf_token_from_request(){
+    $header = trim((string)($_SERVER['HTTP_X_CSRF_TOKEN'] ?? ''));
+    if($header !== ''){
+        return $header;
+    }
+    if(array_key_exists('_csrf', $_POST)){
+        return trim((string)$_POST['_csrf']);
+    }
+    if(array_key_exists('_csrf', $_GET)){
+        return trim((string)$_GET['_csrf']);
+    }
+    return '';
+}
+
+function is_valid_csrf_token($candidate){
+    $expected = trim((string)($_SESSION['csrf_token'] ?? ''));
+    $token = trim((string)$candidate);
+    if($expected === '' || $token === ''){
+        return false;
+    }
+    return hash_equals($expected, $token);
+}
+
+function require_valid_csrf($mode = 'json'){
+    $candidate = get_csrf_token_from_request();
+    if(is_valid_csrf_token($candidate)){
+        return;
+    }
+    if($mode === 'json'){
+        http_response_code(403);
+        header('Content-Type: application/json');
+        echo json_encode([
+            'ok' => 0,
+            'error' => 'invalid_csrf',
+            'message' => 'Your session token is invalid or expired. Refresh and try again.'
+        ]);
+    } else {
+        $_SESSION['auth_err'] = 'Your session expired. Please try again.';
+        header('Location: ./?login=1');
+    }
+    exit;
+}
+
+function render_client_security_bootstrap_script(){
+    $csrfToken = get_csrf_token();
+    ?>
+<script>
+  (function(){
+    const csrfToken = <?=json_encode($csrfToken, JSON_UNESCAPED_SLASHES)?>;
+    window.NOCWALL_CSRF_TOKEN = csrfToken;
+    if(window.__nocwallFetchCsrfPatched){
+      return;
+    }
+    const rawFetch = window.fetch ? window.fetch.bind(window) : null;
+    if(!rawFetch){
+      return;
+    }
+    window.__nocwallFetchCsrfPatched = true;
+    window.fetch = function(input, init){
+      try{
+        const requestUrl = (typeof input === 'string')
+          ? input
+          : ((input && typeof input.url === 'string') ? input.url : window.location.href);
+        const resolved = new URL(requestUrl, window.location.href);
+        if(resolved.origin === window.location.origin && csrfToken){
+          const nextInit = Object.assign({}, init || {});
+          const baseHeaders = nextInit.headers !== undefined
+            ? nextInit.headers
+            : ((input && input.headers) ? input.headers : undefined);
+          const headers = new Headers(baseHeaders || {});
+          headers.set('X-CSRF-Token', csrfToken);
+          nextInit.headers = headers;
+          return rawFetch(input, nextInit);
+        }
+      }catch(_){}
+      return rawFetch(input, init);
+    };
+  })();
+</script>
+<?php
+}
+
+function login_attempt_store_load($file){
+    $loaded = read_json_file($file);
+    if(!is_array($loaded)){
+        return ['keys' => []];
+    }
+    if(!isset($loaded['keys']) || !is_array($loaded['keys'])){
+        $loaded['keys'] = [];
+    }
+    return $loaded;
+}
+
+function login_attempt_entry_compact($entry, $nowTs, $windowSeconds){
+    $out = ['failures' => [], 'locked_until' => 0];
+    if(is_array($entry) && isset($entry['failures']) && is_array($entry['failures'])){
+        foreach($entry['failures'] as $ts){
+            $t = (int)$ts;
+            if($t > 0 && ($nowTs - $t) <= $windowSeconds){
+                $out['failures'][] = $t;
+            }
+        }
+    }
+    sort($out['failures']);
+    $lockedUntil = is_array($entry) ? (int)($entry['locked_until'] ?? 0) : 0;
+    if($lockedUntil > $nowTs){
+        $out['locked_until'] = $lockedUntil;
+    }
+    return $out;
+}
+
+function login_attempt_keys($username, $ipAddress){
+    $usernameKey = normalize_username($username);
+    $ipKey = strtolower(trim((string)$ipAddress));
+    if($ipKey === ''){
+        $ipKey = 'unknown';
+    }
+    $keys = ['ip:' . $ipKey];
+    if($usernameKey !== ''){
+        $keys[] = 'user:' . $usernameKey . '|ip:' . $ipKey;
+    }
+    return $keys;
+}
+
+function login_attempt_is_limited($file, $username, $ipAddress, $maxAttempts, $windowSeconds, $lockSeconds){
+    $nowTs = time();
+    $store = login_attempt_store_load($file);
+    $keys = login_attempt_keys($username, $ipAddress);
+    $retryAfter = 0;
+    $changed = false;
+
+    foreach($keys as $key){
+        $entry = login_attempt_entry_compact($store['keys'][$key] ?? null, $nowTs, $windowSeconds);
+        if(count($entry['failures']) >= $maxAttempts && $entry['locked_until'] <= $nowTs){
+            $entry['locked_until'] = $nowTs + $lockSeconds;
+            $changed = true;
+        }
+        if($entry['locked_until'] > $nowTs){
+            $retryAfter = max($retryAfter, $entry['locked_until'] - $nowTs);
+        }
+        $store['keys'][$key] = $entry;
+    }
+
+    if($changed){
+        write_json_file($file, $store);
+    }
+
+    return [
+        'limited' => ($retryAfter > 0),
+        'retry_after' => $retryAfter
+    ];
+}
+
+function login_attempt_record_failure($file, $username, $ipAddress, $maxAttempts, $windowSeconds, $lockSeconds){
+    $nowTs = time();
+    $store = login_attempt_store_load($file);
+    $keys = login_attempt_keys($username, $ipAddress);
+
+    foreach($keys as $key){
+        $entry = login_attempt_entry_compact($store['keys'][$key] ?? null, $nowTs, $windowSeconds);
+        $entry['failures'][] = $nowTs;
+        $entry = login_attempt_entry_compact($entry, $nowTs, $windowSeconds);
+        if(count($entry['failures']) >= $maxAttempts){
+            $entry['locked_until'] = $nowTs + $lockSeconds;
+        }
+        $store['keys'][$key] = $entry;
+    }
+
+    write_json_file($file, $store);
+}
+
+function login_attempt_clear($file, $username, $ipAddress){
+    $store = login_attempt_store_load($file);
+    $keys = login_attempt_keys($username, $ipAddress);
+    $changed = false;
+    foreach($keys as $key){
+        if(isset($store['keys'][$key])){
+            unset($store['keys'][$key]);
+            $changed = true;
+        }
+    }
+    if($changed){
+        write_json_file($file, $store);
+    }
 }
 
 function default_subscription_state(){
@@ -196,6 +565,23 @@ function normalize_subscription_state($input){
     return $base;
 }
 
+function subscription_is_legacy_local_trial_state($sub){
+    $s = normalize_subscription_state($sub);
+    if($s['provider'] !== 'manual'){
+        return false;
+    }
+    if($s['plan'] !== 'pro_monthly'){
+        return false;
+    }
+    if(trim((string)$s['notes']) !== 'signup_trial_30d_free'){
+        return false;
+    }
+    if(trim((string)$s['customer_id']) !== '' || trim((string)$s['subscription_id']) !== ''){
+        return false;
+    }
+    return true;
+}
+
 function subscription_is_active($sub){
     $normalized = normalize_subscription_state($sub);
     $status = (string)$normalized['status'];
@@ -241,6 +627,10 @@ function build_feature_flags_for_user($user){
         'inventory' => $proEnabled,
         'topology' => $proEnabled,
         'history' => $proEnabled,
+        'telemetry_alert_confidence' => $proEnabled,
+        'telemetry_impact_radius' => $proEnabled,
+        'telemetry_storm_shield' => $proEnabled,
+        'telemetry_alert_comparison' => $proEnabled,
         // Acknowledging active sirens is available to all authenticated users (CE + PRO).
         'ack' => true,
         'simulate' => $proEnabled,
@@ -1304,6 +1694,11 @@ function bootstrap_users_store($usersFile, $legacyAuthFile, $envUrl, $envToken){
                 $store['users'][$uname]['subscription'] = $normalizedSub;
                 $didMutate = true;
             }
+            if(subscription_is_legacy_local_trial_state($store['users'][$uname]['subscription'] ?? null)){
+                $store['users'][$uname]['subscription'] = default_subscription_state();
+                $store['users'][$uname]['updated_at'] = date('c');
+                $didMutate = true;
+            }
             // One-time migration path: legacy single token -> first source using server UISP URL.
             $legacyToken = trim((string)($store['users'][$uname]['uisp_token'] ?? ''));
             if($legacyToken !== '' && count(get_stored_user_sources($store['users'][$uname])) === 0){
@@ -1457,9 +1852,6 @@ if(isset($_GET['webhook']) && $_GET['webhook']==='stripe' && $_SERVER['REQUEST_M
                 $subData['current_period_start'] = (int)($stripeSub['current_period_start'] ?? 0);
                 $subData['current_period_end'] = (int)($stripeSub['current_period_end'] ?? 0);
                 $subData['cancel_at_period_end'] = !empty($stripeSub['cancel_at_period_end']);
-            } else {
-                $subData['current_period_start'] = time();
-                $subData['current_period_end'] = time() + (30 * 24 * 3600);
             }
             $handled = apply_stripe_subscription_state($USERS_STORE, $sessionUser, $subData);
         }
@@ -1540,6 +1932,7 @@ if(isset($_GET['webhook']) && $_GET['webhook']==='stripe' && $_SERVER['REQUEST_M
 
 // Handle login/register/logout actions early
 if(isset($_GET['action']) && $_GET['action']==='register' && $_SERVER['REQUEST_METHOD']==='POST'){
+    require_valid_csrf('redirect');
     $u = normalize_username($_POST['username'] ?? '');
     $p = (string)($_POST['password'] ?? '');
     $p2 = (string)($_POST['password_confirm'] ?? '');
@@ -1577,27 +1970,65 @@ if(isset($_GET['action']) && $_GET['action']==='register' && $_SERVER['REQUEST_M
         'updated_at' => $now
     ];
     save_users_store($USERS_FILE, $USERS_STORE);
+    session_regenerate_id(true);
     $_SESSION['auth_ok'] = 1;
     $_SESSION['auth_user'] = $u;
+    unset($_SESSION['csrf_token']);
+    ensure_csrf_token();
     header('Location: ./');
     exit;
 }
 if(isset($_GET['action']) && $_GET['action']==='login' && $_SERVER['REQUEST_METHOD']==='POST'){
+    require_valid_csrf('redirect');
     $u = normalize_username($_POST['username'] ?? '');
     $p = (string)($_POST['password'] ?? '');
+    $ip = get_client_ip_address();
+    $limited = login_attempt_is_limited(
+        $LOGIN_ATTEMPTS_FILE,
+        $u,
+        $ip,
+        $LOGIN_MAX_ATTEMPTS,
+        $LOGIN_ATTEMPT_WINDOW_SECONDS,
+        $LOGIN_LOCKOUT_SECONDS
+    );
+    if(!empty($limited['limited'])){
+        $waitSeconds = max(1, (int)($limited['retry_after'] ?? 0));
+        $waitMinutes = (int)ceil($waitSeconds / 60);
+        $_SESSION['auth_err'] = 'Too many login attempts. Try again in about ' . $waitMinutes . ' minute(s).';
+        header('Location: ./?login=1');
+        exit;
+    }
     $user = get_user_by_username($USERS_STORE, $u);
     if($user && password_verify($p, (string)($user['password_hash'] ?? ''))){
+        login_attempt_clear($LOGIN_ATTEMPTS_FILE, $u, $ip);
+        session_regenerate_id(true);
         $_SESSION['auth_ok'] = 1;
         $_SESSION['auth_user'] = $u;
+        unset($_SESSION['csrf_token']);
+        ensure_csrf_token();
         header('Location: ./');
         exit;
     } else {
+        login_attempt_record_failure(
+            $LOGIN_ATTEMPTS_FILE,
+            $u,
+            $ip,
+            $LOGIN_MAX_ATTEMPTS,
+            $LOGIN_ATTEMPT_WINDOW_SECONDS,
+            $LOGIN_LOCKOUT_SECONDS
+        );
         $_SESSION['auth_err'] = 'Invalid credentials';
         header('Location: ./?login=1');
         exit;
     }
 }
 if(isset($_GET['action']) && $_GET['action']==='logout'){
+    require_valid_csrf('redirect');
+    $_SESSION = [];
+    if(ini_get('session.use_cookies')){
+        $params = session_get_cookie_params();
+        setcookie(session_name(), '', time() - 42000, $params['path'] ?? '/', $params['domain'] ?? '', !empty($params['secure']), !empty($params['httponly']));
+    }
     session_destroy();
     header('Location: ./?login=1');
     exit;
@@ -1630,6 +2061,29 @@ function require_login_for_ajax(){
         echo json_encode(['error'=>'invalid_session']);
         exit;
     }
+}
+
+function ajax_action_requires_csrf($action){
+    return in_array((string)$action, [
+        'demo_mode_set',
+        'provision_tls',
+        'changepw',
+        'prefs_save',
+        'sources_save',
+        'sources_delete',
+        'sources_test',
+        'billing_subscribe',
+        'billing_portal',
+        'billing_cancel',
+        'billing_resume',
+        'billing_activate',
+        'save_uisp_token',
+        'ack',
+        'clear',
+        'simulate',
+        'clearsim',
+        'clearall'
+    ], true);
 }
 
 function require_pro_feature($featureKey){
@@ -1893,12 +2347,16 @@ function api_get_json($baseUrl, $path, $token = '', $timeoutSec = 6){
 // AJAX
 if(isset($_GET['ajax'])){
     require_login_for_ajax();
+    $ajaxAction = trim((string)($_GET['ajax'] ?? ''));
     $currentUser = get_session_user($USERS_STORE);
     $effectiveSources = get_effective_uisp_sources($currentUser, $UISP_URL, $UISP_TOKEN);
     header("Content-Type: application/json");
     // Prevent caching of AJAX responses
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
     header('Pragma: no-cache');
+    if(ajax_action_requires_csrf($ajaxAction)){
+        require_valid_csrf('json');
+    }
 
     if($_GET['ajax']==='demo_mode_get'){
         $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
@@ -2577,6 +3035,146 @@ if(isset($_GET['ajax'])){
         exit;
     }
 
+    if($_GET['ajax']==='telemetry_quality'){
+        require_pro_feature('topology');
+        $qualityReq = api_get_json($NOCWALL_API_URL, '/telemetry/quality', $NOCWALL_API_TOKEN, 7);
+        $healthReq = api_get_json($NOCWALL_API_URL, '/telemetry/ingestion/health', $NOCWALL_API_TOKEN, 7);
+        $governorReq = api_get_json($NOCWALL_API_URL, '/telemetry/governor', $NOCWALL_API_TOKEN, 7);
+
+        if(!$qualityReq['ok'] || !$healthReq['ok'] || !$governorReq['ok']){
+            http_response_code(502);
+            echo json_encode([
+                'ok' => 0,
+                'error' => 'telemetry_quality_unreachable',
+                'message' => 'Telemetry quality APIs are unavailable.',
+                'details' => [
+                    'quality' => ['ok'=>$qualityReq['ok'],'http'=>$qualityReq['code'],'error'=>$qualityReq['error']],
+                    'health' => ['ok'=>$healthReq['ok'],'http'=>$healthReq['code'],'error'=>$healthReq['error']],
+                    'governor' => ['ok'=>$governorReq['ok'],'http'=>$governorReq['code'],'error'=>$governorReq['error']],
+                ],
+            ]);
+            exit;
+        }
+
+        $quality = $qualityReq['json'];
+        if(!is_array($quality)) $quality = [];
+        $scorecards = $quality['scorecards'] ?? [];
+        if(!is_array($scorecards)) $scorecards = [];
+        $health = $healthReq['json'];
+        if(!is_array($health) || count($health) === 0){
+            $health = $quality['health'] ?? [];
+        }
+        if(!is_array($health)) $health = [];
+        $governor = $governorReq['json'];
+        if(!is_array($governor)) $governor = [];
+
+        echo json_encode([
+            'ok' => 1,
+            'scorecards' => $scorecards,
+            'health' => $health,
+            'governor' => $governor,
+            'counts' => [
+                'sources' => count($scorecards),
+            ],
+            'api_latency' => [
+                'quality' => $qualityReq['latency_ms'],
+                'health' => $healthReq['latency_ms'],
+                'governor' => $governorReq['latency_ms'],
+            ],
+            'fetched_at' => date('c')
+        ]);
+        exit;
+    }
+
+    if($_GET['ajax']==='telemetry_baselines'){
+        require_pro_feature('topology');
+        $windowHours = (int)($_GET['window_hours'] ?? (14 * 24));
+        if($windowHours <= 0){
+            $windowHours = 14 * 24;
+        }
+        if($windowHours > (90 * 24)){
+            $windowHours = 90 * 24;
+        }
+
+        $baselineReq = api_get_json($NOCWALL_API_URL, '/telemetry/baselines?window_hours=' . $windowHours, $NOCWALL_API_TOKEN, 7);
+        if(!$baselineReq['ok']){
+            http_response_code(502);
+            echo json_encode([
+                'ok' => 0,
+                'error' => 'telemetry_baseline_unreachable',
+                'message' => 'Telemetry baseline API is unavailable.',
+                'details' => [
+                    'ok' => $baselineReq['ok'],
+                    'http' => $baselineReq['code'],
+                    'error' => $baselineReq['error'],
+                ],
+            ]);
+            exit;
+        }
+
+        $payload = $baselineReq['json'];
+        if(!is_array($payload)){
+            $payload = [];
+        }
+        $payload['ok'] = 1;
+        $payload['api_latency'] = $baselineReq['latency_ms'];
+        $payload['fetched_at'] = date('c');
+        echo json_encode($payload);
+        exit;
+    }
+
+    if($_GET['ajax']==='telemetry_alert_intelligence'){
+        require_pro_feature('topology');
+        $limit = (int)($_GET['limit'] ?? 40);
+        if($limit <= 0){
+            $limit = 40;
+        }
+        if($limit > 120){
+            $limit = 120;
+        }
+        $windowMinutes = (int)($_GET['window_minutes'] ?? 15);
+        if($windowMinutes <= 0){
+            $windowMinutes = 15;
+        }
+        if($windowMinutes > (24 * 60)){
+            $windowMinutes = 24 * 60;
+        }
+        $burstThreshold = (int)($_GET['burst_threshold'] ?? 4);
+        if($burstThreshold <= 1){
+            $burstThreshold = 4;
+        }
+        if($burstThreshold > 100){
+            $burstThreshold = 100;
+        }
+
+        $path = '/telemetry/alerts/intelligence?limit=' . $limit . '&window_minutes=' . $windowMinutes . '&burst_threshold=' . $burstThreshold;
+        $alertReq = api_get_json($NOCWALL_API_URL, $path, $NOCWALL_API_TOKEN, 7);
+        if(!$alertReq['ok']){
+            http_response_code(502);
+            echo json_encode([
+                'ok' => 0,
+                'error' => 'telemetry_alert_intelligence_unreachable',
+                'message' => 'Telemetry alert intelligence API is unavailable.',
+                'details' => [
+                    'ok' => $alertReq['ok'],
+                    'http' => $alertReq['code'],
+                    'error' => $alertReq['error'],
+                ],
+            ]);
+            exit;
+        }
+
+        $payload = $alertReq['json'];
+        if(!is_array($payload)){
+            $payload = [];
+        }
+        $payload['ok'] = 1;
+        $payload['api_latency'] = $alertReq['latency_ms'];
+        $payload['fetched_at'] = date('c');
+        echo json_encode($payload);
+        exit;
+    }
+
     if($_GET['ajax']==='topology_trace'){
         require_pro_feature('topology');
         $sourceNodeID = trim((string)($_GET['source_node_id'] ?? ''));
@@ -3169,12 +3767,20 @@ if(isset($_GET['ajax'])){
         }
         $subscription = get_user_subscription($user);
         $flags = build_feature_flags_for_user($user);
+        $hasPaymentLinks = (count($NOCWALL_STRIPE_PAYMENT_LINK_MAP) > 0);
+        $stripeSessionConfigured = ($NOCWALL_STRIPE_SECRET_KEY !== '' && $NOCWALL_STRIPE_PRICE_ID !== '' && $NOCWALL_STRIPE_WEBHOOK_SECRET !== '');
+        $stripeWebhookConfigured = ($NOCWALL_STRIPE_WEBHOOK_SECRET !== '');
         echo json_encode([
             'ok' => 1,
             'username' => $sessionUser,
             'billing_mode' => $NOCWALL_BILLING_MODE,
             'self_activate_enabled' => !empty($NOCWALL_BILLING_SELF_ACTIVATE),
-            'stripe_configured' => ($NOCWALL_STRIPE_SECRET_KEY !== '' && $NOCWALL_STRIPE_PRICE_ID !== '' && $NOCWALL_STRIPE_WEBHOOK_SECRET !== ''),
+            'stripe_configured' => ($hasPaymentLinks || $stripeSessionConfigured),
+            'stripe_checkout_configured' => $stripeSessionConfigured,
+            'stripe_payment_links_enabled' => $hasPaymentLinks,
+            'stripe_webhook_configured' => $stripeWebhookConfigured,
+            'billing_default_tier' => $NOCWALL_BILLING_DEFAULT_TIER,
+            'payment_link_tiers' => stripe_payment_link_tiers_public($NOCWALL_STRIPE_PAYMENT_LINK_MAP),
             'stripe_customer_linked' => (trim((string)($subscription['customer_id'] ?? '')) !== ''),
             'price_monthly_usd' => $NOCWALL_PRO_MONTHLY_USD,
             'pro_enabled' => !empty($flags['pro_features']),
@@ -3187,6 +3793,7 @@ if(isset($_GET['ajax'])){
     if($_GET['ajax']==='billing_subscribe' && $_SERVER['REQUEST_METHOD']==='POST'){
         $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
         $user = get_user_by_username($USERS_STORE, $sessionUser);
+        $requestedTier = normalize_billing_tier_key((string)($_POST['tier'] ?? ''));
         if(!$user){
             echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
         }
@@ -3218,6 +3825,28 @@ if(isset($_GET['ajax'])){
         }
 
         if($NOCWALL_BILLING_MODE === 'stripe'){
+            $linkTarget = resolve_stripe_payment_link_target($NOCWALL_STRIPE_PAYMENT_LINK_MAP, $requestedTier, $NOCWALL_BILLING_DEFAULT_TIER);
+            if(!empty($linkTarget['ok'])){
+                echo json_encode([
+                    'ok' => 1,
+                    'provider' => 'stripe_payment_link',
+                    'tier' => (string)$linkTarget['tier'],
+                    'tier_label' => billing_tier_label((string)$linkTarget['tier']),
+                    'checkout_url' => (string)$linkTarget['url'],
+                    'message' => 'Redirecting to Stripe payment link.'
+                ]);
+                exit;
+            }
+            if(($linkTarget['error'] ?? '') === 'invalid_tier'){
+                http_response_code(400);
+                echo json_encode([
+                    'ok' => 0,
+                    'error' => 'invalid_tier',
+                    'message' => 'The selected subscription tier is not configured.'
+                ]);
+                exit;
+            }
+
             if($NOCWALL_STRIPE_SECRET_KEY === '' || $NOCWALL_STRIPE_PRICE_ID === ''){
                 http_response_code(500);
                 echo json_encode([
@@ -3589,6 +4218,7 @@ if(isset($_GET['view']) && $_GET['view']==='device'){
     HTTP --, API latency --, Updated --
   </footer>
 
+  <?php render_client_security_bootstrap_script(); ?>
   <script>
     window.DEVICE_DETAIL = {
       id: <?=json_encode($deviceId)?>,
@@ -3655,6 +4285,7 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
         <span id="billingAgentsPill" class="pill">Local Agents: Disabled</span>
       </div>
       <div class="row-actions" style="margin-top:10px">
+        <select id="billingTierSelect" class="secondary" style="display:none;min-width:190px"></select>
         <button id="billingUpgradeBtn" onclick="startSubscription()">Start Monthly Pro</button>
         <button id="billingActivateBtn" class="secondary" onclick="activateSubscription()" style="display:none">Activate Pro</button>
         <button id="billingCancelBtn" class="secondary" onclick="cancelSubscription()" style="display:none">Cancel At Period End</button>
@@ -3763,6 +4394,7 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
     </section>
   </main>
 
+  <?php render_client_security_bootstrap_script(); ?>
   <script>
     let editSourceId = '';
     let cachedSources = [];
@@ -3834,6 +4466,7 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
       const planPill = document.getElementById('billingPlanPill');
       const mobilePill = document.getElementById('billingMobilePill');
       const agentsPill = document.getElementById('billingAgentsPill');
+      const tierSelect = document.getElementById('billingTierSelect');
       const upgradeBtn = document.getElementById('billingUpgradeBtn');
       const activateBtn = document.getElementById('billingActivateBtn');
       const cancelBtn = document.getElementById('billingCancelBtn');
@@ -3856,9 +4489,11 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
         const cancelAtPeriodEnd = !!sub.cancel_at_period_end;
         const periodEnd = String(sub.current_period_end || '').trim();
         const periodTxt = periodEnd ? (' Current period ends: ' + periodEnd + '.') : '';
+        const stripeTrialNote = (String(j.billing_mode) === 'stripe') ? ' Trial and billing are managed by Stripe checkout/payment links.' : '';
         const stripeNote = (String(j.billing_mode) === 'stripe' && !j.stripe_configured) ? ' Stripe is not fully configured on server.' : '';
+        const webhookNote = (String(j.billing_mode) === 'stripe' && !j.stripe_webhook_configured) ? ' Stripe webhook secret is missing, so automatic entitlement sync will not work.' : '';
         if(summary){
-          summary.textContent = `Mode: ${j.billing_mode}. Status: ${status}. ${pro ? 'Pro is active.' : 'Pro is not active.'}${periodTxt}${stripeNote}`;
+          summary.textContent = `Mode: ${j.billing_mode}. Status: ${status}. ${pro ? 'Pro is active.' : 'Pro is not active.'}${periodTxt}${stripeTrialNote}${stripeNote}${webhookNote}`;
         }
         if(planPill){
           planPill.className = billingPillClass(pro);
@@ -3874,8 +4509,49 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
           agentsPill.className = billingPillClass(enabled);
           agentsPill.textContent = `Local Agents: ${enabled ? 'Enabled' : 'Disabled'}`;
         }
+        const paymentTiers = Array.isArray(j.payment_link_tiers) ? j.payment_link_tiers : [];
+        if(tierSelect){
+          const hasMultipleTiers = paymentTiers.length > 1;
+          tierSelect.style.display = (!pro && hasMultipleTiers) ? '' : 'none';
+          if(!tierSelect.dataset.bound){
+            tierSelect.addEventListener('change', ()=>{
+              const btn = document.getElementById('billingUpgradeBtn');
+              if(!btn) return;
+              const selected = (tierSelect.options && tierSelect.options.length > 0)
+                ? String(tierSelect.options[tierSelect.selectedIndex || 0].text || 'Subscription')
+                : 'Subscription';
+              if(Array.isArray(billingState && billingState.payment_link_tiers) && billingState.payment_link_tiers.length > 0){
+                btn.textContent = `Start ${selected}`;
+              }
+            });
+            tierSelect.dataset.bound = '1';
+          }
+          const currentValue = String(tierSelect.value || '');
+          if(paymentTiers.length > 0){
+            tierSelect.innerHTML = paymentTiers.map(t=>{
+              const tier = String((t && t.tier) || '').trim();
+              const label = String((t && t.label) || tier || 'Tier').trim();
+              return `<option value="${esc(tier)}">${esc(label)}</option>`;
+            }).join('');
+            const defaultTier = String(j.billing_default_tier || '').trim();
+            if(currentValue && paymentTiers.some(t=>String(t.tier || '').trim() === currentValue)){
+              tierSelect.value = currentValue;
+            } else if(defaultTier && paymentTiers.some(t=>String(t.tier || '').trim() === defaultTier)){
+              tierSelect.value = defaultTier;
+            }
+          } else {
+            tierSelect.innerHTML = '';
+          }
+        }
         if(upgradeBtn){
-          upgradeBtn.textContent = `Start Monthly Pro ($${j.price_monthly_usd}/mo)`;
+          const tierLabel = (tierSelect && tierSelect.options && tierSelect.options.length > 0)
+            ? String(tierSelect.options[tierSelect.selectedIndex || 0].text || 'Subscription')
+            : 'Monthly Pro';
+          if(Array.isArray(paymentTiers) && paymentTiers.length > 0){
+            upgradeBtn.textContent = `Start ${tierLabel}`;
+          } else {
+            upgradeBtn.textContent = `Start Monthly Pro ($${j.price_monthly_usd}/mo)`;
+          }
           const billingEnabled = String(j.billing_mode || '') !== 'off';
           upgradeBtn.style.display = (!pro && billingEnabled) ? '' : 'none';
         }
@@ -3906,7 +4582,12 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
     async function startSubscription(){
       setBillingStatus('Starting subscription...');
       try{
-        const r = await fetch('?ajax=billing_subscribe', { method:'POST' });
+        const fd = new FormData();
+        const tierSelect = document.getElementById('billingTierSelect');
+        if(tierSelect && tierSelect.value){
+          fd.append('tier', String(tierSelect.value));
+        }
+        const r = await fetch('?ajax=billing_subscribe', { method:'POST', body:fd });
         if(r.status === 401){ location.href='./?login=1'; return; }
         const j = await r.json().catch(()=>null);
         if(!j || !j.ok){
@@ -4349,6 +5030,7 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
 }
 ?>
 <?php if(!isset($_SESSION['auth_ok']) || empty($_SESSION['auth_user'])): ?>
+<?php $AUTH_CSRF_TOKEN = htmlspecialchars(get_csrf_token(), ENT_QUOTES); ?>
 <!doctype html>
 <html>
 <head>
@@ -4371,6 +5053,7 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
   <div class="wrap">
     <form class="login" method="post" action="?action=login">
       <h2>Sign in</h2>
+      <input type="hidden" name="_csrf" value="<?=$AUTH_CSRF_TOKEN?>">
       <?php if(!empty($_SESSION['auth_err'])){ echo '<div class="err">'.htmlspecialchars($_SESSION['auth_err']).'</div>'; unset($_SESSION['auth_err']); } ?>
       <div class="field">
         <label>Username</label>
@@ -4386,6 +5069,7 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
 
     <form class="login" method="post" action="?action=register">
       <h2>Create account</h2>
+      <input type="hidden" name="_csrf" value="<?=$AUTH_CSRF_TOKEN?>">
       <div class="field">
         <label>Username</label>
         <input type="text" name="username" pattern="[a-z0-9._-]{3,32}" autocomplete="username" required>
@@ -4585,6 +5269,44 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
         <div id="topologyHaEvents" class="topology-ha-list"></div>
       </section>
     </div>
+    <div id="telemetryQualitySummary" class="topology-health"></div>
+    <div id="telemetryQualityStatus" class="topology-status">Loading telemetry quality...</div>
+    <div class="topology-ha-grid">
+      <section class="topology-ha-panel">
+        <h4>Source Quality Scorecards</h4>
+        <div id="telemetryQualityList" class="topology-ha-list"></div>
+      </section>
+      <section class="topology-ha-panel">
+        <h4>Ingestion Health</h4>
+        <div id="telemetryIngestionHealth" class="topology-ha-list"></div>
+      </section>
+    </div>
+    <div id="telemetryBaselineSummary" class="topology-health"></div>
+    <div id="telemetryBaselineStatus" class="topology-status">Loading telemetry baselines...</div>
+    <div class="topology-ha-grid">
+      <section class="topology-ha-panel">
+        <h4>Dynamic Baselines (Role + Site)</h4>
+        <div id="telemetryBaselineGroups" class="topology-ha-list"></div>
+      </section>
+      <section class="topology-ha-panel">
+        <h4>Anomaly Windows (Day/Hour)</h4>
+        <div id="telemetryBaselineWindows" class="topology-ha-list"></div>
+      </section>
+    </div>
+    <?php if(!empty($NOCWALL_FEATURE_FLAGS['telemetry_alert_confidence']) || !empty($NOCWALL_FEATURE_FLAGS['telemetry_storm_shield']) || !empty($NOCWALL_FEATURE_FLAGS['telemetry_alert_comparison']) || !empty($NOCWALL_FEATURE_FLAGS['telemetry_impact_radius'])): ?>
+      <div id="telemetryAlertSummary" class="topology-health"></div>
+      <div id="telemetryAlertStatus" class="topology-status">Loading alert intelligence...</div>
+      <div class="topology-ha-grid">
+        <section class="topology-ha-panel">
+          <h4>Alert Confidence and Impact Radius</h4>
+          <div id="telemetryAlertList" class="topology-ha-list"></div>
+        </section>
+        <section class="topology-ha-panel">
+          <h4>Storm Shield Summary</h4>
+          <div id="telemetryStormSummary" class="topology-ha-list"></div>
+        </section>
+      </div>
+    <?php endif; ?>
     <div id="topologyCanvasWrap" class="topology-canvas-wrap">
       <svg id="topologySvg" viewBox="0 0 1200 680" preserveAspectRatio="xMidYMid meet"></svg>
     </div>
@@ -4712,6 +5434,7 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
 
 <audio id="siren" src="/buz.mp3?v=<?=$ASSET_VERSION?>" preload="auto"></audio>
 
+<?php render_client_security_bootstrap_script(); ?>
 <script>
   window.NOCWALL_FEATURES = <?=json_encode($NOCWALL_FEATURE_FLAGS, JSON_UNESCAPED_SLASHES)?>;
 </script>
