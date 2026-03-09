@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "24778591963",
-    "project_id": "uisp-noc-1",
-    "storage_bucket": "uisp-noc-1.firebasestorage.app"
+    "project_number": "REPLACE_WITH_PROJECT_NUMBER",
+    "project_id": "REPLACE_WITH_PROJECT_ID",
+    "storage_bucket": "REPLACE_WITH_STORAGE_BUCKET"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:24778591963:android:5a5f0e7b4f8c98171986fe",
+        "mobilesdk_app_id": "REPLACE_WITH_ANDROID_APP_ID",
         "android_client_info": {
           "package_name": "com.uisp.noc"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyCUQcdv6MkDezvwOJCyng_jpN288btoq0k"
+          "current_key": "REPLACE_WITH_FIREBASE_API_KEY"
         }
       ],
       "services": {
@@ -26,7 +26,7 @@
     },
     {
       "client_info": {
-        "mobilesdk_app_id": "1:24778591963:android:0f043f122be8d2941986fe",
+        "mobilesdk_app_id": "REPLACE_WITH_ANDROID_DEMO_APP_ID",
         "android_client_info": {
           "package_name": "com.uisp.noc.demo"
         }
@@ -34,7 +34,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyCUQcdv6MkDezvwOJCyng_jpN288btoq0k"
+          "current_key": "REPLACE_WITH_FIREBASE_API_KEY"
         }
       ],
       "services": {

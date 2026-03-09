@@ -17,6 +17,13 @@ cache/
 .env.*.local
 .secrets/
 
+# Android local config and credentials
+android/local.properties
+android/app/google-services.json
+android/app/keystore
+android/app/keystore.jks
+android/app/full/release/*.aab
+
 # Node / editor / OS
 node_modules/
 .vscode/
