@@ -152,7 +152,7 @@ Follow these rules strictly.
 # NOCWALL-CE Burndown (Recreated)
 
 Chronological multi-phase plan to move from the current state to a fully functional, distributable, and sellable NOCWALL platform.
-Strategic connector direction: UISP is first, with long-term expansion toward comprehensive multi-vendor NMS API coverage.
+Strategic connector direction: UISP is first; closed beta v1 targets UISP + Cisco + Juniper ("Jupiter"), then expands toward comprehensive multi-vendor NMS API coverage.
 Open-core product rule: CE remains a minimal wall-mounted online/offline dashboard; advanced workflows, analytics, and operations are PRO.
 
 Legend:
@@ -175,6 +175,33 @@ Legend:
 - [x] Stripe-managed trial + payment-link tier checkout flow  
   - Notes: Removed server-managed signup trial assignment; billing now supports Stripe payment-link tiers (env-configured) so trial windows and plan flows are owned by Stripe checkout/webhooks.
 - [ ] Planned product split change: move non-minimal CE capabilities behind PRO gates.
+
+## Closed Beta v1 - Launch Scope (Priority Now)
+
+Closed beta objective: NOCWALL-CE stays open/free for everyone; beta keys grant temporary PRO access during the closed beta window only.
+
+### Closed Beta v1 Exit Criteria
+- [ ] CB1 Account flow is production-stable: user can create account, log in, and retain session securely.
+- [ ] CB2 Dashboard flow is production-stable: user can load dashboard after login and keep it running as a TV wallboard.
+- [ ] CB3 Settings flow is production-stable: user can manage all settings from the settings screen with persistence.
+- [ ] CB4 Source onboarding is production-stable: user can link at least one NMS source and pass connectivity diagnostics.
+- [ ] CB5 CE baseline remains open and free without any beta key requirement.
+
+### Closed Beta Access Keys (Temporary PRO Entitlement)
+- [ ] CBK1 Define beta key schema (`code`, `status`, `max_redemptions`, `redeemed_count`, `expires_at`, `issued_by`, `notes`, `created_at`, `updated_at`).
+- [ ] CBK2 Add admin/ops key generation path (CLI first; optional UI second) with configurable expiry and redemption caps.
+- [ ] CBK3 Add key redemption flow at signup and from account settings for existing CE users.
+- [ ] CBK4 Add entitlement precedence rules: paid PRO > valid beta key PRO > CE free.
+- [ ] CBK5 Add key revoke/disable flow with immediate entitlement re-evaluation.
+- [ ] CBK6 Add audit logging for key issue/redeem/revoke events.
+- [ ] CBK7 Add beta-access docs/runbook (issue, rotate, revoke, expiration handling).
+
+### Closed Beta Connector Scope (v1)
+- [ ] CBC1 UISP connector remains primary and fully supported for beta.
+- [ ] CBC2 Ship Cisco connector v1 (read-only inventory + device status + connectivity health).
+- [ ] CBC3 Ship Juniper ("Jupiter") connector v1 (read-only inventory + device status + connectivity health).
+- [ ] CBC4 Add compatibility matrix + smoke tests for UISP/Cisco/Juniper connectors.
+- [ ] CBC5 Defer additional NMS connectors until after closed beta v1 stabilization.
 
 ## 25 New CE Adoption Features (Strictly Non-PRO)
 
@@ -458,7 +485,8 @@ They avoid PRO-only domains (team workflows, correlation, automation, enterprise
 - [ ] R64 Add sample integration packs for internal QA tenants.
 - [ ] R64a Publish multi-vendor NMS connector contract (`discover`, `inventory`, `metrics`, `events`, `auth`).
 - [ ] R64b Implement connector registry with per-vendor adapter loading and health state.
-- [ ] R64c Ship first non-UISP NMS adapter and compatibility test matrix.
+- [ ] R64c Ship Cisco NMS adapter and compatibility test matrix.
+- [ ] R64c1 Ship Juniper ("Jupiter") NMS adapter and compatibility test matrix.
 - [ ] R64d Define rolling goal and tracking for broad NMS API coverage.
 
 ## Phase 5 - Trust, Operability, and Commercial Readiness
