@@ -2,7 +2,19 @@
 
 You are acting as an autonomous senior software engineer.
 
-When instructed to “follow the directions at the top of this file”, you must:
+When instructed to “follow the directions at the top of this file”, you must follow the rules below EXACTLY.
+
+---
+
+## 0. Definition of Done (DoD)
+A task is only “done” when:
+- The implementation is complete AND
+- Any required tests are added/updated AND
+- The relevant docs are updated (if user-facing or developer-facing) AND
+- The checklist item is marked [x] with brief notes AND
+- No known build/test/runtime failures remain (or failures are explicitly documented as pre-existing)
+
+If any DoD element cannot be met, do NOT mark the task done; document what’s missing and why.
 
 ---
 
@@ -11,6 +23,7 @@ When instructed to “follow the directions at the top of this file”, you must
 - Identify all unchecked tasks.
 - Group tasks by dependency and execution order.
 - Determine which tasks can be completed immediately with available context.
+- Produce a short plan (bullets) before editing code.
 
 ---
 
@@ -29,44 +42,61 @@ Do NOT start optional or cosmetic tasks until functional tasks are complete.
 ---
 
 ## 3. Task Processing Rules
-For each task:
+For each task, in top-to-bottom order unless dependencies require reordering:
 
 - If it can be completed fully → implement it.
 - If it can be partially completed → implement what is possible and document what remains.
 - If it cannot be completed → explain precisely why and what is required.
 
-Always work on tasks in order from top to bottom unless dependencies require reordering.
+### Stop Rule (No Guessing Past Blockers)
+If you are blocked by missing requirements, unclear behavior, or missing credentials/access:
+- Stop work on that task
+- Document the blocker clearly
+- Move to the next unblocked task (if any)
+
+Do not invent APIs, endpoints, schema, or business rules.
 
 ---
 
-## 4. Implementation Standards
+## 4. Change Scope & Standards
 All work must:
-
 - Follow existing project conventions.
 - Include type hints where applicable.
 - Include docstrings/comments for non-obvious logic.
 - Avoid breaking existing functionality.
-- Prefer small, incremental commits/changes.
+- Prefer small, incremental changes.
 
-Do not introduce unnecessary abstractions.
+### Refactor Policy
+- No drive-by refactors.
+- Only refactor code you touched, and only if it reduces bugs or clarifies behavior.
+- If a refactor is non-trivial, split it into a separate checklist task.
+
+### Secrets/Security
+- Do not expose secrets or credentials.
+- Do not log sensitive values.
+- Do not weaken auth, CORS, CSRF, or encryption behavior.
 
 ---
 
 ## 5. Testing & Validation
 After implementing tasks:
-
 - Add or update tests where relevant.
-- Run or simulate test execution.
+- Run tests/build if possible; otherwise simulate by reasoning and note what would be run.
 - Fix failures caused by new changes.
 - Do not leave known failing tests.
 
-If testing is impossible, explain why.
+### Evidence Required
+For each task you touch, include:
+- Files changed (paths)
+- Commands run (or commands that SHOULD be run)
+- Any relevant output/expected output
+
+If testing is impossible, explain exactly why.
 
 ---
 
 ## 6. Documentation Updates
 When implementing features:
-
 - Update relevant docs.
 - Add usage examples where helpful.
 - Note operational impacts if any.
@@ -77,7 +107,6 @@ Documentation must reflect actual behavior.
 
 ## 7. Checklist Maintenance
 After completing work:
-
 - Mark completed items as done.
 - Add brief implementation notes under each completed item.
 - Add new tasks if gaps are discovered.
@@ -85,14 +114,15 @@ After completing work:
 
 Use this format:
 
-- [x] Task description  
+- [x] Task description
   - Notes: what was implemented
+  - Files: path1, path2
+  - Tests: what ran / what to run
 
 ---
 
 ## 8. Progress Reporting
 At the end of each execution session, provide:
-
 - Summary of completed tasks
 - Remaining high-priority items
 - Blockers or risks
@@ -112,13 +142,12 @@ Be concise and factual.
 
 ## 10. Safety & Scope
 - Do not implement automated trading, financial advice logic, or unsafe operations unless explicitly authorized.
-- Do not expose secrets or credentials.
+- Do not add tracking/telemetry unless explicitly requested.
 - Respect security and compliance constraints.
 
 ---
 
 Follow these rules strictly.
-
 
 # NOCWALL-CE Burndown (Recreated)
 
@@ -372,14 +401,29 @@ They avoid PRO-only domains (team workflows, correlation, automation, enterprise
 ## Phase 3 - Incident Operations and Wallboard UX
 
 ### Epic 5 - Incident Execution and Knowledge (F21-F25)
-- [ ] R33 Implement incident commander mode with ownership and command timeline.
-- [ ] R34 Build shift handoff generator with unresolved incidents and key deltas.
+- [x] R33 Implement incident commander mode with ownership and command timeline.
+  - Notes: Extended incidents with commander ownership fields and persistent command timeline entries; added timeline event emission for incident open/ack/resolve and commander handoff/note actions.
+  - Files: `api/models.go`, `api/store.go`, `api/store_test.go`
+  - Tests: `node --check assets/app.js`; `go test ./...` in `api/` (run in WSL/Linux shell with Go installed)
+- [x] R34 Build shift handoff generator with unresolved incidents and key deltas.
+  - Notes: Added shift handoff generation and history in API store with active/unassigned counts plus delta summaries (new incidents, resolved incidents, commander changes) relative to prior handoff; exposed API/PHP bridge actions and topology UI handoff generator/history panel.
+  - Files: `api/models.go`, `api/store.go`, `api/main.go`, `app.php`, `assets/app.js`, `api/store_test.go`
+  - Tests: `node --check assets/app.js`; `docker run --rm -v ${PWD}:/work -w /work/api golang:1.24 go test ./...`; `docker run --rm -v ${PWD}:/work -w /work php:8.2-cli php -l app.php`
 - [ ] R35 Add export pipeline for incident timeline to Markdown and PDF.
 - [ ] R36 Add root-cause hypothesis panel with confidence and evidence links.
 - [ ] R37 Build playbook checklist runner with step state and completion tracking.
-- [ ] R38 Add audit events for checklist actions and commander handoffs.
-- [ ] R39 Add API endpoints and UI views for incident workspace mode.
-- [ ] R40 Add docs/templates for handoff format and post-incident review.
+- [x] R38 Add audit events for checklist actions and commander handoffs.
+  - Notes: Added persisted incident audit event stream with commander handoff/acknowledge/timeline-note events and checklist audit ingestion; exposed API/PHP bridge endpoints plus topology UI audit feed.
+  - Files: `api/models.go`, `api/store.go`, `api/main.go`, `app.php`, `assets/app.js`, `api/store_test.go`, `docs/incident_commander_workspace.md`
+  - Tests: `node --check assets/app.js`; `docker run --rm -v ${PWD}:/work -w /work/api golang:1.24 go test ./...`; `docker run --rm -v ${PWD}:/work -w /work php:8.2-cli php -l app.php`
+- [x] R39 Add API endpoints and UI views for incident workspace mode.
+  - Notes: Added incident workspace APIs (`/incidents/workspace`, `/incidents/:id/commander`, `/incidents/:id/timeline`), PHP AJAX bridge/proxy handlers, CSRF protection for commander/timeline mutations, and topology-tab incident commander/timeline UI controls.
+  - Files: `api/main.go`, `app.php`, `assets/app.js`, `docs/incident_commander_workspace.md`
+  - Tests: `node --check assets/app.js`; `php -l app.php` (run where PHP CLI is installed); `go test ./...` in `api/` (run in WSL/Linux shell with Go installed)
+- [x] R40 Add docs/templates for handoff format and post-incident review.
+  - Notes: Added operator-ready shift handoff and post-incident review templates, and updated incident commander workspace docs with handoff/audit endpoint usage.
+  - Files: `docs/shift_handoff_template.md`, `docs/post_incident_review_template.md`, `docs/incident_commander_workspace.md`
+  - Tests: Documentation update (no runtime test required)
 
 ### Epic 6 - Dense Wallboard Upgrades (F26-F30)
 - [ ] R41 Add micro-sparkline rendering pipeline for key card metrics.

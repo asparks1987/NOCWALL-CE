@@ -287,6 +287,11 @@ const FEATURE_FLAGS = (() => {
     advanced_actions: !!raw.advanced_actions,
     display_controls: !!raw.display_controls,
     topology: !!raw.topology,
+    incident_workspace: !!raw.incident_workspace,
+    incident_commander_mode: !!raw.incident_commander_mode,
+    incident_command_timeline: !!raw.incident_command_timeline,
+    incident_shift_handoff: !!raw.incident_shift_handoff,
+    incident_audit_events: !!raw.incident_audit_events,
     inventory: !!raw.inventory,
     history: !!raw.history,
     telemetry_alert_confidence: !!raw.telemetry_alert_confidence,
@@ -301,6 +306,7 @@ const FEATURE_FLAGS = (() => {
 function featureEnabled(name){
   return !!FEATURE_FLAGS[name];
 }
+const SESSION_USER = String((typeof window !== "undefined" && window.NOCWALL_SESSION_USER) ? window.NOCWALL_SESSION_USER : "").trim().toLowerCase();
 
 const DASH_SETTINGS_KEY = "nocwall.dashboard.settings.v1";
 const DEFAULT_DASH_SETTINGS = {
@@ -344,6 +350,9 @@ let topologyHACache = { pairs: [], events: [], fetched_at: "" };
 let telemetryQualityCache = { scorecards: [], health: null, governor: null, fetched_at: "" };
 let telemetryBaselineCache = { groups: [], window_hours: 0, fetched_at: "" };
 let telemetryAlertCache = { alerts: [], storm_bursts: [], raw_alert_count: 0, summarized_alert_count: 0, active_count: 0, window_minutes: 0, burst_threshold: 0, fetched_at: "" };
+let incidentWorkspaceCache = { active: [], recent: [], active_count: 0, assigned_count: 0, unassigned_count: 0, recent_count: 0, fetched_at: "" };
+let incidentHandoffCache = { handoffs: [], fetched_at: "" };
+let incidentAuditCache = { events: [], fetched_at: "" };
 let topologyLoading = false;
 let topologyLastFetchMs = 0;
 let topologyTrace = null;
@@ -2000,6 +2009,27 @@ function setTelemetryAlertStatus(msg, isError){
   el.classList.toggle("error", !!isError);
 }
 
+function setIncidentWorkspaceStatus(msg, isError){
+  const el = document.getElementById("incidentWorkspaceStatus");
+  if(!el) return;
+  el.textContent = msg || "";
+  el.classList.toggle("error", !!isError);
+}
+
+function setIncidentHandoffStatus(msg, isError){
+  const el = document.getElementById("incidentHandoffStatus");
+  if(!el) return;
+  el.textContent = msg || "";
+  el.classList.toggle("error", !!isError);
+}
+
+function setIncidentAuditStatus(msg, isError){
+  const el = document.getElementById("incidentAuditStatus");
+  if(!el) return;
+  el.textContent = msg || "";
+  el.classList.toggle("error", !!isError);
+}
+
 function topologyEdgeState(edge){
   if(!edge || edge.resolved !== true) return "unresolved";
   const updated = edge.updated_at ? Date.parse(edge.updated_at) : NaN;
@@ -2430,6 +2460,339 @@ function renderTelemetryAlertIntelligence(){
   }).join("");
 }
 
+function incidentSeverityBadgeClass(severity){
+  const normalized = String(severity || "").trim().toLowerCase();
+  if(normalized === "critical") return "bad";
+  if(normalized === "warning") return "warn";
+  return "good";
+}
+
+function incidentTimelineEventLabel(eventType){
+  const normalized = String(eventType || "").trim().toLowerCase();
+  if(normalized === "opened") return "Opened";
+  if(normalized === "acked") return "Acknowledged";
+  if(normalized === "resolved") return "Resolved";
+  if(normalized === "commander_assigned") return "Commander Assigned";
+  if(normalized === "commander_cleared") return "Commander Cleared";
+  return "Note";
+}
+
+function renderIncidentWorkspace(){
+  const summaryEl = document.getElementById("incidentWorkspaceSummary");
+  const activeEl = document.getElementById("incidentWorkspaceActive");
+  const recentEl = document.getElementById("incidentWorkspaceRecent");
+  if(!summaryEl || !activeEl || !recentEl) return;
+
+  const active = Array.isArray(incidentWorkspaceCache.active) ? incidentWorkspaceCache.active : [];
+  const recent = Array.isArray(incidentWorkspaceCache.recent) ? incidentWorkspaceCache.recent : [];
+  const activeCount = Number(incidentWorkspaceCache.active_count || active.length || 0);
+  const assignedCount = Number(incidentWorkspaceCache.assigned_count || 0);
+  const unassignedCount = Number(incidentWorkspaceCache.unassigned_count || Math.max(0, activeCount - assignedCount));
+  const recentCount = Number(incidentWorkspaceCache.recent_count || recent.length || 0);
+
+  summaryEl.innerHTML = [
+    `<span class="badge ${activeCount > 0 ? "warn" : "good"}">Active Incidents: ${activeCount}</span>`,
+    `<span class="badge ${unassignedCount > 0 ? "warn" : "good"}">Unassigned: ${unassignedCount}</span>`,
+    `<span class="badge good">Assigned: ${assignedCount}</span>`,
+    `<span class="badge good">Recent: ${recentCount}</span>`
+  ].join(" ");
+
+  if(active.length === 0){
+    activeEl.innerHTML = `<div class="topology-ha-empty">No active incidents in commander mode.</div>`;
+  } else {
+    activeEl.innerHTML = active.slice(0, 40).map(inc=>{
+      const incidentID = String(inc && inc.id || "").trim();
+      const incidentIDEsc = escapeHtml(incidentID);
+      const deviceID = escapeHtml(inc && inc.device_id || "--");
+      const type = escapeHtml(inc && inc.type || "incident");
+      const severity = escapeHtml(inc && inc.severity || "unknown");
+      const started = inc && inc.started_at ? new Date(inc.started_at).toLocaleString() : "--";
+      const source = escapeHtml(inc && inc.source || "--");
+      const commander = String(inc && inc.commander || "").trim();
+      const commanderLabel = commander ? escapeHtml(commander) : "<em>Unassigned</em>";
+      const timeline = Array.isArray(inc && inc.command_timeline) ? inc.command_timeline : [];
+      const latest = timeline.length ? timeline[timeline.length - 1] : null;
+      const latestText = latest && latest.message ? escapeHtml(latest.message) : "No command timeline entries yet.";
+      const latestAt = latest && latest.at ? new Date(latest.at).toLocaleString() : "--";
+      const canCommander = featureEnabled("incident_commander_mode");
+      const canTimeline = featureEnabled("incident_command_timeline");
+      return `<div class="topology-ha-item" data-incident-id="${incidentIDEsc}">
+        <div><strong>${deviceID}</strong> <span class="topology-ha-sep">(${type})</span></div>
+        <div class="topology-ha-meta">
+          <span class="badge ${incidentSeverityBadgeClass(severity)}">${severity}</span>
+          <span>Commander: ${commanderLabel}</span>
+          <span>Started: ${escapeHtml(started)}</span>
+          <span>Source: ${source}</span>
+        </div>
+        <div class="topology-ha-note">Latest timeline: ${latestText} (${escapeHtml(latestAt)})</div>
+        ${canCommander ? `<div class="topology-ha-meta">
+          <input type="text" data-commander-input="${incidentIDEsc}" placeholder="commander username" value="${escapeHtml(commander || SESSION_USER)}">
+          <button type="button" class="btn-outline" data-incident-action="claim" data-incident-id="${incidentIDEsc}">Claim</button>
+          <button type="button" class="btn-outline" data-incident-action="assign" data-incident-id="${incidentIDEsc}">Assign</button>
+          <button type="button" class="btn-outline" data-incident-action="clear" data-incident-id="${incidentIDEsc}">Clear</button>
+        </div>` : ""}
+        ${canTimeline ? `<div class="topology-ha-meta">
+          <input type="text" data-note-input="${incidentIDEsc}" placeholder="timeline note">
+          <button type="button" class="btn-outline" data-incident-action="note" data-incident-id="${incidentIDEsc}">Add Note</button>
+        </div>` : ""}
+      </div>`;
+    }).join("");
+  }
+
+  if(recent.length === 0){
+    recentEl.innerHTML = `<div class="topology-ha-empty">No recent incidents to display.</div>`;
+  } else {
+    recentEl.innerHTML = recent.slice(0, 24).map(inc=>{
+      const deviceID = escapeHtml(inc && inc.device_id || "--");
+      const type = escapeHtml(inc && inc.type || "incident");
+      const severity = escapeHtml(inc && inc.severity || "unknown");
+      const timeline = Array.isArray(inc && inc.command_timeline) ? inc.command_timeline : [];
+      const events = timeline.slice(-3).reverse();
+      const resolvedAt = inc && inc.resolved_at ? new Date(inc.resolved_at).toLocaleString() : "";
+      const eventsHtml = events.length
+        ? events.map(entry=>{
+            const at = entry && entry.at ? new Date(entry.at).toLocaleString() : "--";
+            const actor = escapeHtml(entry && entry.actor || "system");
+            const text = escapeHtml(entry && entry.message || "");
+            const kind = escapeHtml(incidentTimelineEventLabel(entry && entry.event_type));
+            return `<div class="topology-ha-note"><strong>${kind}</strong> by ${actor} @ ${escapeHtml(at)}: ${text}</div>`;
+          }).join("")
+        : `<div class="topology-ha-note">No command timeline entries.</div>`;
+      return `<div class="topology-ha-item">
+        <div><strong>${deviceID}</strong> <span class="topology-ha-sep">(${type})</span></div>
+        <div class="topology-ha-meta">
+          <span class="badge ${incidentSeverityBadgeClass(severity)}">${severity}</span>
+          ${resolvedAt ? `<span>Resolved: ${escapeHtml(resolvedAt)}</span>` : `<span>Active</span>`}
+        </div>
+        ${eventsHtml}
+      </div>`;
+    }).join("");
+  }
+}
+
+async function postIncidentCommanderAssignment(incidentID, commander){
+  const fd = new FormData();
+  fd.append("incident_id", incidentID);
+  fd.append("commander", commander || "");
+  const resp = await fetch("?ajax=incident_commander_assign", { method:"POST", body:fd });
+  if(resp.status===401){ location.reload(); return { ok:false, error:"unauthorized" }; }
+  return await resp.json().catch(()=>null);
+}
+
+async function postIncidentTimelineNote(incidentID, message){
+  const fd = new FormData();
+  fd.append("incident_id", incidentID);
+  fd.append("event_type", "note");
+  fd.append("message", message || "");
+  const resp = await fetch("?ajax=incident_timeline_add", { method:"POST", body:fd });
+  if(resp.status===401){ location.reload(); return { ok:false, error:"unauthorized" }; }
+  return await resp.json().catch(()=>null);
+}
+
+async function runIncidentWorkspaceAction(action, incidentID, triggerEl){
+  const id = String(incidentID || "").trim();
+  if(!id) return;
+  const commanderInput = document.querySelector(`input[data-commander-input="${id}"]`);
+  const noteInput = document.querySelector(`input[data-note-input="${id}"]`);
+  const currentCommander = commanderInput ? String(commanderInput.value || "").trim() : "";
+  if(triggerEl) triggerEl.disabled = true;
+  try{
+    if(action === "claim"){
+      if(!SESSION_USER){
+        setIncidentWorkspaceStatus("Unable to claim incident: session user is missing.", true);
+        return;
+      }
+      const payload = await postIncidentCommanderAssignment(id, SESSION_USER);
+      if(!payload || !payload.ok){
+        setIncidentWorkspaceStatus((payload && (payload.message || payload.error)) || "Commander claim failed.", true);
+        return;
+      }
+      setIncidentWorkspaceStatus(`Incident ${id} claimed by ${SESSION_USER}.`, false);
+      await loadTopology(true);
+      return;
+    }
+    if(action === "assign"){
+      if(!currentCommander){
+        setIncidentWorkspaceStatus("Provide a commander username before assigning.", true);
+        return;
+      }
+      const payload = await postIncidentCommanderAssignment(id, currentCommander);
+      if(!payload || !payload.ok){
+        setIncidentWorkspaceStatus((payload && (payload.message || payload.error)) || "Commander assignment failed.", true);
+        return;
+      }
+      setIncidentWorkspaceStatus(`Incident ${id} assigned to ${currentCommander}.`, false);
+      await loadTopology(true);
+      return;
+    }
+    if(action === "clear"){
+      const payload = await postIncidentCommanderAssignment(id, "");
+      if(!payload || !payload.ok){
+        setIncidentWorkspaceStatus((payload && (payload.message || payload.error)) || "Commander clear failed.", true);
+        return;
+      }
+      setIncidentWorkspaceStatus(`Incident ${id} commander cleared.`, false);
+      await loadTopology(true);
+      return;
+    }
+    if(action === "note"){
+      const note = noteInput ? String(noteInput.value || "").trim() : "";
+      if(!note){
+        setIncidentWorkspaceStatus("Enter a timeline note before submitting.", true);
+        return;
+      }
+      const payload = await postIncidentTimelineNote(id, note);
+      if(!payload || !payload.ok){
+        setIncidentWorkspaceStatus((payload && (payload.message || payload.error)) || "Timeline note failed.", true);
+        return;
+      }
+      if(noteInput) noteInput.value = "";
+      setIncidentWorkspaceStatus(`Timeline note added for incident ${id}.`, false);
+      await loadTopology(true);
+    }
+  } finally {
+    if(triggerEl) triggerEl.disabled = false;
+  }
+}
+
+function bindIncidentWorkspaceControls(){
+  if(!featureEnabled("incident_workspace")) return;
+  const activeEl = document.getElementById("incidentWorkspaceActive");
+  if(!activeEl || activeEl.dataset.bound === "1") return;
+  activeEl.dataset.bound = "1";
+  activeEl.addEventListener("click", (ev)=>{
+    const btn = ev.target && ev.target.closest ? ev.target.closest("button[data-incident-action]") : null;
+    if(!btn) return;
+    const action = String(btn.getAttribute("data-incident-action") || "").trim();
+    const incidentID = String(btn.getAttribute("data-incident-id") || "").trim();
+    runIncidentWorkspaceAction(action, incidentID, btn);
+  });
+}
+
+function renderIncidentHandoffs(){
+  const latestEl = document.getElementById("incidentHandoffLatest");
+  const historyEl = document.getElementById("incidentHandoffHistory");
+  if(!latestEl || !historyEl) return;
+  const handoffs = Array.isArray(incidentHandoffCache.handoffs) ? incidentHandoffCache.handoffs : [];
+  if(handoffs.length === 0){
+    latestEl.innerHTML = `<div class="topology-ha-empty">No shift handoff briefs generated yet.</div>`;
+    historyEl.innerHTML = `<div class="topology-ha-empty">No handoff history available.</div>`;
+    return;
+  }
+
+  const latest = handoffs[0] || {};
+  const latestGeneratedAt = latest.generated_at ? new Date(latest.generated_at).toLocaleString() : "--";
+  const latestBy = escapeHtml(latest.generated_by || "system");
+  const latestNote = escapeHtml(latest.note || "");
+  const commanderChanges = Array.isArray(latest.commander_changes) ? latest.commander_changes : [];
+  const newActive = Array.isArray(latest.new_active) ? latest.new_active : [];
+  const resolved = Array.isArray(latest.resolved_since_last) ? latest.resolved_since_last : [];
+  latestEl.innerHTML = `<div class="topology-ha-item">
+    <div><strong>Generated</strong>: ${escapeHtml(latestGeneratedAt)} by <strong>${latestBy}</strong></div>
+    ${latestNote ? `<div class="topology-ha-note">Note: ${latestNote}</div>` : ""}
+    <div class="topology-ha-meta">
+      <span class="badge ${Number(latest.active_count || 0) > 0 ? "warn" : "good"}">Active: ${Number(latest.active_count || 0)}</span>
+      <span class="badge ${Number(latest.unassigned_count || 0) > 0 ? "warn" : "good"}">Unassigned: ${Number(latest.unassigned_count || 0)}</span>
+      <span class="badge good">New: ${Number(latest.new_active_count || newActive.length || 0)}</span>
+      <span class="badge good">Resolved: ${Number(latest.resolved_since_last_count || resolved.length || 0)}</span>
+      <span class="badge ${Number(latest.commander_changed_count || commanderChanges.length || 0) > 0 ? "warn" : "good"}">Commander Changes: ${Number(latest.commander_changed_count || commanderChanges.length || 0)}</span>
+    </div>
+  </div>`;
+
+  historyEl.innerHTML = handoffs.slice(0, 20).map(item=>{
+    const at = item && item.generated_at ? new Date(item.generated_at).toLocaleString() : "--";
+    const by = escapeHtml(item && item.generated_by || "system");
+    const summary = [
+      `active=${Number(item && item.active_count || 0)}`,
+      `unassigned=${Number(item && item.unassigned_count || 0)}`,
+      `new=${Number(item && item.new_active_count || 0)}`,
+      `resolved=${Number(item && item.resolved_since_last_count || 0)}`
+    ].join(", ");
+    const note = escapeHtml(item && item.note || "");
+    return `<div class="topology-ha-item">
+      <div><strong>${escapeHtml(at)}</strong> by ${by}</div>
+      <div class="topology-ha-note">${escapeHtml(summary)}</div>
+      ${note ? `<div class="topology-ha-note">Note: ${note}</div>` : ""}
+    </div>`;
+  }).join("");
+}
+
+function incidentAuditActionLabel(action){
+  const normalized = String(action || "").trim().toLowerCase();
+  if(normalized === "commander_handoff") return "Commander Handoff";
+  if(normalized === "checklist_action") return "Checklist";
+  if(normalized === "incident_acked") return "Acknowledged";
+  if(normalized === "timeline_note") return "Timeline Note";
+  return "Incident Event";
+}
+
+function renderIncidentAuditEvents(){
+  const listEl = document.getElementById("incidentAuditList");
+  if(!listEl) return;
+  const events = Array.isArray(incidentAuditCache.events) ? incidentAuditCache.events : [];
+  if(events.length === 0){
+    listEl.innerHTML = `<div class="topology-ha-empty">No incident audit events recorded yet.</div>`;
+    return;
+  }
+  listEl.innerHTML = events.slice(0, 60).map(event=>{
+    const at = event && event.at ? new Date(event.at).toLocaleString() : "--";
+    const action = incidentAuditActionLabel(event && event.action);
+    const actor = escapeHtml(event && event.actor || "system");
+    const incidentID = escapeHtml(event && event.incident_id || "--");
+    const message = escapeHtml(event && event.message || "");
+    const metadata = (event && typeof event.metadata === "object" && event.metadata) ? event.metadata : null;
+    const metaText = metadata
+      ? Object.keys(metadata).map(key=>`${key}=${metadata[key]}`).join(", ")
+      : "";
+    return `<div class="topology-ha-item">
+      <div class="topology-ha-meta">
+        <span class="badge good">${escapeHtml(action)}</span>
+        <span>Incident: <code>${incidentID}</code></span>
+        <span>Actor: ${actor}</span>
+        <span>At: ${escapeHtml(at)}</span>
+      </div>
+      ${message ? `<div class="topology-ha-note">${message}</div>` : ""}
+      ${metaText ? `<div class="topology-ha-note">${escapeHtml(metaText)}</div>` : ""}
+    </div>`;
+  }).join("");
+}
+
+async function generateIncidentHandoff(){
+  if(!featureEnabled("incident_shift_handoff")) return;
+  const btn = document.getElementById("incidentHandoffGenerateBtn");
+  const noteEl = document.getElementById("incidentHandoffNote");
+  const note = noteEl ? String(noteEl.value || "").trim() : "";
+  if(btn) btn.disabled = true;
+  setIncidentHandoffStatus("Generating shift handoff brief...", false);
+  try{
+    const fd = new FormData();
+    fd.append("note", note);
+    fd.append("active_limit", "80");
+    const resp = await fetch("?ajax=incident_handoff_generate", { method:"POST", body:fd });
+    if(resp.status===401){ location.reload(); return; }
+    const payload = await resp.json().catch(()=>null);
+    if(!payload || !payload.ok){
+      setIncidentHandoffStatus((payload && (payload.message || payload.error)) || "Shift handoff generation failed.", true);
+      return;
+    }
+    if(noteEl) noteEl.value = "";
+    setIncidentHandoffStatus("Shift handoff brief generated.", false);
+    await loadTopology(true);
+  }catch(_){
+    setIncidentHandoffStatus("Shift handoff request failed.", true);
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+function bindIncidentHandoffControls(){
+  if(!featureEnabled("incident_shift_handoff")) return;
+  const btn = document.getElementById("incidentHandoffGenerateBtn");
+  if(!btn || btn.dataset.bound === "1") return;
+  btn.dataset.bound = "1";
+  btn.addEventListener("click", ()=>generateIncidentHandoff());
+}
+
 function populateTopologySelectors(){
   const sourceEl = document.getElementById("topologySourceSelect");
   const targetEl = document.getElementById("topologyTargetSelect");
@@ -2498,6 +2861,9 @@ function renderTopology(){
   renderTelemetryQuality();
   renderTelemetryBaselines();
   renderTelemetryAlertIntelligence();
+  renderIncidentWorkspace();
+  renderIncidentHandoffs();
+  renderIncidentAuditEvents();
   populateTopologySelectors();
   renderTopologyGraph();
 }
@@ -2510,6 +2876,9 @@ async function loadTopology(force){
     || featureEnabled("telemetry_impact_radius")
     || featureEnabled("telemetry_storm_shield")
     || featureEnabled("telemetry_alert_comparison");
+  const loadIncidentWorkspace = featureEnabled("incident_workspace");
+  const loadIncidentHandoffs = featureEnabled("incident_shift_handoff");
+  const loadIncidentAudit = featureEnabled("incident_audit_events");
   topologyLoading = true;
   setTopologyStatus("Loading topology...", false);
   setTopologyHAStatus("Loading HA watcher...", false);
@@ -2518,23 +2887,50 @@ async function loadTopology(force){
   if(loadAlertIntelligence){
     setTelemetryAlertStatus("Loading alert intelligence...", false);
   }
+  if(loadIncidentWorkspace){
+    setIncidentWorkspaceStatus("Loading incident workspace...", false);
+  }
+  if(loadIncidentHandoffs){
+    setIncidentHandoffStatus("Loading shift handoff history...", false);
+  }
+  if(loadIncidentAudit){
+    setIncidentAuditStatus("Loading incident audit events...", false);
+  }
   try{
-    const [resp, haResp, qualityResp, baselineResp, alertResp] = await Promise.all([
+    const [resp, haResp, qualityResp, baselineResp, alertResp, workspaceResp, handoffResp, auditResp] = await Promise.all([
       fetch(`?ajax=topology_overview&t=${Date.now()}`, { cache:"no-store" }),
       fetch(`?ajax=topology_ha&t=${Date.now()}`, { cache:"no-store" }),
       fetch(`?ajax=telemetry_quality&t=${Date.now()}`, { cache:"no-store" }),
       fetch(`?ajax=telemetry_baselines&window_hours=${14 * 24}&t=${Date.now()}`, { cache:"no-store" }),
       loadAlertIntelligence
         ? fetch(`?ajax=telemetry_alert_intelligence&window_minutes=15&burst_threshold=4&limit=50&t=${Date.now()}`, { cache:"no-store" })
+        : Promise.resolve(null),
+      loadIncidentWorkspace
+        ? fetch(`?ajax=incident_workspace&active_limit=80&recent_limit=40&t=${Date.now()}`, { cache:"no-store" })
+        : Promise.resolve(null),
+      loadIncidentHandoffs
+        ? fetch(`?ajax=incident_handoff_history&limit=30&t=${Date.now()}`, { cache:"no-store" })
+        : Promise.resolve(null),
+      loadIncidentAudit
+        ? fetch(`?ajax=incident_audit_events&limit=120&t=${Date.now()}`, { cache:"no-store" })
         : Promise.resolve(null)
     ]);
-    if(resp.status===401 || haResp.status===401 || qualityResp.status===401 || baselineResp.status===401 || (alertResp && alertResp.status===401)){ location.reload(); return; }
+    if(resp.status===401 || haResp.status===401 || qualityResp.status===401 || baselineResp.status===401 || (alertResp && alertResp.status===401) || (workspaceResp && workspaceResp.status===401) || (handoffResp && handoffResp.status===401) || (auditResp && auditResp.status===401)){ location.reload(); return; }
 
     const payload = await resp.json().catch(()=>null);
     if(!payload || !payload.ok){
       const msg = (payload && (payload.message || payload.error)) ? (payload.message || payload.error) : "Unable to load topology.";
       setTopologyStatus(msg, true);
       setTopologyHAStatus("HA watcher unavailable while topology is degraded.", true);
+      if(loadIncidentWorkspace){
+        setIncidentWorkspaceStatus("Incident workspace unavailable while topology is degraded.", true);
+      }
+      if(loadIncidentHandoffs){
+        setIncidentHandoffStatus("Shift handoff history unavailable while topology is degraded.", true);
+      }
+      if(loadIncidentAudit){
+        setIncidentAuditStatus("Incident audit unavailable while topology is degraded.", true);
+      }
       return;
     }
     const haPayload = await haResp.json().catch(()=>null);
@@ -2602,6 +2998,59 @@ async function loadTopology(force){
       telemetryAlertCache = { alerts: [], storm_bursts: [], raw_alert_count: 0, summarized_alert_count: 0, active_count: 0, window_minutes: 0, burst_threshold: 0, fetched_at: "" };
     }
 
+    if(loadIncidentWorkspace && workspaceResp){
+      const workspacePayload = await workspaceResp.json().catch(()=>null);
+      if(workspacePayload && workspacePayload.ok){
+        incidentWorkspaceCache = {
+          active: Array.isArray(workspacePayload.active) ? workspacePayload.active : [],
+          recent: Array.isArray(workspacePayload.recent) ? workspacePayload.recent : [],
+          active_count: Number(workspacePayload.active_count || 0),
+          assigned_count: Number(workspacePayload.assigned_count || 0),
+          unassigned_count: Number(workspacePayload.unassigned_count || 0),
+          recent_count: Number(workspacePayload.recent_count || 0),
+          fetched_at: workspacePayload.fetched_at || ""
+        };
+        setIncidentWorkspaceStatus(`Incident workspace loaded: ${incidentWorkspaceCache.active_count} active (${incidentWorkspaceCache.unassigned_count} unassigned).`, false);
+      } else {
+        incidentWorkspaceCache = { active: [], recent: [], active_count: 0, assigned_count: 0, unassigned_count: 0, recent_count: 0, fetched_at: "" };
+        setIncidentWorkspaceStatus((workspacePayload && (workspacePayload.message || workspacePayload.error)) || "Incident workspace unavailable.", true);
+      }
+    } else {
+      incidentWorkspaceCache = { active: [], recent: [], active_count: 0, assigned_count: 0, unassigned_count: 0, recent_count: 0, fetched_at: "" };
+    }
+
+    if(loadIncidentHandoffs && handoffResp){
+      const handoffPayload = await handoffResp.json().catch(()=>null);
+      if(handoffPayload && handoffPayload.ok){
+        incidentHandoffCache = {
+          handoffs: Array.isArray(handoffPayload.handoffs) ? handoffPayload.handoffs : [],
+          fetched_at: handoffPayload.fetched_at || ""
+        };
+        setIncidentHandoffStatus(`Shift handoff history loaded: ${incidentHandoffCache.handoffs.length} briefs.`, false);
+      } else {
+        incidentHandoffCache = { handoffs: [], fetched_at: "" };
+        setIncidentHandoffStatus((handoffPayload && (handoffPayload.message || handoffPayload.error)) || "Shift handoff history unavailable.", true);
+      }
+    } else {
+      incidentHandoffCache = { handoffs: [], fetched_at: "" };
+    }
+
+    if(loadIncidentAudit && auditResp){
+      const auditPayload = await auditResp.json().catch(()=>null);
+      if(auditPayload && auditPayload.ok){
+        incidentAuditCache = {
+          events: Array.isArray(auditPayload.events) ? auditPayload.events : [],
+          fetched_at: auditPayload.fetched_at || ""
+        };
+        setIncidentAuditStatus(`Incident audit loaded: ${incidentAuditCache.events.length} events.`, false);
+      } else {
+        incidentAuditCache = { events: [], fetched_at: "" };
+        setIncidentAuditStatus((auditPayload && (auditPayload.message || auditPayload.error)) || "Incident audit unavailable.", true);
+      }
+    } else {
+      incidentAuditCache = { events: [], fetched_at: "" };
+    }
+
     topologyCache = {
       nodes: Array.isArray(payload.nodes) ? payload.nodes : [],
       edges: Array.isArray(payload.edges) ? payload.edges : [],
@@ -2609,7 +3058,7 @@ async function loadTopology(force){
       fetched_at: payload.fetched_at || ""
     };
     topologyLastFetchMs = Date.now();
-    setTopologyStatus(`Topology loaded: ${topologyCache.nodes.length} nodes, ${topologyCache.edges.length} edges, ${topologyHACache.pairs.length} HA pairs.`, false);
+    setTopologyStatus(`Topology loaded: ${topologyCache.nodes.length} nodes, ${topologyCache.edges.length} edges, ${topologyHACache.pairs.length} HA pairs, ${incidentWorkspaceCache.active_count || 0} active incidents, ${incidentHandoffCache.handoffs.length || 0} handoffs.`, false);
     renderTopology();
   }catch(_){
     setTopologyStatus("Topology request failed.", true);
@@ -2618,6 +3067,15 @@ async function loadTopology(force){
     setTelemetryBaselineStatus("Telemetry baselines request failed.", true);
     if(loadAlertIntelligence){
       setTelemetryAlertStatus("Alert intelligence request failed.", true);
+    }
+    if(loadIncidentWorkspace){
+      setIncidentWorkspaceStatus("Incident workspace request failed.", true);
+    }
+    if(loadIncidentHandoffs){
+      setIncidentHandoffStatus("Shift handoff request failed.", true);
+    }
+    if(loadIncidentAudit){
+      setIncidentAuditStatus("Incident audit request failed.", true);
     }
   } finally {
     topologyLoading = false;
@@ -2679,6 +3137,8 @@ function bindTopologyControls(){
   if(refresh) refresh.addEventListener("click", ()=>loadTopology(true));
   if(trace) trace.addEventListener("click", ()=>traceTopologyPath());
   if(clear) clear.addEventListener("click", ()=>clearTopologyTrace());
+  bindIncidentWorkspaceControls();
+  bindIncidentHandoffControls();
 }
 
 function setDataHealthBanner(message, level){

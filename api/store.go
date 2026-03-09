@@ -53,6 +53,11 @@ const (
 	defaultBurstThreshold   = 4
 	maxAlertReportIncidents = 120
 	maxStormBursts          = 40
+	maxIncidentTimeline     = 200
+	defaultWorkspaceActive  = 80
+	defaultWorkspaceRecent  = 40
+	maxIncidentHandoffs     = 120
+	maxIncidentAuditEvents  = 4000
 )
 
 var (
@@ -115,6 +120,8 @@ type Store struct {
 	TelemetryCold               []TelemetrySample                      `json:"telemetry_cold"`
 	TelemetryLastByDevice       map[string]int64                       `json:"telemetry_last_by_device,omitempty"`
 	TelemetryQualityBySource    map[string]TelemetrySourceQualityStats `json:"telemetry_quality_by_source,omitempty"`
+	IncidentHandoffs            []IncidentShiftHandoff                 `json:"incident_handoffs,omitempty"`
+	IncidentAuditEvents         []IncidentAuditEvent                   `json:"incident_audit_events,omitempty"`
 
 	filePath      string
 	identityIndex map[string]string
@@ -146,6 +153,8 @@ type storePersist struct {
 	TelemetryCold               []TelemetrySample                      `json:"telemetry_cold"`
 	TelemetryLastByDevice       map[string]int64                       `json:"telemetry_last_by_device,omitempty"`
 	TelemetryQualityBySource    map[string]TelemetrySourceQualityStats `json:"telemetry_quality_by_source,omitempty"`
+	IncidentHandoffs            []IncidentShiftHandoff                 `json:"incident_handoffs,omitempty"`
+	IncidentAuditEvents         []IncidentAuditEvent                   `json:"incident_audit_events,omitempty"`
 }
 
 func LoadStore(path string) *Store {
@@ -182,7 +191,7 @@ func (s *Store) save() {
 	payload := storePersist{
 		Version:                     s.Version,
 		Devices:                     append([]Device(nil), s.Devices...),
-		Incidents:                   append([]Incident(nil), s.Incidents...),
+		Incidents:                   cloneIncidents(s.Incidents),
 		Agents:                      append([]Agent(nil), s.Agents...),
 		PushTokens:                  append([]PushRegisterRequest(nil), s.PushTokens...),
 		Users:                       append([]User(nil), s.Users...),
@@ -204,6 +213,8 @@ func (s *Store) save() {
 		TelemetryCold:               append([]TelemetrySample(nil), s.TelemetryCold...),
 		TelemetryLastByDevice:       cloneStringInt64Map(s.TelemetryLastByDevice),
 		TelemetryQualityBySource:    cloneTelemetrySourceQualityMap(s.TelemetryQualityBySource),
+		IncidentHandoffs:            cloneIncidentHandoffs(s.IncidentHandoffs),
+		IncidentAuditEvents:         cloneIncidentAuditEvents(s.IncidentAuditEvents),
 	}
 	s.mu.RUnlock()
 
@@ -224,6 +235,9 @@ func (s *Store) ensureDefaultsAndMigrateLocked() {
 	if len(s.Users) == 0 {
 		s.Users = []User{{Username: "admin", Password: "admin"}}
 	}
+	s.ensureIncidentCommandTimelineLocked()
+	s.IncidentHandoffs = cloneIncidentHandoffs(s.IncidentHandoffs)
+	s.IncidentAuditEvents = cloneIncidentAuditEvents(s.IncidentAuditEvents)
 
 	if len(s.DeviceIdentities) == 0 && len(s.Devices) > 0 {
 		s.backfillInventoryFromDevicesLocked(identityBackfillSource)
@@ -276,10 +290,406 @@ func (s *Store) ensureDefaultsAndMigrateLocked() {
 	if len(s.HAFailoverEvents) > maxHAFailoverEvents {
 		s.HAFailoverEvents = append([]HAFailoverEvent(nil), s.HAFailoverEvents[len(s.HAFailoverEvents)-maxHAFailoverEvents:]...)
 	}
+	if len(s.IncidentHandoffs) > maxIncidentHandoffs {
+		s.IncidentHandoffs = append([]IncidentShiftHandoff(nil), s.IncidentHandoffs[len(s.IncidentHandoffs)-maxIncidentHandoffs:]...)
+	}
+	if len(s.IncidentAuditEvents) > maxIncidentAuditEvents {
+		s.IncidentAuditEvents = append([]IncidentAuditEvent(nil), s.IncidentAuditEvents[len(s.IncidentAuditEvents)-maxIncidentAuditEvents:]...)
+	}
 	s.updateHAPairWatcherLocked(time.Now().UnixMilli())
 	if s.Version < storeSchemaVersion {
 		s.Version = storeSchemaVersion
 	}
+}
+
+func (s *Store) ensureIncidentCommandTimelineLocked() {
+	nowISO := time.Now().UTC().Format(time.RFC3339)
+	for i := range s.Incidents {
+		if len(s.Incidents[i].CommandTimeline) == 0 {
+			at := strings.TrimSpace(s.Incidents[i].Started)
+			if at == "" {
+				at = nowISO
+			}
+			message := strings.TrimSpace(s.Incidents[i].Message)
+			if message == "" {
+				incidentType := strings.TrimSpace(s.Incidents[i].Type)
+				if incidentType == "" {
+					incidentType = "incident"
+				}
+				message = "Incident opened (" + incidentType + ")."
+			} else {
+				message = "Incident opened: " + message
+			}
+			s.appendIncidentTimelineEntryLocked(i, "opened", "", message, at)
+		}
+		if strings.TrimSpace(s.Incidents[i].Commander) != "" && s.Incidents[i].CommanderAssignedAt == nil {
+			assignedAt := strings.TrimSpace(s.Incidents[i].Started)
+			if assignedAt == "" {
+				assignedAt = nowISO
+			}
+			s.Incidents[i].CommanderAssignedAt = &assignedAt
+		}
+		if len(s.Incidents[i].CommandTimeline) > maxIncidentTimeline {
+			s.Incidents[i].CommandTimeline = append([]IncidentTimelineEntry(nil), s.Incidents[i].CommandTimeline[len(s.Incidents[i].CommandTimeline)-maxIncidentTimeline:]...)
+		}
+		if len(s.Incidents[i].CommandTimeline) > 0 {
+			lastAt := strings.TrimSpace(s.Incidents[i].CommandTimeline[len(s.Incidents[i].CommandTimeline)-1].At)
+			if lastAt != "" {
+				s.Incidents[i].LastCommandTimelineAt = &lastAt
+			}
+		}
+	}
+}
+
+func (s *Store) appendIncidentTimelineEntryLocked(incidentIndex int, eventType, actor, message, atISO string) {
+	if incidentIndex < 0 || incidentIndex >= len(s.Incidents) {
+		return
+	}
+	at := strings.TrimSpace(atISO)
+	if at == "" {
+		at = time.Now().UTC().Format(time.RFC3339)
+	}
+	entryType := normalizeIncidentTimelineEventType(eventType)
+	note := strings.TrimSpace(message)
+	if note == "" {
+		note = defaultIncidentTimelineMessage(entryType)
+	}
+	entry := IncidentTimelineEntry{
+		ID:         "ict-" + randomID(),
+		IncidentID: s.Incidents[incidentIndex].ID,
+		EventType:  entryType,
+		At:         at,
+		Actor:      strings.TrimSpace(actor),
+		Message:    note,
+	}
+	s.Incidents[incidentIndex].CommandTimeline = append(s.Incidents[incidentIndex].CommandTimeline, entry)
+	if len(s.Incidents[incidentIndex].CommandTimeline) > maxIncidentTimeline {
+		s.Incidents[incidentIndex].CommandTimeline = append([]IncidentTimelineEntry(nil), s.Incidents[incidentIndex].CommandTimeline[len(s.Incidents[incidentIndex].CommandTimeline)-maxIncidentTimeline:]...)
+	}
+	lastAt := at
+	s.Incidents[incidentIndex].LastCommandTimelineAt = &lastAt
+}
+
+func normalizeIncidentAuditAction(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "commander_handoff":
+		return "commander_handoff"
+	case "checklist_action":
+		return "checklist_action"
+	case "incident_acked":
+		return "incident_acked"
+	case "timeline_note":
+		return "timeline_note"
+	default:
+		return "incident_event"
+	}
+}
+
+func (s *Store) appendIncidentAuditEventLocked(incidentIndex int, action, actor, message string, metadata map[string]string, atISO string) IncidentAuditEvent {
+	if incidentIndex < 0 || incidentIndex >= len(s.Incidents) {
+		return IncidentAuditEvent{}
+	}
+	at := strings.TrimSpace(atISO)
+	if at == "" {
+		at = time.Now().UTC().Format(time.RFC3339)
+	}
+	normalizedMetadata := map[string]string{}
+	for k, v := range metadata {
+		key := strings.TrimSpace(k)
+		val := strings.TrimSpace(v)
+		if key == "" || val == "" {
+			continue
+		}
+		normalizedMetadata[key] = val
+	}
+	if len(normalizedMetadata) == 0 {
+		normalizedMetadata = nil
+	}
+	event := IncidentAuditEvent{
+		ID:         "iae-" + randomID(),
+		IncidentID: s.Incidents[incidentIndex].ID,
+		Action:     normalizeIncidentAuditAction(action),
+		Actor:      strings.TrimSpace(actor),
+		At:         at,
+		Message:    strings.TrimSpace(message),
+		Metadata:   normalizedMetadata,
+	}
+	s.IncidentAuditEvents = append(s.IncidentAuditEvents, event)
+	if len(s.IncidentAuditEvents) > maxIncidentAuditEvents {
+		s.IncidentAuditEvents = append([]IncidentAuditEvent(nil), s.IncidentAuditEvents[len(s.IncidentAuditEvents)-maxIncidentAuditEvents:]...)
+	}
+	return event
+}
+
+func sortIncidentsForHandoff(incidents []Incident, nowMs int64) {
+	sort.SliceStable(incidents, func(i, j int) bool {
+		iSeverity := incidentSeverityRank(incidents[i].Severity)
+		jSeverity := incidentSeverityRank(incidents[j].Severity)
+		if iSeverity == jSeverity {
+			return incidentTimestampMs(incidents[i], nowMs) > incidentTimestampMs(incidents[j], nowMs)
+		}
+		return iSeverity < jSeverity
+	})
+}
+
+func (s *Store) GenerateIncidentShiftHandoff(actor, note string, activeLimit int) IncidentShiftHandoff {
+	if activeLimit <= 0 || activeLimit > 400 {
+		activeLimit = defaultWorkspaceActive
+	}
+	now := time.Now().UTC()
+	nowISO := now.Format(time.RFC3339)
+	nowMs := now.UnixMilli()
+	normalizedActor := strings.TrimSpace(actor)
+	normalizedNote := strings.TrimSpace(note)
+
+	s.mu.Lock()
+	incidents := cloneIncidents(s.Incidents)
+	var previous *IncidentShiftHandoff
+	if len(s.IncidentHandoffs) > 0 {
+		prev := cloneIncidentHandoff(s.IncidentHandoffs[len(s.IncidentHandoffs)-1])
+		previous = &prev
+	}
+
+	activeAll := make([]Incident, 0, len(incidents))
+	incidentByID := make(map[string]Incident, len(incidents))
+	for _, inc := range incidents {
+		incidentByID[inc.ID] = inc
+		if inc.Resolved == nil {
+			activeAll = append(activeAll, inc)
+		}
+	}
+	sortIncidentsForHandoff(activeAll, nowMs)
+
+	assignedCount := 0
+	for _, inc := range activeAll {
+		if strings.TrimSpace(inc.Commander) != "" {
+			assignedCount++
+		}
+	}
+
+	prevAt := (*string)(nil)
+	prevActiveByID := map[string]Incident{}
+	if previous != nil {
+		if strings.TrimSpace(previous.GeneratedAt) != "" {
+			stamp := strings.TrimSpace(previous.GeneratedAt)
+			prevAt = &stamp
+		}
+		for _, inc := range previous.Active {
+			prevActiveByID[inc.ID] = inc
+		}
+	}
+
+	currentActiveByID := map[string]Incident{}
+	newActive := make([]Incident, 0, len(activeAll))
+	for _, inc := range activeAll {
+		currentActiveByID[inc.ID] = inc
+		if _, existed := prevActiveByID[inc.ID]; !existed {
+			newActive = append(newActive, inc)
+		}
+	}
+	sortIncidentsForHandoff(newActive, nowMs)
+
+	resolvedSinceLast := make([]Incident, 0, len(prevActiveByID))
+	for id, prevInc := range prevActiveByID {
+		if _, stillActive := currentActiveByID[id]; stillActive {
+			continue
+		}
+		if resolvedInc, ok := incidentByID[id]; ok {
+			resolvedSinceLast = append(resolvedSinceLast, resolvedInc)
+			continue
+		}
+		resolvedSinceLast = append(resolvedSinceLast, prevInc)
+	}
+	sort.SliceStable(resolvedSinceLast, func(i, j int) bool {
+		return incidentLastActivityMs(resolvedSinceLast[i], nowMs) > incidentLastActivityMs(resolvedSinceLast[j], nowMs)
+	})
+
+	commanderChanges := make([]IncidentCommanderDelta, 0, len(activeAll))
+	for _, inc := range activeAll {
+		prevInc, existed := prevActiveByID[inc.ID]
+		if !existed {
+			continue
+		}
+		prevCommander := strings.TrimSpace(prevInc.Commander)
+		currentCommander := strings.TrimSpace(inc.Commander)
+		if prevCommander == currentCommander {
+			continue
+		}
+		changedAt := nowISO
+		if timelineAt := strings.TrimSpace(stringOrEmpty(inc.LastCommandTimelineAt)); timelineAt != "" {
+			changedAt = timelineAt
+		}
+		commanderChanges = append(commanderChanges, IncidentCommanderDelta{
+			IncidentID:        inc.ID,
+			DeviceID:          strings.TrimSpace(inc.DeviceID),
+			PreviousCommander: prevCommander,
+			CurrentCommander:  currentCommander,
+			ChangedAt:         changedAt,
+		})
+	}
+	sort.SliceStable(commanderChanges, func(i, j int) bool {
+		iMs, iOk := parseRFC3339ToMs(commanderChanges[i].ChangedAt)
+		jMs, jOk := parseRFC3339ToMs(commanderChanges[j].ChangedAt)
+		if iOk && jOk {
+			return iMs > jMs
+		}
+		return commanderChanges[i].IncidentID < commanderChanges[j].IncidentID
+	})
+
+	activeForPayload := append([]Incident(nil), activeAll...)
+	newActivePayload := append([]Incident(nil), newActive...)
+	resolvedPayload := append([]Incident(nil), resolvedSinceLast...)
+	if len(activeForPayload) > activeLimit {
+		activeForPayload = activeForPayload[:activeLimit]
+	}
+	if len(newActivePayload) > activeLimit {
+		newActivePayload = newActivePayload[:activeLimit]
+	}
+	if len(resolvedPayload) > activeLimit {
+		resolvedPayload = resolvedPayload[:activeLimit]
+	}
+
+	handoff := IncidentShiftHandoff{
+		ID:                     "handoff-" + randomID(),
+		GeneratedAt:            nowISO,
+		GeneratedBy:            normalizedActor,
+		Note:                   normalizedNote,
+		PreviousGeneratedAt:    prevAt,
+		ActiveCount:            len(activeAll),
+		AssignedCount:          assignedCount,
+		UnassignedCount:        max(0, len(activeAll)-assignedCount),
+		NewActiveCount:         len(newActive),
+		ResolvedSinceLastCount: len(resolvedSinceLast),
+		CommanderChangedCount:  len(commanderChanges),
+		Active:                 cloneIncidents(activeForPayload),
+		NewActive:              cloneIncidents(newActivePayload),
+		ResolvedSinceLast:      cloneIncidents(resolvedPayload),
+		CommanderChanges:       cloneIncidentCommanderDeltas(commanderChanges),
+	}
+
+	s.IncidentHandoffs = append(s.IncidentHandoffs, handoff)
+	if len(s.IncidentHandoffs) > maxIncidentHandoffs {
+		s.IncidentHandoffs = append([]IncidentShiftHandoff(nil), s.IncidentHandoffs[len(s.IncidentHandoffs)-maxIncidentHandoffs:]...)
+	}
+	out := cloneIncidentHandoff(handoff)
+	s.mu.Unlock()
+
+	s.save()
+	return out
+}
+
+func (s *Store) ListIncidentHandoffs(limit int) ([]IncidentShiftHandoff, bool, int) {
+	if limit <= 0 || limit > 200 {
+		limit = 30
+	}
+	s.mu.RLock()
+	handoffs := cloneIncidentHandoffs(s.IncidentHandoffs)
+	s.mu.RUnlock()
+
+	out := make([]IncidentShiftHandoff, 0, min(limit, len(handoffs)))
+	for i := len(handoffs) - 1; i >= 0; i-- {
+		out = append(out, handoffs[i])
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, len(handoffs) > len(out), limit
+}
+
+func (s *Store) RecordIncidentChecklistAction(id, checklistID, stepID, state, actor, note string) (IncidentAuditEvent, bool) {
+	incidentID := strings.TrimSpace(id)
+	if incidentID == "" {
+		return IncidentAuditEvent{}, false
+	}
+	checklist := strings.TrimSpace(checklistID)
+	step := strings.TrimSpace(stepID)
+	currentState := strings.TrimSpace(state)
+	normalizedActor := strings.TrimSpace(actor)
+	normalizedNote := strings.TrimSpace(note)
+	if currentState == "" {
+		currentState = "updated"
+	}
+	nowISO := time.Now().UTC().Format(time.RFC3339)
+
+	s.mu.Lock()
+	var event IncidentAuditEvent
+	found := false
+	for i := range s.Incidents {
+		if s.Incidents[i].ID != incidentID {
+			continue
+		}
+		found = true
+		msg := "Checklist action recorded."
+		if checklist != "" || step != "" {
+			msg = "Checklist action: " + checklist
+			if step != "" {
+				msg += "/" + step
+			}
+			msg += " -> " + currentState + "."
+		}
+		if normalizedNote != "" {
+			msg += " " + normalizedNote
+		}
+		metadata := map[string]string{
+			"checklist_id": checklist,
+			"step_id":      step,
+			"state":        currentState,
+		}
+		if normalizedNote != "" {
+			metadata["note"] = normalizedNote
+		}
+		event = s.appendIncidentAuditEventLocked(i, "checklist_action", normalizedActor, msg, metadata, nowISO)
+		s.appendIncidentTimelineEntryLocked(i, "note", normalizedActor, msg, nowISO)
+		break
+	}
+	s.mu.Unlock()
+
+	if found {
+		s.save()
+	}
+	return cloneIncidentAuditEvent(event), found
+}
+
+func (s *Store) ListIncidentAuditEvents(limit int, incidentID, action string) ([]IncidentAuditEvent, bool, int) {
+	if limit <= 0 || limit > 500 {
+		limit = 120
+	}
+	filterIncidentID := strings.TrimSpace(incidentID)
+	filterAction := normalizeIncidentAuditAction(action)
+	if strings.TrimSpace(action) == "" {
+		filterAction = ""
+	}
+
+	s.mu.RLock()
+	all := cloneIncidentAuditEvents(s.IncidentAuditEvents)
+	s.mu.RUnlock()
+
+	matches := make([]IncidentAuditEvent, 0, len(all))
+	for i := len(all) - 1; i >= 0; i-- {
+		item := all[i]
+		if filterIncidentID != "" && item.IncidentID != filterIncidentID {
+			continue
+		}
+		if filterAction != "" && item.Action != filterAction {
+			continue
+		}
+		matches = append(matches, item)
+		if len(matches) >= limit {
+			break
+		}
+	}
+
+	total := 0
+	for _, item := range all {
+		if filterIncidentID != "" && item.IncidentID != filterIncidentID {
+			continue
+		}
+		if filterAction != "" && item.Action != filterAction {
+			continue
+		}
+		total++
+	}
+	return matches, total > len(matches), limit
 }
 
 func (s *Store) LastRetentionSummary() TelemetryRetentionSummary {
@@ -623,7 +1033,7 @@ func (s *Store) TelemetryAlertIntelligence(limit, windowMinutes, burstThreshold 
 	edges, _, _ := s.ListTopologyEdges(8000, "")
 
 	s.mu.RLock()
-	incidents := append([]Incident(nil), s.Incidents...)
+	incidents := cloneIncidents(s.Incidents)
 	devices := append([]Device(nil), s.Devices...)
 	identities := append([]DeviceIdentity(nil), s.DeviceIdentities...)
 	qualityBySource := cloneTelemetrySourceQualityMap(s.TelemetryQualityBySource)
@@ -840,15 +1250,58 @@ func (s *Store) TelemetryAlertIntelligence(limit, windowMinutes, burstThreshold 
 }
 
 func incidentTimestampMs(inc Incident, nowMs int64) int64 {
-	started := strings.TrimSpace(inc.Started)
-	if started == "" {
-		return nowMs
+	if startedMs, ok := parseRFC3339ToMs(inc.Started); ok {
+		return startedMs
 	}
-	parsed, err := time.Parse(time.RFC3339, started)
+	return nowMs
+}
+
+func incidentLastActivityMs(inc Incident, nowMs int64) int64 {
+	last := incidentTimestampMs(inc, nowMs)
+	if resolvedMs, ok := parseRFC3339ToMs(stringOrEmpty(inc.Resolved)); ok && resolvedMs > last {
+		last = resolvedMs
+	}
+	if ackMs, ok := parseRFC3339ToMs(stringOrEmpty(inc.AckUntil)); ok && ackMs > last {
+		last = ackMs
+	}
+	if timelineMs, ok := parseRFC3339ToMs(stringOrEmpty(inc.LastCommandTimelineAt)); ok && timelineMs > last {
+		last = timelineMs
+	}
+	return last
+}
+
+func incidentSeverityRank(severity string) int {
+	switch strings.ToLower(strings.TrimSpace(severity)) {
+	case "critical":
+		return 0
+	case "high":
+		return 1
+	case "warning":
+		return 2
+	case "info":
+		return 3
+	default:
+		return 4
+	}
+}
+
+func parseRFC3339ToMs(raw string) (int64, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, false
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
 	if err != nil {
-		return nowMs
+		return 0, false
 	}
-	return parsed.UnixMilli()
+	return parsed.UnixMilli(), true
+}
+
+func stringOrEmpty(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
 }
 
 func telemetrySourceOverallScore(stats TelemetrySourceQualityStats, nowMs int64) int {
@@ -903,7 +1356,7 @@ func scoreIncidentConfidence(inc Incident, hasDevice bool, device Device, hasSam
 			score += 0.06
 			reasons = append(reasons, "high_timestamp_confidence")
 		} else if sample.TimestampConfidence > 0 && sample.TimestampConfidence < 0.60 {
-			score -= 0.10
+			score -= 0.18
 			reasons = append(reasons, "low_timestamp_confidence")
 		}
 		if alertType == "offline" && sample.Online != nil {
@@ -911,7 +1364,7 @@ func scoreIncidentConfidence(inc Incident, hasDevice bool, device Device, hasSam
 				score += 0.10
 				reasons = append(reasons, "latest_sample_offline")
 			} else {
-				score -= 0.12
+				score -= 0.28
 				reasons = append(reasons, "latest_sample_online")
 			}
 		}
@@ -1284,6 +1737,146 @@ func cloneStringInt64Map(in map[string]int64) map[string]int64 {
 		out[k] = v
 	}
 	return out
+}
+
+func cloneStringPtr(v *string) *string {
+	if v == nil {
+		return nil
+	}
+	out := *v
+	return &out
+}
+
+func cloneIncidentTimeline(entries []IncidentTimelineEntry) []IncidentTimelineEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]IncidentTimelineEntry, len(entries))
+	copy(out, entries)
+	return out
+}
+
+func cloneIncident(inc Incident) Incident {
+	out := inc
+	out.Resolved = cloneStringPtr(inc.Resolved)
+	out.AckUntil = cloneStringPtr(inc.AckUntil)
+	out.CommanderAssignedAt = cloneStringPtr(inc.CommanderAssignedAt)
+	out.LastCommandTimelineAt = cloneStringPtr(inc.LastCommandTimelineAt)
+	out.CommandTimeline = cloneIncidentTimeline(inc.CommandTimeline)
+	return out
+}
+
+func cloneIncidents(in []Incident) []Incident {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Incident, len(in))
+	for i := range in {
+		out[i] = cloneIncident(in[i])
+	}
+	return out
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		key := strings.TrimSpace(k)
+		val := strings.TrimSpace(v)
+		if key == "" || val == "" {
+			continue
+		}
+		out[key] = val
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func cloneIncidentCommanderDeltas(in []IncidentCommanderDelta) []IncidentCommanderDelta {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]IncidentCommanderDelta, len(in))
+	copy(out, in)
+	return out
+}
+
+func cloneIncidentHandoff(in IncidentShiftHandoff) IncidentShiftHandoff {
+	out := in
+	out.PreviousGeneratedAt = cloneStringPtr(in.PreviousGeneratedAt)
+	out.Active = cloneIncidents(in.Active)
+	out.NewActive = cloneIncidents(in.NewActive)
+	out.ResolvedSinceLast = cloneIncidents(in.ResolvedSinceLast)
+	out.CommanderChanges = cloneIncidentCommanderDeltas(in.CommanderChanges)
+	return out
+}
+
+func cloneIncidentHandoffs(in []IncidentShiftHandoff) []IncidentShiftHandoff {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]IncidentShiftHandoff, len(in))
+	for i := range in {
+		out[i] = cloneIncidentHandoff(in[i])
+	}
+	return out
+}
+
+func cloneIncidentAuditEvent(in IncidentAuditEvent) IncidentAuditEvent {
+	out := in
+	out.Metadata = cloneStringMap(in.Metadata)
+	return out
+}
+
+func cloneIncidentAuditEvents(in []IncidentAuditEvent) []IncidentAuditEvent {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]IncidentAuditEvent, len(in))
+	for i := range in {
+		out[i] = cloneIncidentAuditEvent(in[i])
+	}
+	return out
+}
+
+func normalizeIncidentTimelineEventType(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "opened":
+		return "opened"
+	case "acked":
+		return "acked"
+	case "resolved":
+		return "resolved"
+	case "commander_assigned":
+		return "commander_assigned"
+	case "commander_cleared":
+		return "commander_cleared"
+	case "note":
+		return "note"
+	default:
+		return "note"
+	}
+}
+
+func defaultIncidentTimelineMessage(eventType string) string {
+	switch normalizeIncidentTimelineEventType(eventType) {
+	case "opened":
+		return "Incident opened."
+	case "acked":
+		return "Incident acknowledged."
+	case "resolved":
+		return "Incident resolved."
+	case "commander_assigned":
+		return "Commander assigned."
+	case "commander_cleared":
+		return "Commander cleared."
+	default:
+		return "Command timeline note."
+	}
 }
 
 func cloneTelemetrySourceQualityMap(in map[string]TelemetrySourceQualityStats) map[string]TelemetrySourceQualityStats {
@@ -1987,6 +2580,7 @@ func (s *Store) applyTelemetryGapDetectionLocked(nowMs int64) (int, int, bool) {
 					Source:   "telemetry_gap_detector",
 				}
 				s.Incidents = append(s.Incidents, inc)
+				s.appendIncidentTimelineEntryLocked(len(s.Incidents)-1, "opened", "", "Telemetry gap detected beyond class threshold.", nowISO)
 				created++
 				changed = true
 			}
@@ -1995,6 +2589,7 @@ func (s *Store) applyTelemetryGapDetectionLocked(nowMs int64) (int, int, bool) {
 
 		if idx, exists := activeGapByDevice[dev.ID]; exists {
 			s.Incidents[idx].Resolved = &nowISO
+			s.appendIncidentTimelineEntryLocked(idx, "resolved", "", "Telemetry signal restored within class threshold.", nowISO)
 			resolved++
 			changed = true
 		}
@@ -2013,9 +2608,7 @@ func (s *Store) ListDevices() []Device {
 func (s *Store) ListIncidents() []Incident {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]Incident, len(s.Incidents))
-	copy(out, s.Incidents)
-	return out
+	return cloneIncidents(s.Incidents)
 }
 
 func (s *Store) ListAgents() []Agent {
@@ -2998,14 +3591,29 @@ func (s *Store) InventorySchema() InventorySchemaResponse {
 }
 
 func (s *Store) AckIncident(id string, minutes int) (Incident, bool) {
+	incidentID := strings.TrimSpace(id)
+	if incidentID == "" {
+		return Incident{}, false
+	}
+	if minutes <= 0 {
+		minutes = 30
+	}
+	now := time.Now().UTC()
+	nowISO := now.Format(time.RFC3339)
+	until := now.Add(time.Duration(minutes) * time.Minute).Format(time.RFC3339)
+
 	s.mu.Lock()
 	var out Incident
 	found := false
 	for i := range s.Incidents {
-		if s.Incidents[i].ID == id {
-			until := time.Now().Add(time.Duration(minutes) * time.Minute).UTC().Format(time.RFC3339)
+		if s.Incidents[i].ID == incidentID {
 			s.Incidents[i].AckUntil = &until
-			out = s.Incidents[i]
+			s.appendIncidentTimelineEntryLocked(i, "acked", "", "Incident acknowledged for "+strconv.Itoa(minutes)+" minutes.", nowISO)
+			s.appendIncidentAuditEventLocked(i, "incident_acked", "", "Incident acknowledged for "+strconv.Itoa(minutes)+" minutes.", map[string]string{
+				"ack_minutes": strconv.Itoa(minutes),
+				"ack_until":   until,
+			}, nowISO)
+			out = cloneIncident(s.Incidents[i])
 			found = true
 			break
 		}
@@ -3016,6 +3624,163 @@ func (s *Store) AckIncident(id string, minutes int) (Incident, bool) {
 		s.save()
 	}
 	return out, found
+}
+
+func (s *Store) SetIncidentCommander(id, commander, actor string) (Incident, bool) {
+	incidentID := strings.TrimSpace(id)
+	if incidentID == "" {
+		return Incident{}, false
+	}
+	normalizedCommander := strings.TrimSpace(commander)
+	normalizedActor := strings.TrimSpace(actor)
+	nowISO := time.Now().UTC().Format(time.RFC3339)
+
+	s.mu.Lock()
+	var out Incident
+	found := false
+	changed := false
+	for i := range s.Incidents {
+		if s.Incidents[i].ID != incidentID {
+			continue
+		}
+		found = true
+		prevCommander := strings.TrimSpace(s.Incidents[i].Commander)
+		if prevCommander == normalizedCommander {
+			out = cloneIncident(s.Incidents[i])
+			break
+		}
+
+		if normalizedCommander == "" {
+			s.Incidents[i].Commander = ""
+			s.Incidents[i].CommanderAssignedAt = nil
+			note := "Commander cleared."
+			if prevCommander != "" {
+				note = "Commander cleared (previous: " + prevCommander + ")."
+			}
+			s.appendIncidentTimelineEntryLocked(i, "commander_cleared", normalizedActor, note, nowISO)
+			s.appendIncidentAuditEventLocked(i, "commander_handoff", normalizedActor, note, map[string]string{
+				"previous_commander": prevCommander,
+				"current_commander":  "",
+			}, nowISO)
+		} else {
+			s.Incidents[i].Commander = normalizedCommander
+			s.Incidents[i].CommanderAssignedAt = &nowISO
+			note := "Commander assigned: " + normalizedCommander + "."
+			if prevCommander != "" {
+				note = "Commander reassigned: " + prevCommander + " -> " + normalizedCommander + "."
+			}
+			s.appendIncidentTimelineEntryLocked(i, "commander_assigned", normalizedActor, note, nowISO)
+			s.appendIncidentAuditEventLocked(i, "commander_handoff", normalizedActor, note, map[string]string{
+				"previous_commander": prevCommander,
+				"current_commander":  normalizedCommander,
+			}, nowISO)
+		}
+
+		out = cloneIncident(s.Incidents[i])
+		changed = true
+		break
+	}
+	s.mu.Unlock()
+
+	if changed {
+		s.save()
+	}
+	return out, found
+}
+
+func (s *Store) AddIncidentTimelineEntry(id, eventType, message, actor string) (Incident, bool) {
+	incidentID := strings.TrimSpace(id)
+	note := strings.TrimSpace(message)
+	if incidentID == "" || note == "" {
+		return Incident{}, false
+	}
+	normalizedType := normalizeIncidentTimelineEventType(eventType)
+	normalizedActor := strings.TrimSpace(actor)
+	nowISO := time.Now().UTC().Format(time.RFC3339)
+
+	s.mu.Lock()
+	var out Incident
+	found := false
+	changed := false
+	for i := range s.Incidents {
+		if s.Incidents[i].ID != incidentID {
+			continue
+		}
+		found = true
+		s.appendIncidentTimelineEntryLocked(i, normalizedType, normalizedActor, note, nowISO)
+		s.appendIncidentAuditEventLocked(i, "timeline_note", normalizedActor, note, map[string]string{
+			"event_type": normalizedType,
+		}, nowISO)
+		out = cloneIncident(s.Incidents[i])
+		changed = true
+		break
+	}
+	s.mu.Unlock()
+
+	if changed {
+		s.save()
+	}
+	return out, found
+}
+
+func (s *Store) IncidentWorkspace(activeLimit, recentLimit int) IncidentWorkspaceResponse {
+	if activeLimit <= 0 || activeLimit > 400 {
+		activeLimit = defaultWorkspaceActive
+	}
+	if recentLimit <= 0 || recentLimit > 400 {
+		recentLimit = defaultWorkspaceRecent
+	}
+	nowMs := time.Now().UnixMilli()
+
+	s.mu.RLock()
+	incidents := cloneIncidents(s.Incidents)
+	s.mu.RUnlock()
+
+	active := make([]Incident, 0, len(incidents))
+	recent := make([]Incident, 0, len(incidents))
+	for _, inc := range incidents {
+		recent = append(recent, inc)
+		if inc.Resolved == nil {
+			active = append(active, inc)
+		}
+	}
+
+	sort.SliceStable(active, func(i, j int) bool {
+		iSeverity := incidentSeverityRank(active[i].Severity)
+		jSeverity := incidentSeverityRank(active[j].Severity)
+		if iSeverity == jSeverity {
+			return incidentTimestampMs(active[i], nowMs) > incidentTimestampMs(active[j], nowMs)
+		}
+		return iSeverity < jSeverity
+	})
+	sort.SliceStable(recent, func(i, j int) bool {
+		return incidentLastActivityMs(recent[i], nowMs) > incidentLastActivityMs(recent[j], nowMs)
+	})
+
+	if len(active) > activeLimit {
+		active = active[:activeLimit]
+	}
+	if len(recent) > recentLimit {
+		recent = recent[:recentLimit]
+	}
+
+	assigned := 0
+	for _, inc := range active {
+		if strings.TrimSpace(inc.Commander) != "" {
+			assigned++
+		}
+	}
+
+	return IncidentWorkspaceResponse{
+		LastUpdatedMs:   nowMs,
+		ActiveCount:     len(active),
+		AssignedCount:   assigned,
+		UnassignedCount: max(0, len(active)-assigned),
+		RecentCount:     len(recent),
+		Active:          active,
+		Recent:          recent,
+		Stub:            true,
+	}
 }
 
 func (s *Store) RegisterPush(req PushRegisterRequest) {
@@ -3179,7 +3944,13 @@ func (s *Store) IngestTelemetryWithDecision(req TelemetryIngestRequest) (Device,
 				Source:   source,
 			}
 			s.Incidents = append(s.Incidents, inc)
-			created = &inc
+			note := "Device reported offline."
+			if msg := strings.TrimSpace(req.Message); msg != "" {
+				note = "Device reported offline: " + msg
+			}
+			s.appendIncidentTimelineEntryLocked(len(s.Incidents)-1, "opened", "", note, now.UTC().Format(time.RFC3339))
+			createdCopy := cloneIncident(s.Incidents[len(s.Incidents)-1])
+			created = &createdCopy
 		}
 	}
 
@@ -3188,6 +3959,11 @@ func (s *Store) IngestTelemetryWithDecision(req TelemetryIngestRequest) (Device,
 		for i := range s.Incidents {
 			if s.Incidents[i].DeviceID == deviceID && s.Incidents[i].Resolved == nil {
 				s.Incidents[i].Resolved = &resolvedAt
+				note := "Device reported online; incident resolved."
+				if msg := strings.TrimSpace(req.Message); msg != "" {
+					note = "Incident resolved: " + msg
+				}
+				s.appendIncidentTimelineEntryLocked(i, "resolved", "", note, resolvedAt)
 			}
 		}
 	}

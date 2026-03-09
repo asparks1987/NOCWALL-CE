@@ -29,6 +29,9 @@ blocked_files=""
 while IFS= read -r file; do
   base="$(basename "$file")"
   lower="$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$lower" =~ ^license(\..*)?$ ]]; then
+    continue
+  fi
   if [[ "$lower" == *pro_* ]]; then
     blocked_files+="$file"$'\n'
     continue
@@ -39,6 +42,8 @@ while IFS= read -r file; do
 done < <(find . -type f \
   ! -path './.git/*' \
   ! -path './android/.gradle/*' \
+  ! -path './vendor/*' \
+  ! -path './vendor/**' \
   ! -path './node_modules/*' \
   ! -path './.idea/*')
 

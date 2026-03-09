@@ -25,15 +25,64 @@ type Device struct {
 }
 
 type Incident struct {
-	ID       string  `json:"id"`
-	DeviceID string  `json:"device_id"`
-	Type     string  `json:"type"`
-	Severity string  `json:"severity"`
-	Started  string  `json:"started_at"`
-	Resolved *string `json:"resolved_at"`
-	AckUntil *string `json:"ack_until"`
-	Message  string  `json:"message,omitempty"`
-	Source   string  `json:"source,omitempty"`
+	ID                    string                  `json:"id"`
+	DeviceID              string                  `json:"device_id"`
+	Type                  string                  `json:"type"`
+	Severity              string                  `json:"severity"`
+	Started               string                  `json:"started_at"`
+	Resolved              *string                 `json:"resolved_at"`
+	AckUntil              *string                 `json:"ack_until"`
+	Message               string                  `json:"message,omitempty"`
+	Source                string                  `json:"source,omitempty"`
+	Commander             string                  `json:"commander,omitempty"`
+	CommanderAssignedAt   *string                 `json:"commander_assigned_at,omitempty"`
+	CommandTimeline       []IncidentTimelineEntry `json:"command_timeline,omitempty"`
+	LastCommandTimelineAt *string                 `json:"last_command_timeline_at,omitempty"`
+}
+
+type IncidentTimelineEntry struct {
+	ID         string `json:"id"`
+	IncidentID string `json:"incident_id"`
+	EventType  string `json:"event_type"` // opened | acked | resolved | commander_assigned | commander_cleared | note
+	At         string `json:"at"`
+	Actor      string `json:"actor,omitempty"`
+	Message    string `json:"message"`
+}
+
+type IncidentCommanderDelta struct {
+	IncidentID        string `json:"incident_id"`
+	DeviceID          string `json:"device_id,omitempty"`
+	PreviousCommander string `json:"previous_commander,omitempty"`
+	CurrentCommander  string `json:"current_commander,omitempty"`
+	ChangedAt         string `json:"changed_at"`
+}
+
+type IncidentShiftHandoff struct {
+	ID                     string                   `json:"id"`
+	GeneratedAt            string                   `json:"generated_at"`
+	GeneratedBy            string                   `json:"generated_by,omitempty"`
+	Note                   string                   `json:"note,omitempty"`
+	PreviousGeneratedAt    *string                  `json:"previous_generated_at,omitempty"`
+	ActiveCount            int                      `json:"active_count"`
+	AssignedCount          int                      `json:"assigned_count"`
+	UnassignedCount        int                      `json:"unassigned_count"`
+	NewActiveCount         int                      `json:"new_active_count"`
+	ResolvedSinceLastCount int                      `json:"resolved_since_last_count"`
+	CommanderChangedCount  int                      `json:"commander_changed_count"`
+	Active                 []Incident               `json:"active"`
+	NewActive              []Incident               `json:"new_active"`
+	ResolvedSinceLast      []Incident               `json:"resolved_since_last"`
+	CommanderChanges       []IncidentCommanderDelta `json:"commander_changes"`
+}
+
+type IncidentAuditEvent struct {
+	ID         string            `json:"id"`
+	IncidentID string            `json:"incident_id"`
+	Action     string            `json:"action"` // commander_handoff | checklist_action | incident_acked | timeline_note
+	Actor      string            `json:"actor,omitempty"`
+	At         string            `json:"at"`
+	Message    string            `json:"message,omitempty"`
+	Metadata   map[string]string `json:"metadata,omitempty"`
 }
 
 type Agent struct {
@@ -328,31 +377,31 @@ type TelemetryBaselineMetric struct {
 }
 
 type TelemetryAnomalyWindow struct {
-	DayOfWeek            int     `json:"day_of_week"`
-	HourOfDay            int     `json:"hour_of_day"`
-	SampleCount          int     `json:"sample_count"`
-	LatencyMeanMs        float64 `json:"latency_mean_ms,omitempty"`
-	LatencyStdDevMs      float64 `json:"latency_stddev_ms,omitempty"`
-	AvailabilityMeanPct  float64 `json:"availability_mean_pct,omitempty"`
+	DayOfWeek             int     `json:"day_of_week"`
+	HourOfDay             int     `json:"hour_of_day"`
+	SampleCount           int     `json:"sample_count"`
+	LatencyMeanMs         float64 `json:"latency_mean_ms,omitempty"`
+	LatencyStdDevMs       float64 `json:"latency_stddev_ms,omitempty"`
+	AvailabilityMeanPct   float64 `json:"availability_mean_pct,omitempty"`
 	AvailabilityStdDevPct float64 `json:"availability_stddev_pct,omitempty"`
 }
 
 type TelemetryRoleSiteBaseline struct {
-	Role        string                  `json:"role"`
-	SiteID      string                  `json:"site_id"`
-	SampleCount int                     `json:"sample_count"`
-	WindowStart int64                   `json:"window_start_ms"`
-	WindowEnd   int64                   `json:"window_end_ms"`
+	Role        string                    `json:"role"`
+	SiteID      string                    `json:"site_id"`
+	SampleCount int                       `json:"sample_count"`
+	WindowStart int64                     `json:"window_start_ms"`
+	WindowEnd   int64                     `json:"window_end_ms"`
 	Metrics     []TelemetryBaselineMetric `json:"metrics"`
 	Windows     []TelemetryAnomalyWindow  `json:"windows"`
 }
 
 type TelemetryBaselineReport struct {
-	LastUpdatedMs int64                      `json:"last_updated_ms"`
-	WindowHours   int                        `json:"window_hours"`
-	GroupCount    int                        `json:"group_count"`
+	LastUpdatedMs int64                       `json:"last_updated_ms"`
+	WindowHours   int                         `json:"window_hours"`
+	GroupCount    int                         `json:"group_count"`
 	Groups        []TelemetryRoleSiteBaseline `json:"groups"`
-	Stub          bool                       `json:"stub"`
+	Stub          bool                        `json:"stub"`
 }
 
 type TelemetryImpactRadius struct {
@@ -390,15 +439,15 @@ type TelemetryStormBurst struct {
 }
 
 type TelemetryAlertIntelligenceReport struct {
-	LastUpdatedMs       int64                  `json:"last_updated_ms"`
-	WindowMinutes       int                    `json:"window_minutes"`
-	BurstThreshold      int                    `json:"burst_threshold"`
-	RawAlertCount       int                    `json:"raw_alert_count"`
-	SummarizedAlertCount int                   `json:"summarized_alert_count"`
-	ActiveCount         int                    `json:"active_count"`
-	Alerts              []TelemetryAlertRecord `json:"alerts"`
-	StormBursts         []TelemetryStormBurst  `json:"storm_bursts"`
-	Stub                bool                   `json:"stub"`
+	LastUpdatedMs        int64                  `json:"last_updated_ms"`
+	WindowMinutes        int                    `json:"window_minutes"`
+	BurstThreshold       int                    `json:"burst_threshold"`
+	RawAlertCount        int                    `json:"raw_alert_count"`
+	SummarizedAlertCount int                    `json:"summarized_alert_count"`
+	ActiveCount          int                    `json:"active_count"`
+	Alerts               []TelemetryAlertRecord `json:"alerts"`
+	StormBursts          []TelemetryStormBurst  `json:"storm_bursts"`
+	Stub                 bool                   `json:"stub"`
 }
 
 type InventoryInterfacesResponse struct {
@@ -645,6 +694,60 @@ type DevicesResponse struct {
 
 type AckRequest struct {
 	DurationMinutes int `json:"duration_minutes"`
+}
+
+type IncidentCommanderRequest struct {
+	Commander string `json:"commander"`
+	Actor     string `json:"actor,omitempty"`
+}
+
+type IncidentTimelineRequest struct {
+	EventType string `json:"event_type,omitempty"`
+	Message   string `json:"message"`
+	Actor     string `json:"actor,omitempty"`
+}
+
+type IncidentHandoffGenerateRequest struct {
+	Actor       string `json:"actor,omitempty"`
+	Note        string `json:"note,omitempty"`
+	ActiveLimit int    `json:"active_limit,omitempty"`
+}
+
+type IncidentChecklistAuditRequest struct {
+	ChecklistID string `json:"checklist_id,omitempty"`
+	StepID      string `json:"step_id,omitempty"`
+	State       string `json:"state,omitempty"`
+	Actor       string `json:"actor,omitempty"`
+	Note        string `json:"note,omitempty"`
+}
+
+type IncidentWorkspaceResponse struct {
+	LastUpdatedMs   int64      `json:"last_updated_ms"`
+	ActiveCount     int        `json:"active_count"`
+	AssignedCount   int        `json:"assigned_count"`
+	UnassignedCount int        `json:"unassigned_count"`
+	RecentCount     int        `json:"recent_count"`
+	Active          []Incident `json:"active"`
+	Recent          []Incident `json:"recent"`
+	Stub            bool       `json:"stub"`
+}
+
+type IncidentHandoffHistoryResponse struct {
+	LastUpdatedMs int64                  `json:"last_updated_ms"`
+	Count         int                    `json:"count"`
+	Handoffs      []IncidentShiftHandoff `json:"handoffs"`
+	Truncated     bool                   `json:"truncated"`
+	Limit         int                    `json:"limit"`
+	Stub          bool                   `json:"stub"`
+}
+
+type IncidentAuditEventsResponse struct {
+	LastUpdatedMs int64                `json:"last_updated_ms"`
+	Count         int                  `json:"count"`
+	Events        []IncidentAuditEvent `json:"events"`
+	Truncated     bool                 `json:"truncated"`
+	Limit         int                  `json:"limit"`
+	Stub          bool                 `json:"stub"`
 }
 
 type User struct {

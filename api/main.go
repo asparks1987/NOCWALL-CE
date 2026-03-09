@@ -89,6 +89,11 @@ func main() {
 				"telemetry_impact_radius":      true,
 				"telemetry_storm_shield":       true,
 				"telemetry_alert_comparison":   true,
+				"incident_commander_mode":      true,
+				"incident_command_timeline":    true,
+				"incident_workspace_mode":      true,
+				"incident_shift_handoff":       true,
+				"incident_audit_events":        true,
 				"source_poll_background":       pollSec > 0,
 				"cloud_multi_tenant_stub":      true,
 				"connector_multivendor_stub":   true,
@@ -110,6 +115,50 @@ func main() {
 		return c.JSON(store.ListIncidents())
 	})
 
+	app.Get("/incidents/workspace", authMiddleware, func(c *fiber.Ctx) error {
+		activeLimit := c.QueryInt("active_limit", 80)
+		recentLimit := c.QueryInt("recent_limit", 40)
+		return c.JSON(store.IncidentWorkspace(activeLimit, recentLimit))
+	})
+
+	app.Get("/incidents/handoffs", authMiddleware, func(c *fiber.Ctx) error {
+		limit := c.QueryInt("limit", 30)
+		handoffs, truncated, normalizedLimit := store.ListIncidentHandoffs(limit)
+		return c.JSON(IncidentHandoffHistoryResponse{
+			LastUpdatedMs: time.Now().UnixMilli(),
+			Count:         len(handoffs),
+			Handoffs:      handoffs,
+			Truncated:     truncated,
+			Limit:         normalizedLimit,
+			Stub:          true,
+		})
+	})
+
+	app.Post("/incidents/handoff/generate", authMiddleware, func(c *fiber.Ctx) error {
+		var req IncidentHandoffGenerateRequest
+		if len(c.Body()) > 0 {
+			if err := c.BodyParser(&req); err != nil {
+				return c.Status(http.StatusBadRequest).JSON(fiber.Map{"code": "invalid_body", "message": "Invalid request body"})
+			}
+		}
+		return c.JSON(store.GenerateIncidentShiftHandoff(req.Actor, req.Note, req.ActiveLimit))
+	})
+
+	app.Get("/incidents/audit", authMiddleware, func(c *fiber.Ctx) error {
+		limit := c.QueryInt("limit", 120)
+		incidentID := strings.TrimSpace(c.Query("incident_id", ""))
+		action := strings.TrimSpace(c.Query("action", ""))
+		events, truncated, normalizedLimit := store.ListIncidentAuditEvents(limit, incidentID, action)
+		return c.JSON(IncidentAuditEventsResponse{
+			LastUpdatedMs: time.Now().UnixMilli(),
+			Count:         len(events),
+			Events:        events,
+			Truncated:     truncated,
+			Limit:         normalizedLimit,
+			Stub:          true,
+		})
+	})
+
 	app.Post("/incidents/:id/ack", authMiddleware, func(c *fiber.Ctx) error {
 		id := c.Params("id")
 		var req AckRequest
@@ -124,6 +173,48 @@ func main() {
 			return c.Status(http.StatusNotFound).JSON(fiber.Map{"code": "not_found", "message": "Incident not found"})
 		}
 		return c.JSON(inc)
+	})
+
+	app.Post("/incidents/:id/commander", authMiddleware, func(c *fiber.Ctx) error {
+		id := c.Params("id")
+		var req IncidentCommanderRequest
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(http.StatusBadRequest).JSON(fiber.Map{"code": "invalid_body", "message": "Invalid request body"})
+		}
+		inc, ok := store.SetIncidentCommander(id, req.Commander, req.Actor)
+		if !ok {
+			return c.Status(http.StatusNotFound).JSON(fiber.Map{"code": "not_found", "message": "Incident not found"})
+		}
+		return c.JSON(inc)
+	})
+
+	app.Post("/incidents/:id/timeline", authMiddleware, func(c *fiber.Ctx) error {
+		id := c.Params("id")
+		var req IncidentTimelineRequest
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(http.StatusBadRequest).JSON(fiber.Map{"code": "invalid_body", "message": "Invalid request body"})
+		}
+		if strings.TrimSpace(req.Message) == "" {
+			return c.Status(http.StatusBadRequest).JSON(fiber.Map{"code": "missing_message", "message": "message is required"})
+		}
+		inc, ok := store.AddIncidentTimelineEntry(id, req.EventType, req.Message, req.Actor)
+		if !ok {
+			return c.Status(http.StatusNotFound).JSON(fiber.Map{"code": "not_found", "message": "Incident not found"})
+		}
+		return c.JSON(inc)
+	})
+
+	app.Post("/incidents/:id/checklist/audit", authMiddleware, func(c *fiber.Ctx) error {
+		id := c.Params("id")
+		var req IncidentChecklistAuditRequest
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(http.StatusBadRequest).JSON(fiber.Map{"code": "invalid_body", "message": "Invalid request body"})
+		}
+		event, ok := store.RecordIncidentChecklistAction(id, req.ChecklistID, req.StepID, req.State, req.Actor, req.Note)
+		if !ok {
+			return c.Status(http.StatusNotFound).JSON(fiber.Map{"code": "not_found", "message": "Incident not found"})
+		}
+		return c.JSON(event)
 	})
 
 	app.Get("/metrics/devices/:id", authMiddleware, func(c *fiber.Ctx) error {

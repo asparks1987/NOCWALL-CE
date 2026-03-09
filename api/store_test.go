@@ -609,6 +609,329 @@ func TestDetectTelemetryGapsCreatesAndResolvesIncidents(t *testing.T) {
 	}
 }
 
+func TestIncidentCommanderWorkspaceTracksOwnershipAndTimeline(t *testing.T) {
+	s := LoadStore("")
+	s.mu.Lock()
+	s.Devices = nil
+	s.Incidents = nil
+	s.mu.Unlock()
+
+	offline := false
+	if _, created, ok := s.IngestTelemetry(TelemetryIngestRequest{
+		Source:    "incident_workspace_test",
+		EventType: "offline",
+		DeviceID:  "inc-node-1",
+		Device:    "Incident Node 1",
+		Role:      "gateway",
+		SiteID:    "site-inc",
+		Online:    &offline,
+		Message:   "uplink down",
+	}); !ok || created == nil {
+		t.Fatalf("expected offline ingest to create incident")
+	}
+
+	incidents := s.ListIncidents()
+	if len(incidents) != 1 {
+		t.Fatalf("expected 1 incident, got=%d", len(incidents))
+	}
+	incidentID := incidents[0].ID
+
+	assigned, ok := s.SetIncidentCommander(incidentID, "alice", "alice")
+	if !ok {
+		t.Fatalf("expected incident commander assignment to succeed")
+	}
+	if assigned.Commander != "alice" {
+		t.Fatalf("expected commander=alice, got=%s", assigned.Commander)
+	}
+	if len(assigned.CommandTimeline) == 0 {
+		t.Fatalf("expected timeline entries after commander assignment")
+	}
+
+	noted, ok := s.AddIncidentTimelineEntry(incidentID, "note", "checking edge switches", "alice")
+	if !ok {
+		t.Fatalf("expected timeline note append to succeed")
+	}
+	lastNote := noted.CommandTimeline[len(noted.CommandTimeline)-1]
+	if lastNote.EventType != "note" {
+		t.Fatalf("expected note event type, got=%s", lastNote.EventType)
+	}
+
+	acked, ok := s.AckIncident(incidentID, 15)
+	if !ok {
+		t.Fatalf("expected incident ack to succeed")
+	}
+	if acked.AckUntil == nil {
+		t.Fatalf("expected ack_until set")
+	}
+
+	workspace := s.IncidentWorkspace(20, 20)
+	if workspace.ActiveCount != 1 {
+		t.Fatalf("expected one active incident in workspace, got=%d", workspace.ActiveCount)
+	}
+	if workspace.AssignedCount != 1 {
+		t.Fatalf("expected one assigned incident, got=%d", workspace.AssignedCount)
+	}
+	if len(workspace.Active) != 1 || workspace.Active[0].ID != incidentID {
+		t.Fatalf("workspace active incident mismatch")
+	}
+
+	cleared, ok := s.SetIncidentCommander(incidentID, "", "bob")
+	if !ok {
+		t.Fatalf("expected commander clear to succeed")
+	}
+	if cleared.Commander != "" {
+		t.Fatalf("expected cleared commander")
+	}
+
+	online := true
+	if _, _, ok := s.IngestTelemetry(TelemetryIngestRequest{
+		Source:    "incident_workspace_test",
+		EventType: "online",
+		DeviceID:  "inc-node-1",
+		Device:    "Incident Node 1",
+		Role:      "gateway",
+		SiteID:    "site-inc",
+		Online:    &online,
+	}); !ok {
+		t.Fatalf("expected online ingest to resolve incident")
+	}
+
+	finalIncidents := s.ListIncidents()
+	if len(finalIncidents) != 1 {
+		t.Fatalf("expected 1 incident after resolve, got=%d", len(finalIncidents))
+	}
+	final := finalIncidents[0]
+	if final.Resolved == nil {
+		t.Fatalf("expected incident resolved timestamp")
+	}
+	eventSeen := map[string]bool{}
+	for _, entry := range final.CommandTimeline {
+		eventSeen[entry.EventType] = true
+	}
+	for _, expected := range []string{"opened", "commander_assigned", "note", "acked", "commander_cleared", "resolved"} {
+		if !eventSeen[expected] {
+			t.Fatalf("expected timeline event=%s to be present", expected)
+		}
+	}
+}
+
+func TestListIncidentsReturnsDeepCopyOfTimeline(t *testing.T) {
+	s := LoadStore("")
+	s.mu.Lock()
+	s.Devices = nil
+	s.Incidents = nil
+	s.mu.Unlock()
+
+	offline := false
+	if _, created, ok := s.IngestTelemetry(TelemetryIngestRequest{
+		Source:    "incident_copy_test",
+		EventType: "offline",
+		DeviceID:  "inc-copy-1",
+		Device:    "Incident Copy 1",
+		Role:      "switch",
+		SiteID:    "site-inc",
+		Online:    &offline,
+	}); !ok || created == nil {
+		t.Fatalf("expected offline ingest to create incident")
+	}
+
+	list := s.ListIncidents()
+	if len(list) == 0 || len(list[0].CommandTimeline) == 0 {
+		t.Fatalf("expected incident timeline in returned list")
+	}
+	list[0].CommandTimeline[0].Message = "tampered"
+
+	listAfter := s.ListIncidents()
+	if len(listAfter) == 0 || len(listAfter[0].CommandTimeline) == 0 {
+		t.Fatalf("expected incident timeline after second list")
+	}
+	if listAfter[0].CommandTimeline[0].Message == "tampered" {
+		t.Fatalf("expected list incidents to return deep copy of timeline")
+	}
+}
+
+func TestGenerateIncidentShiftHandoffBuildsDeltaSummary(t *testing.T) {
+	s := LoadStore("")
+	s.mu.Lock()
+	s.Devices = nil
+	s.Incidents = nil
+	s.IncidentHandoffs = nil
+	s.IncidentAuditEvents = nil
+	s.mu.Unlock()
+
+	offline := false
+	if _, _, ok := s.IngestTelemetry(TelemetryIngestRequest{
+		Source:    "handoff_test",
+		EventType: "offline",
+		DeviceID:  "handoff-node-1",
+		Device:    "Handoff Node 1",
+		Role:      "gateway",
+		SiteID:    "handoff-site",
+		Online:    &offline,
+	}); !ok {
+		t.Fatalf("failed to create incident for handoff-node-1")
+	}
+	if _, _, ok := s.IngestTelemetry(TelemetryIngestRequest{
+		Source:    "handoff_test",
+		EventType: "offline",
+		DeviceID:  "handoff-node-2",
+		Device:    "Handoff Node 2",
+		Role:      "switch",
+		SiteID:    "handoff-site",
+		Online:    &offline,
+	}); !ok {
+		t.Fatalf("failed to create incident for handoff-node-2")
+	}
+
+	incidents := s.ListIncidents()
+	if len(incidents) != 2 {
+		t.Fatalf("expected 2 incidents before first handoff, got=%d", len(incidents))
+	}
+	var incOneID string
+	for _, inc := range incidents {
+		if inc.DeviceID == "handoff-node-1" {
+			incOneID = inc.ID
+			break
+		}
+	}
+	if incOneID == "" {
+		t.Fatalf("missing incident for handoff-node-1")
+	}
+	if _, ok := s.SetIncidentCommander(incOneID, "alice", "alice"); !ok {
+		t.Fatalf("failed to set initial commander")
+	}
+
+	first := s.GenerateIncidentShiftHandoff("shift-a", "start shift", 80)
+	if first.ActiveCount != 2 {
+		t.Fatalf("expected first handoff active_count=2, got=%d", first.ActiveCount)
+	}
+	if first.NewActiveCount != 2 {
+		t.Fatalf("expected first handoff new_active_count=2, got=%d", first.NewActiveCount)
+	}
+
+	online := true
+	if _, _, ok := s.IngestTelemetry(TelemetryIngestRequest{
+		Source:    "handoff_test",
+		EventType: "online",
+		DeviceID:  "handoff-node-2",
+		Device:    "Handoff Node 2",
+		Role:      "switch",
+		SiteID:    "handoff-site",
+		Online:    &online,
+	}); !ok {
+		t.Fatalf("failed to resolve incident for handoff-node-2")
+	}
+	if _, ok := s.SetIncidentCommander(incOneID, "bob", "bob"); !ok {
+		t.Fatalf("failed to reassign commander")
+	}
+	if _, _, ok := s.IngestTelemetry(TelemetryIngestRequest{
+		Source:    "handoff_test",
+		EventType: "offline",
+		DeviceID:  "handoff-node-3",
+		Device:    "Handoff Node 3",
+		Role:      "ap",
+		SiteID:    "handoff-site",
+		Online:    &offline,
+	}); !ok {
+		t.Fatalf("failed to create new incident for handoff-node-3")
+	}
+
+	second := s.GenerateIncidentShiftHandoff("shift-b", "handoff to next shift", 80)
+	if second.PreviousGeneratedAt == nil || *second.PreviousGeneratedAt == "" {
+		t.Fatalf("expected previous_generated_at on second handoff")
+	}
+	if second.NewActiveCount < 1 {
+		t.Fatalf("expected at least one new active incident in second handoff, got=%d", second.NewActiveCount)
+	}
+	if second.ResolvedSinceLastCount < 1 {
+		t.Fatalf("expected at least one resolved incident since last handoff, got=%d", second.ResolvedSinceLastCount)
+	}
+	if second.CommanderChangedCount < 1 {
+		t.Fatalf("expected commander change count >=1, got=%d", second.CommanderChangedCount)
+	}
+
+	handoffs, truncated, limit := s.ListIncidentHandoffs(10)
+	if truncated {
+		t.Fatalf("did not expect truncated handoff history")
+	}
+	if limit != 10 {
+		t.Fatalf("expected normalized handoff limit 10, got=%d", limit)
+	}
+	if len(handoffs) < 2 {
+		t.Fatalf("expected at least two handoff records, got=%d", len(handoffs))
+	}
+	if handoffs[0].ID != second.ID {
+		t.Fatalf("expected latest handoff first in history list")
+	}
+}
+
+func TestIncidentAuditEventsTrackCommanderAndChecklistActions(t *testing.T) {
+	s := LoadStore("")
+	s.mu.Lock()
+	s.Devices = nil
+	s.Incidents = nil
+	s.IncidentHandoffs = nil
+	s.IncidentAuditEvents = nil
+	s.mu.Unlock()
+
+	offline := false
+	var created *Incident
+	if _, incident, ok := s.IngestTelemetry(TelemetryIngestRequest{
+		Source:    "audit_test",
+		EventType: "offline",
+		DeviceID:  "audit-node-1",
+		Device:    "Audit Node 1",
+		Role:      "gateway",
+		SiteID:    "audit-site",
+		Online:    &offline,
+	}); !ok || incident == nil {
+		t.Fatalf("expected incident creation for audit test")
+	} else {
+		created = incident
+	}
+	incidentID := created.ID
+
+	if _, ok := s.SetIncidentCommander(incidentID, "alice", "alice"); !ok {
+		t.Fatalf("expected commander assignment")
+	}
+	event, ok := s.RecordIncidentChecklistAction(incidentID, "edge_recovery", "step-1", "complete", "alice", "validated uplink")
+	if !ok {
+		t.Fatalf("expected checklist audit event record")
+	}
+	if event.Action != "checklist_action" {
+		t.Fatalf("expected checklist_action audit event, got=%s", event.Action)
+	}
+	if event.Metadata["checklist_id"] != "edge_recovery" {
+		t.Fatalf("expected checklist_id metadata, got=%v", event.Metadata)
+	}
+
+	allEvents, truncated, _ := s.ListIncidentAuditEvents(20, incidentID, "")
+	if truncated {
+		t.Fatalf("did not expect truncated audit events")
+	}
+	if len(allEvents) < 2 {
+		t.Fatalf("expected multiple audit events for commander+checklist, got=%d", len(allEvents))
+	}
+	hasCommander := false
+	hasChecklist := false
+	for _, item := range allEvents {
+		if item.Action == "commander_handoff" {
+			hasCommander = true
+		}
+		if item.Action == "checklist_action" {
+			hasChecklist = true
+		}
+	}
+	if !hasCommander || !hasChecklist {
+		t.Fatalf("expected commander_handoff and checklist_action audit events")
+	}
+
+	checklistEvents, _, _ := s.ListIncidentAuditEvents(20, incidentID, "checklist_action")
+	if len(checklistEvents) == 0 {
+		t.Fatalf("expected checklist_action filtered events")
+	}
+}
+
 func TestIngestTelemetryNormalizesSkewedObservedTimestamp(t *testing.T) {
 	s := LoadStore("")
 	online := true
@@ -753,6 +1076,17 @@ func TestTelemetryQualityReportAggregatesSourceStats(t *testing.T) {
 
 func TestTelemetryBaselineReportBuildsRoleSiteMetrics(t *testing.T) {
 	s := LoadStore("")
+	s.mu.Lock()
+	s.TelemetryGovernorRules = normalizeTelemetryGovernorRules([]TelemetryClassGovernorRule{
+		{
+			DeviceClass:         "default",
+			MinSampleIntervalMs: 1,
+			QueuePriority:       0,
+			Roles:               []string{"device", "ap", "switch"},
+		},
+	})
+	s.TelemetryLastByDevice = map[string]int64{}
+	s.mu.Unlock()
 	online := true
 	offline := false
 	base := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Minute)
@@ -772,6 +1106,9 @@ func TestTelemetryBaselineReportBuildsRoleSiteMetrics(t *testing.T) {
 			ObservedAtMs: base.Add(time.Duration(i) * 5 * time.Minute).UnixMilli(),
 			Online:       state,
 			LatencyMs:    &latency,
+			Interfaces: []TelemetryInterfaceFact{
+				{Name: "eth0"},
+			},
 		}
 		if _, _, ok := s.IngestTelemetry(req); !ok {
 			t.Fatalf("ingest failed at index=%d", i)
@@ -812,6 +1149,17 @@ func TestTelemetryBaselineReportBuildsRoleSiteMetrics(t *testing.T) {
 
 func TestTelemetryBaselineReportBuildsDayHourAnomalyWindows(t *testing.T) {
 	s := LoadStore("")
+	s.mu.Lock()
+	s.TelemetryGovernorRules = normalizeTelemetryGovernorRules([]TelemetryClassGovernorRule{
+		{
+			DeviceClass:         "default",
+			MinSampleIntervalMs: 1,
+			QueuePriority:       0,
+			Roles:               []string{"device", "ap", "switch"},
+		},
+	})
+	s.TelemetryLastByDevice = map[string]int64{}
+	s.mu.Unlock()
 	online := true
 	base := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Hour)
 	day := base.Weekday()
@@ -829,6 +1177,9 @@ func TestTelemetryBaselineReportBuildsDayHourAnomalyWindows(t *testing.T) {
 			ObservedAtMs: base.Add(time.Duration(i) * 7 * time.Minute).UnixMilli(),
 			Online:       &online,
 			LatencyMs:    &latency,
+			Interfaces: []TelemetryInterfaceFact{
+				{Name: "eth0"},
+			},
 		}
 		if _, _, ok := s.IngestTelemetry(req); !ok {
 			t.Fatalf("window A ingest failed index=%d", i)
@@ -845,6 +1196,9 @@ func TestTelemetryBaselineReportBuildsDayHourAnomalyWindows(t *testing.T) {
 			ObservedAtMs: base.Add(1*time.Hour + time.Duration(i)*7*time.Minute).UnixMilli(),
 			Online:       &online,
 			LatencyMs:    &latency,
+			Interfaces: []TelemetryInterfaceFact{
+				{Name: "eth0"},
+			},
 		}
 		if _, _, ok := s.IngestTelemetry(req); !ok {
 			t.Fatalf("window B ingest failed index=%d", i)

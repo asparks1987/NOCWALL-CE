@@ -626,6 +626,11 @@ function build_feature_flags_for_user($user){
         'display_controls' => !$strictCe && $proEnabled,
         'inventory' => $proEnabled,
         'topology' => $proEnabled,
+        'incident_workspace' => $proEnabled,
+        'incident_commander_mode' => $proEnabled,
+        'incident_command_timeline' => $proEnabled,
+        'incident_shift_handoff' => $proEnabled,
+        'incident_audit_events' => $proEnabled,
         'history' => $proEnabled,
         'telemetry_alert_confidence' => $proEnabled,
         'telemetry_impact_radius' => $proEnabled,
@@ -2082,7 +2087,11 @@ function ajax_action_requires_csrf($action){
         'clear',
         'simulate',
         'clearsim',
-        'clearall'
+        'clearall',
+        'incident_commander_assign',
+        'incident_timeline_add',
+        'incident_handoff_generate',
+        'incident_checklist_audit_add'
     ], true);
 }
 
@@ -2325,6 +2334,45 @@ function api_get_json($baseUrl, $path, $token = '', $timeoutSec = 6){
         CURLOPT_URL => $url,
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_HTTPHEADER => $headers,
+        CURLOPT_TIMEOUT => max(2, (int)$timeoutSec),
+    ]);
+    $resp = curl_exec($ch);
+    $err = curl_error($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    $latency = (int)round((microtime(true) - $start) * 1000);
+    $json = json_decode((string)$resp, true);
+    $ok = ($code >= 200 && $code < 300 && is_array($json));
+    return [
+        'ok' => $ok,
+        'code' => $code,
+        'latency_ms' => $latency,
+        'error' => $ok ? '' : ($err ?: ('http_' . $code)),
+        'json' => is_array($json) ? $json : null
+    ];
+}
+
+function api_post_json($baseUrl, $path, $body = [], $token = '', $timeoutSec = 6){
+    $base = rtrim((string)$baseUrl, '/');
+    $uri = '/' . ltrim((string)$path, '/');
+    $url = $base . $uri;
+    $start = microtime(true);
+    $ch = curl_init();
+    $headers = ['accept: application/json', 'content-type: application/json'];
+    if(trim((string)$token) !== ''){
+        $headers[] = 'Authorization: Bearer ' . trim((string)$token);
+    }
+    $payload = json_encode(is_array($body) ? $body : [], JSON_UNESCAPED_SLASHES);
+    if($payload === false){
+        $payload = '{}';
+    }
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER => $headers,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => $payload,
         CURLOPT_TIMEOUT => max(2, (int)$timeoutSec),
     ]);
     $resp = curl_exec($ch);
@@ -3031,6 +3079,286 @@ if(isset($_GET['ajax'])){
                 'events' => $eventsReq['latency_ms'],
             ],
             'fetched_at' => date('c')
+        ]);
+        exit;
+    }
+
+    if($_GET['ajax']==='incident_workspace'){
+        require_pro_feature('incident_workspace');
+        $activeLimit = (int)($_GET['active_limit'] ?? 80);
+        $recentLimit = (int)($_GET['recent_limit'] ?? 40);
+        if($activeLimit <= 0 || $activeLimit > 400) $activeLimit = 80;
+        if($recentLimit <= 0 || $recentLimit > 400) $recentLimit = 40;
+
+        $path = '/incidents/workspace?active_limit=' . $activeLimit . '&recent_limit=' . $recentLimit;
+        $workspaceReq = api_get_json($NOCWALL_API_URL, $path, $NOCWALL_API_TOKEN, 7);
+        if(!$workspaceReq['ok']){
+            http_response_code(502);
+            echo json_encode([
+                'ok' => 0,
+                'error' => 'incident_workspace_unreachable',
+                'message' => 'Incident workspace API is unavailable.',
+                'details' => [
+                    'ok' => $workspaceReq['ok'],
+                    'http' => $workspaceReq['code'],
+                    'error' => $workspaceReq['error'],
+                ],
+            ]);
+            exit;
+        }
+
+        $payload = $workspaceReq['json'];
+        if(!is_array($payload)){
+            $payload = [];
+        }
+        $payload['ok'] = 1;
+        $payload['api_latency'] = $workspaceReq['latency_ms'];
+        $payload['fetched_at'] = date('c');
+        echo json_encode($payload);
+        exit;
+    }
+
+    if($_GET['ajax']==='incident_commander_assign'){
+        require_pro_feature('incident_commander_mode');
+        if($_SERVER['REQUEST_METHOD'] !== 'POST'){
+            http_response_code(405);
+            echo json_encode(['ok'=>0,'error'=>'method_not_allowed']);
+            exit;
+        }
+
+        $incidentID = trim((string)($_POST['incident_id'] ?? ''));
+        if($incidentID === ''){
+            http_response_code(400);
+            echo json_encode(['ok'=>0,'error'=>'incident_id_required']);
+            exit;
+        }
+        $commander = trim((string)($_POST['commander'] ?? ''));
+        $actor = normalize_username($_SESSION['auth_user'] ?? '');
+        $path = '/incidents/' . rawurlencode($incidentID) . '/commander';
+        $assignReq = api_post_json($NOCWALL_API_URL, $path, [
+            'commander' => $commander,
+            'actor' => $actor
+        ], $NOCWALL_API_TOKEN, 7);
+        if(!$assignReq['ok']){
+            $status = ($assignReq['code'] === 404) ? 404 : 502;
+            http_response_code($status);
+            echo json_encode([
+                'ok' => 0,
+                'error' => ($status === 404 ? 'incident_not_found' : 'incident_commander_assign_failed'),
+                'message' => ($status === 404 ? 'Incident not found.' : 'Unable to assign incident commander.'),
+                'details' => [
+                    'http' => $assignReq['code'],
+                    'error' => $assignReq['error'],
+                ],
+            ]);
+            exit;
+        }
+
+        echo json_encode([
+            'ok' => 1,
+            'incident' => $assignReq['json'],
+            'api_latency' => $assignReq['latency_ms']
+        ]);
+        exit;
+    }
+
+    if($_GET['ajax']==='incident_timeline_add'){
+        require_pro_feature('incident_command_timeline');
+        if($_SERVER['REQUEST_METHOD'] !== 'POST'){
+            http_response_code(405);
+            echo json_encode(['ok'=>0,'error'=>'method_not_allowed']);
+            exit;
+        }
+
+        $incidentID = trim((string)($_POST['incident_id'] ?? ''));
+        $message = trim((string)($_POST['message'] ?? ''));
+        $eventType = trim((string)($_POST['event_type'] ?? 'note'));
+        if($incidentID === ''){
+            http_response_code(400);
+            echo json_encode(['ok'=>0,'error'=>'incident_id_required']);
+            exit;
+        }
+        if($message === ''){
+            http_response_code(400);
+            echo json_encode(['ok'=>0,'error'=>'message_required']);
+            exit;
+        }
+
+        $actor = normalize_username($_SESSION['auth_user'] ?? '');
+        $path = '/incidents/' . rawurlencode($incidentID) . '/timeline';
+        $timelineReq = api_post_json($NOCWALL_API_URL, $path, [
+            'event_type' => $eventType,
+            'message' => $message,
+            'actor' => $actor
+        ], $NOCWALL_API_TOKEN, 7);
+        if(!$timelineReq['ok']){
+            $status = ($timelineReq['code'] === 404) ? 404 : 502;
+            http_response_code($status);
+            echo json_encode([
+                'ok' => 0,
+                'error' => ($status === 404 ? 'incident_not_found' : 'incident_timeline_add_failed'),
+                'message' => ($status === 404 ? 'Incident not found.' : 'Unable to add incident timeline note.'),
+                'details' => [
+                    'http' => $timelineReq['code'],
+                    'error' => $timelineReq['error'],
+                ],
+            ]);
+            exit;
+        }
+
+        echo json_encode([
+            'ok' => 1,
+            'incident' => $timelineReq['json'],
+            'api_latency' => $timelineReq['latency_ms']
+        ]);
+        exit;
+    }
+
+    if($_GET['ajax']==='incident_handoff_history'){
+        require_pro_feature('incident_shift_handoff');
+        $limit = (int)($_GET['limit'] ?? 30);
+        if($limit <= 0 || $limit > 200) $limit = 30;
+
+        $path = '/incidents/handoffs?limit=' . $limit;
+        $historyReq = api_get_json($NOCWALL_API_URL, $path, $NOCWALL_API_TOKEN, 7);
+        if(!$historyReq['ok']){
+            http_response_code(502);
+            echo json_encode([
+                'ok' => 0,
+                'error' => 'incident_handoff_history_unreachable',
+                'message' => 'Incident handoff history API is unavailable.',
+                'details' => [
+                    'ok' => $historyReq['ok'],
+                    'http' => $historyReq['code'],
+                    'error' => $historyReq['error'],
+                ],
+            ]);
+            exit;
+        }
+
+        $payload = $historyReq['json'];
+        if(!is_array($payload)) $payload = [];
+        $payload['ok'] = 1;
+        $payload['api_latency'] = $historyReq['latency_ms'];
+        $payload['fetched_at'] = date('c');
+        echo json_encode($payload);
+        exit;
+    }
+
+    if($_GET['ajax']==='incident_handoff_generate'){
+        require_pro_feature('incident_shift_handoff');
+        if($_SERVER['REQUEST_METHOD'] !== 'POST'){
+            http_response_code(405);
+            echo json_encode(['ok'=>0,'error'=>'method_not_allowed']);
+            exit;
+        }
+
+        $note = trim((string)($_POST['note'] ?? ''));
+        $activeLimit = (int)($_POST['active_limit'] ?? 80);
+        if($activeLimit <= 0 || $activeLimit > 400) $activeLimit = 80;
+        $actor = normalize_username($_SESSION['auth_user'] ?? '');
+        $generateReq = api_post_json($NOCWALL_API_URL, '/incidents/handoff/generate', [
+            'actor' => $actor,
+            'note' => $note,
+            'active_limit' => $activeLimit
+        ], $NOCWALL_API_TOKEN, 7);
+        if(!$generateReq['ok']){
+            http_response_code(502);
+            echo json_encode([
+                'ok' => 0,
+                'error' => 'incident_handoff_generate_failed',
+                'message' => 'Unable to generate shift handoff brief.',
+                'details' => [
+                    'http' => $generateReq['code'],
+                    'error' => $generateReq['error'],
+                ],
+            ]);
+            exit;
+        }
+
+        echo json_encode([
+            'ok' => 1,
+            'handoff' => $generateReq['json'],
+            'api_latency' => $generateReq['latency_ms']
+        ]);
+        exit;
+    }
+
+    if($_GET['ajax']==='incident_audit_events'){
+        require_pro_feature('incident_audit_events');
+        $limit = (int)($_GET['limit'] ?? 120);
+        if($limit <= 0 || $limit > 500) $limit = 120;
+        $incidentID = trim((string)($_GET['incident_id'] ?? ''));
+        $action = trim((string)($_GET['action'] ?? ''));
+
+        $path = '/incidents/audit?limit=' . $limit;
+        if($incidentID !== '') $path .= '&incident_id=' . rawurlencode($incidentID);
+        if($action !== '') $path .= '&action=' . rawurlencode($action);
+        $auditReq = api_get_json($NOCWALL_API_URL, $path, $NOCWALL_API_TOKEN, 7);
+        if(!$auditReq['ok']){
+            http_response_code(502);
+            echo json_encode([
+                'ok' => 0,
+                'error' => 'incident_audit_unreachable',
+                'message' => 'Incident audit API is unavailable.',
+                'details' => [
+                    'ok' => $auditReq['ok'],
+                    'http' => $auditReq['code'],
+                    'error' => $auditReq['error'],
+                ],
+            ]);
+            exit;
+        }
+        $payload = $auditReq['json'];
+        if(!is_array($payload)) $payload = [];
+        $payload['ok'] = 1;
+        $payload['api_latency'] = $auditReq['latency_ms'];
+        $payload['fetched_at'] = date('c');
+        echo json_encode($payload);
+        exit;
+    }
+
+    if($_GET['ajax']==='incident_checklist_audit_add'){
+        require_pro_feature('incident_audit_events');
+        if($_SERVER['REQUEST_METHOD'] !== 'POST'){
+            http_response_code(405);
+            echo json_encode(['ok'=>0,'error'=>'method_not_allowed']);
+            exit;
+        }
+
+        $incidentID = trim((string)($_POST['incident_id'] ?? ''));
+        if($incidentID === ''){
+            http_response_code(400);
+            echo json_encode(['ok'=>0,'error'=>'incident_id_required']);
+            exit;
+        }
+        $actor = normalize_username($_SESSION['auth_user'] ?? '');
+        $path = '/incidents/' . rawurlencode($incidentID) . '/checklist/audit';
+        $auditPostReq = api_post_json($NOCWALL_API_URL, $path, [
+            'checklist_id' => trim((string)($_POST['checklist_id'] ?? '')),
+            'step_id' => trim((string)($_POST['step_id'] ?? '')),
+            'state' => trim((string)($_POST['state'] ?? '')),
+            'note' => trim((string)($_POST['note'] ?? '')),
+            'actor' => $actor
+        ], $NOCWALL_API_TOKEN, 7);
+        if(!$auditPostReq['ok']){
+            $status = ($auditPostReq['code'] === 404) ? 404 : 502;
+            http_response_code($status);
+            echo json_encode([
+                'ok' => 0,
+                'error' => ($status === 404 ? 'incident_not_found' : 'incident_checklist_audit_failed'),
+                'message' => ($status === 404 ? 'Incident not found.' : 'Unable to record checklist audit event.'),
+                'details' => [
+                    'http' => $auditPostReq['code'],
+                    'error' => $auditPostReq['error'],
+                ],
+            ]);
+            exit;
+        }
+        echo json_encode([
+            'ok' => 1,
+            'event' => $auditPostReq['json'],
+            'api_latency' => $auditPostReq['latency_ms']
         ]);
         exit;
     }
@@ -5307,6 +5635,46 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
         </section>
       </div>
     <?php endif; ?>
+    <?php if(!empty($NOCWALL_FEATURE_FLAGS['incident_workspace'])): ?>
+      <div id="incidentWorkspaceSummary" class="topology-health"></div>
+      <div id="incidentWorkspaceStatus" class="topology-status">Loading incident workspace...</div>
+      <div class="topology-ha-grid">
+        <section class="topology-ha-panel">
+          <h4>Incident Commander Workspace</h4>
+          <div id="incidentWorkspaceActive" class="topology-ha-list"></div>
+        </section>
+        <section class="topology-ha-panel">
+          <h4>Recent Incident Timeline</h4>
+          <div id="incidentWorkspaceRecent" class="topology-ha-list"></div>
+        </section>
+      </div>
+      <?php if(!empty($NOCWALL_FEATURE_FLAGS['incident_shift_handoff'])): ?>
+        <div class="topology-toolbar">
+          <label>Handoff Note
+            <input id="incidentHandoffNote" type="text" placeholder="optional shift summary note">
+          </label>
+          <button id="incidentHandoffGenerateBtn" type="button" class="btn-outline">Generate Shift Handoff</button>
+        </div>
+        <div id="incidentHandoffStatus" class="topology-status">Loading shift handoff history...</div>
+        <div class="topology-ha-grid">
+          <section class="topology-ha-panel">
+            <h4>Latest Shift Handoff</h4>
+            <div id="incidentHandoffLatest" class="topology-ha-list"></div>
+          </section>
+          <section class="topology-ha-panel">
+            <h4>Recent Handoff History</h4>
+            <div id="incidentHandoffHistory" class="topology-ha-list"></div>
+          </section>
+        </div>
+      <?php endif; ?>
+      <?php if(!empty($NOCWALL_FEATURE_FLAGS['incident_audit_events'])): ?>
+        <div id="incidentAuditStatus" class="topology-status">Loading incident audit events...</div>
+        <section class="topology-ha-panel">
+          <h4>Incident Audit Events</h4>
+          <div id="incidentAuditList" class="topology-ha-list"></div>
+        </section>
+      <?php endif; ?>
+    <?php endif; ?>
     <div id="topologyCanvasWrap" class="topology-canvas-wrap">
       <svg id="topologySvg" viewBox="0 0 1200 680" preserveAspectRatio="xMidYMid meet"></svg>
     </div>
@@ -5437,6 +5805,7 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
 <?php render_client_security_bootstrap_script(); ?>
 <script>
   window.NOCWALL_FEATURES = <?=json_encode($NOCWALL_FEATURE_FLAGS, JSON_UNESCAPED_SLASHES)?>;
+  window.NOCWALL_SESSION_USER = <?=json_encode(normalize_username($_SESSION['auth_user'] ?? ''), JSON_UNESCAPED_SLASHES)?>;
 </script>
 <script src="/assets/app.js?v=<?=$ASSET_VERSION?>"></script>
 </body>
