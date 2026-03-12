@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -27,11 +28,50 @@ func main() {
 		getenv("UISP_TOKEN", ""),
 		getenv("UISP_DEVICES_PATH", "/nms/api/v2.1/devices"),
 	)
+	ciscoConnector := NewVendorConnector(
+		"cisco",
+		"Cisco",
+		getenv("CISCO_URL", ""),
+		getenv("CISCO_TOKEN", ""),
+		getenv("CISCO_DEVICES_PATH", "/api/v1/devices"),
+		getenv("CISCO_AUTH_SCHEME", "bearer"),
+	)
+	juniperConnector := NewVendorConnector(
+		"juniper",
+		"Juniper",
+		getenv("JUNIPER_URL", ""),
+		getenv("JUNIPER_TOKEN", ""),
+		getenv("JUNIPER_DEVICES_PATH", "/api/v1/devices"),
+		getenv("JUNIPER_AUTH_SCHEME", "bearer"),
+	)
+	merakiConnector := NewVendorConnector(
+		"meraki",
+		"Meraki",
+		getenv("MERAKI_URL", ""),
+		getenv("MERAKI_TOKEN", ""),
+		getenv("MERAKI_DEVICES_PATH", "/devices/statuses"),
+		getenv("MERAKI_AUTH_SCHEME", "bearer"),
+	)
 
 	pollSec := getenvInt("UISP_POLL_INTERVAL_SEC", 0)
 	pollRetries := getenvInt("UISP_POLL_RETRIES", 1)
 	if pollSec > 0 {
 		go runSourcePoller(context.Background(), uispConnector, store, logger, time.Duration(pollSec)*time.Second, pollRetries)
+	}
+	ciscoPollSec := getenvInt("CISCO_POLL_INTERVAL_SEC", 0)
+	ciscoPollRetries := getenvInt("CISCO_POLL_RETRIES", 1)
+	if ciscoPollSec > 0 {
+		go runSourcePoller(context.Background(), ciscoConnector, store, logger, time.Duration(ciscoPollSec)*time.Second, ciscoPollRetries)
+	}
+	juniperPollSec := getenvInt("JUNIPER_POLL_INTERVAL_SEC", 0)
+	juniperPollRetries := getenvInt("JUNIPER_POLL_RETRIES", 1)
+	if juniperPollSec > 0 {
+		go runSourcePoller(context.Background(), juniperConnector, store, logger, time.Duration(juniperPollSec)*time.Second, juniperPollRetries)
+	}
+	merakiPollSec := getenvInt("MERAKI_POLL_INTERVAL_SEC", 0)
+	merakiPollRetries := getenvInt("MERAKI_POLL_RETRIES", 1)
+	if merakiPollSec > 0 {
+		go runSourcePoller(context.Background(), merakiConnector, store, logger, time.Duration(merakiPollSec)*time.Second, merakiPollRetries)
 	}
 
 	app := fiber.New()
@@ -76,6 +116,9 @@ func main() {
 				"agent_ingest":                 true,
 				"events_ingest":                true,
 				"source_uisp_poll":             true,
+				"source_cisco_poll":            true,
+				"source_juniper_poll":          true,
+				"source_meraki_poll":           true,
 				"topology_api":                 true,
 				"topology_path_trace":          true,
 				"topology_ha_watcher":          true,
@@ -94,9 +137,9 @@ func main() {
 				"incident_workspace_mode":      true,
 				"incident_shift_handoff":       true,
 				"incident_audit_events":        true,
-				"source_poll_background":       pollSec > 0,
+				"source_poll_background":       pollSec > 0 || ciscoPollSec > 0 || juniperPollSec > 0 || merakiPollSec > 0,
 				"cloud_multi_tenant_stub":      true,
-				"connector_multivendor_stub":   true,
+				"connector_multivendor_stub":   false,
 			},
 			PushRegister: apiBase + "/push/register",
 			Environment:  getenv("APP_ENV", "dev"),
@@ -142,6 +185,30 @@ func main() {
 			}
 		}
 		return c.JSON(store.GenerateIncidentShiftHandoff(req.Actor, req.Note, req.ActiveLimit))
+	})
+
+	app.Get("/incidents/:id/export", authMiddleware, func(c *fiber.Ctx) error {
+		id := c.Params("id")
+		format := normalizeIncidentExportFormat(c.Query("format", "markdown"))
+		if format == "" {
+			return c.Status(http.StatusBadRequest).JSON(fiber.Map{"code": "invalid_format", "message": "format must be markdown or pdf"})
+		}
+
+		doc, ok := store.IncidentTimelineExport(id)
+		if !ok {
+			return c.Status(http.StatusNotFound).JSON(fiber.Map{"code": "not_found", "message": "Incident not found"})
+		}
+
+		filename := IncidentTimelineExportFilename(doc.Incident, format)
+		c.Set(fiber.HeaderContentDisposition, fmt.Sprintf(`attachment; filename="%s"`, filename))
+		switch format {
+		case "pdf":
+			c.Type("pdf")
+			return c.Send(BuildIncidentTimelinePDF(doc))
+		default:
+			c.Set(fiber.HeaderContentType, "text/markdown; charset=utf-8")
+			return c.SendString(BuildIncidentTimelineMarkdown(doc))
+		}
 	})
 
 	app.Get("/incidents/audit", authMiddleware, func(c *fiber.Ctx) error {
@@ -254,10 +321,52 @@ func main() {
 		return c.JSON(store.TelemetryAlertIntelligence(limit, windowMinutes, burstThreshold))
 	})
 
-	app.Get("/sources/uisp/status", authMiddleware, func(c *fiber.Ctx) error {
-		status := uispConnector.Status()
-		return c.JSON(status)
-	})
+	registerSourceRoutes := func(source string, connector SourceConnector) {
+		app.Get("/sources/"+source+"/status", authMiddleware, func(c *fiber.Ctx) error {
+			return c.JSON(connector.Status())
+		})
+		app.Post("/sources/"+source+"/poll", authMiddleware, func(c *fiber.Ctx) error {
+			var req SourcePollRequest
+			if len(c.Body()) > 0 {
+				if err := c.BodyParser(&req); err != nil {
+					return c.Status(http.StatusBadRequest).JSON(fiber.Map{"code": "invalid_body", "message": "Invalid request body"})
+				}
+			}
+
+			batch, err := connector.Poll(c.Context(), req)
+			if err != nil {
+				store.RecordSourcePollOutcome(source, false, err.Error(), time.Now().UnixMilli())
+				store.DetectTelemetryGaps(time.Now().UnixMilli())
+				resp := batch.Response
+				resp.Stub = true
+				return c.Status(http.StatusBadGateway).JSON(resp)
+			}
+			store.RecordSourcePollOutcome(source, true, "", time.Now().UnixMilli())
+			ingested, incidents, dropped := ingestSourceEvents(store, batch.Events)
+			gapsCreated, gapsResolved := store.DetectTelemetryGaps(time.Now().UnixMilli())
+			batch.Response.Ingested = ingested
+			batch.Response.DroppedByGovernor = dropped
+			batch.Response.IncidentsCreated = incidents
+			batch.Response.Stub = true
+			logger.Info("source_poll_manual",
+				"source", source,
+				"fetched", batch.Response.Fetched,
+				"normalized", batch.Response.Normalized,
+				"emitted", batch.Response.Emitted,
+				"ingested", ingested,
+				"dropped_by_governor", dropped,
+				"incidents", incidents,
+				"gap_incidents_created", gapsCreated,
+				"gap_incidents_resolved", gapsResolved,
+				"demo", batch.Response.Demo,
+			)
+			return c.JSON(batch.Response)
+		})
+	}
+	registerSourceRoutes("uisp", uispConnector)
+	registerSourceRoutes("cisco", ciscoConnector)
+	registerSourceRoutes("juniper", juniperConnector)
+	registerSourceRoutes("meraki", merakiConnector)
 
 	app.Get("/inventory/schema", authMiddleware, func(c *fiber.Ctx) error {
 		return c.JSON(store.InventorySchema())
@@ -461,44 +570,6 @@ func main() {
 			Stub:    true,
 			Message: "identities merged",
 		})
-	})
-
-	app.Post("/sources/uisp/poll", authMiddleware, func(c *fiber.Ctx) error {
-		var req SourcePollRequest
-		if len(c.Body()) > 0 {
-			if err := c.BodyParser(&req); err != nil {
-				return c.Status(http.StatusBadRequest).JSON(fiber.Map{"code": "invalid_body", "message": "Invalid request body"})
-			}
-		}
-
-		batch, err := uispConnector.Poll(c.Context(), req)
-		if err != nil {
-			store.RecordSourcePollOutcome("uisp", false, err.Error(), time.Now().UnixMilli())
-			store.DetectTelemetryGaps(time.Now().UnixMilli())
-			resp := batch.Response
-			resp.Stub = true
-			return c.Status(http.StatusBadGateway).JSON(resp)
-		}
-		store.RecordSourcePollOutcome("uisp", true, "", time.Now().UnixMilli())
-		ingested, incidents, dropped := ingestSourceEvents(store, batch.Events)
-		gapsCreated, gapsResolved := store.DetectTelemetryGaps(time.Now().UnixMilli())
-		batch.Response.Ingested = ingested
-		batch.Response.DroppedByGovernor = dropped
-		batch.Response.IncidentsCreated = incidents
-		batch.Response.Stub = true
-		logger.Info("source_poll_manual",
-			"source", "uisp",
-			"fetched", batch.Response.Fetched,
-			"normalized", batch.Response.Normalized,
-			"emitted", batch.Response.Emitted,
-			"ingested", ingested,
-			"dropped_by_governor", dropped,
-			"incidents", incidents,
-			"gap_incidents_created", gapsCreated,
-			"gap_incidents_resolved", gapsResolved,
-			"demo", batch.Response.Demo,
-		)
-		return c.JSON(batch.Response)
 	})
 
 	app.Get("/agents", authMiddleware, func(c *fiber.Ctx) error {

@@ -603,15 +603,440 @@ function subscription_is_active($sub){
     return false;
 }
 
-function user_has_pro_entitlement($user){
-    if(!is_array($user)) return false;
-    return subscription_is_active($user['subscription'] ?? null);
+function default_user_beta_access_state(){
+    return [
+        'code' => '',
+        'status' => 'none', // none|active|revoked|expired
+        'redeemed_at' => '',
+        'expires_at' => '',
+        'updated_at' => ''
+    ];
 }
 
-function build_feature_flags_for_user($user){
+function normalize_user_beta_access_state($input){
+    $base = default_user_beta_access_state();
+    if(!is_array($input)) return $base;
+    $code = normalize_beta_key_code((string)($input['code'] ?? ''));
+    if($code !== ''){
+        $base['code'] = $code;
+    }
+    $status = strtolower(trim((string)($input['status'] ?? '')));
+    if(in_array($status, ['none','active','revoked','expired'], true)){
+        $base['status'] = $status;
+    }
+    foreach(['redeemed_at','expires_at','updated_at'] as $k){
+        if(array_key_exists($k, $input)){
+            $base[$k] = trim((string)$input[$k]);
+        }
+    }
+    if($base['code'] === '' && $base['status'] !== 'none'){
+        $base['status'] = 'none';
+    }
+    return $base;
+}
+
+function normalize_beta_key_code($value){
+    $code = strtoupper(trim((string)$value));
+    if($code === ''){
+        return '';
+    }
+    $code = preg_replace('/[^A-Z0-9-]+/', '', $code);
+    $code = trim((string)$code, '-');
+    if($code === ''){
+        return '';
+    }
+    if(strlen($code) < 8 || strlen($code) > 64){
+        return '';
+    }
+    return $code;
+}
+
+function beta_key_expiration_ts($value){
+    $raw = trim((string)$value);
+    if($raw === '') return 0;
+    $ts = (int)strtotime($raw);
+    return ($ts > 0) ? $ts : 0;
+}
+
+function beta_key_is_expired($key, $nowTs = null){
+    $ts = beta_key_expiration_ts((string)($key['expires_at'] ?? ''));
+    if($ts <= 0) return false;
+    $now = ($nowTs === null) ? time() : (int)$nowTs;
+    return $ts < $now;
+}
+
+function default_beta_key_state($code = ''){
+    $now = date('c');
+    return [
+        'code' => normalize_beta_key_code($code),
+        'status' => 'active', // active|disabled|expired
+        'max_redemptions' => 1,
+        'redeemed_count' => 0,
+        'expires_at' => '',
+        'issued_by' => '',
+        'notes' => '',
+        'created_at' => $now,
+        'updated_at' => $now,
+        'redemptions' => []
+    ];
+}
+
+function normalize_beta_key_redemptions($input){
+    $out = [];
+    if(!is_array($input)) return $out;
+    foreach($input as $k => $v){
+        $username = normalize_username($k);
+        $redeemedAt = trim((string)$v);
+        if($username === ''){
+            if(is_array($v)){
+                $username = normalize_username((string)($v['username'] ?? ''));
+                $redeemedAt = trim((string)($v['redeemed_at'] ?? ''));
+            } else {
+                continue;
+            }
+        }
+        if($username === ''){
+            continue;
+        }
+        $out[$username] = ($redeemedAt !== '' ? $redeemedAt : date('c'));
+    }
+    ksort($out);
+    return $out;
+}
+
+function normalize_beta_key_state($input, $fallbackCode = ''){
+    $base = default_beta_key_state($fallbackCode);
+    if(!is_array($input)){
+        return $base;
+    }
+    $code = normalize_beta_key_code((string)($input['code'] ?? $fallbackCode));
+    if($code === ''){
+        return $base;
+    }
+    $base['code'] = $code;
+    $status = strtolower(trim((string)($input['status'] ?? 'active')));
+    if(in_array($status, ['active','disabled','expired'], true)){
+        $base['status'] = $status;
+    }
+    $maxRedemptions = (int)($input['max_redemptions'] ?? 1);
+    if($maxRedemptions < 1) $maxRedemptions = 1;
+    if($maxRedemptions > 1000000) $maxRedemptions = 1000000;
+    $base['max_redemptions'] = $maxRedemptions;
+
+    foreach(['expires_at','issued_by','notes','created_at','updated_at'] as $k){
+        if(array_key_exists($k, $input)){
+            $base[$k] = trim((string)$input[$k]);
+        }
+    }
+    $base['redemptions'] = normalize_beta_key_redemptions($input['redemptions'] ?? []);
+    $base['redeemed_count'] = count($base['redemptions']);
+    if($base['redeemed_count'] > $base['max_redemptions']){
+        $base['redeemed_count'] = $base['max_redemptions'];
+    }
+    if($base['status'] === 'active' && beta_key_is_expired($base)){
+        $base['status'] = 'expired';
+    }
+    if(trim((string)$base['updated_at']) === ''){
+        $base['updated_at'] = date('c');
+    }
+    if(trim((string)$base['created_at']) === ''){
+        $base['created_at'] = (string)$base['updated_at'];
+    }
+    return $base;
+}
+
+function normalize_beta_keys_store($input){
+    $out = [];
+    if(!is_array($input)) return $out;
+    foreach($input as $k => $row){
+        $code = normalize_beta_key_code($k);
+        if($code === '' && is_array($row)){
+            $code = normalize_beta_key_code((string)($row['code'] ?? ''));
+        }
+        if($code === ''){
+            continue;
+        }
+        $out[$code] = normalize_beta_key_state($row, $code);
+    }
+    ksort($out);
+    return $out;
+}
+
+function normalize_beta_key_audit_events($input){
+    $out = [];
+    if(!is_array($input)) return $out;
+    foreach($input as $row){
+        if(!is_array($row)) continue;
+        $event = trim((string)($row['event'] ?? ''));
+        $code = normalize_beta_key_code((string)($row['code'] ?? ''));
+        $at = trim((string)($row['at'] ?? ''));
+        if($event === '' || $code === '' || $at === ''){
+            continue;
+        }
+        $out[] = [
+            'event' => $event,
+            'code' => $code,
+            'username' => normalize_username((string)($row['username'] ?? '')),
+            'actor' => trim((string)($row['actor'] ?? '')),
+            'at' => $at,
+            'meta' => is_array($row['meta'] ?? null) ? $row['meta'] : []
+        ];
+    }
+    return $out;
+}
+
+function append_beta_key_audit_event(&$store, $event, $code, $username = '', $actor = '', $meta = []){
+    $evt = trim((string)$event);
+    $normalizedCode = normalize_beta_key_code($code);
+    if($evt === '' || $normalizedCode === ''){
+        return;
+    }
+    if(!isset($store['beta_key_audit']) || !is_array($store['beta_key_audit'])){
+        $store['beta_key_audit'] = [];
+    }
+    $store['beta_key_audit'][] = [
+        'event' => $evt,
+        'code' => $normalizedCode,
+        'username' => normalize_username($username),
+        'actor' => trim((string)$actor),
+        'at' => date('c'),
+        'meta' => is_array($meta) ? $meta : []
+    ];
+    if(count($store['beta_key_audit']) > 1000){
+        $store['beta_key_audit'] = array_slice($store['beta_key_audit'], -1000);
+    }
+}
+
+function beta_key_error_message($errorCode){
+    $code = trim((string)$errorCode);
+    if($code === 'invalid_beta_key') return 'The beta key is invalid.';
+    if($code === 'beta_key_disabled') return 'This beta key has been disabled.';
+    if($code === 'beta_key_expired') return 'This beta key has expired.';
+    if($code === 'beta_key_max_redemptions_reached') return 'This beta key has reached its redemption limit.';
+    if($code === 'beta_key_not_found') return 'The beta key was not found.';
+    if($code === 'invalid_user') return 'Unable to redeem key for this account.';
+    return 'Unable to redeem beta key.';
+}
+
+function user_beta_key_entitlement_details($store, $user){
+    $empty = ['ok' => false, 'source' => 'none', 'code' => '', 'expires_at' => '', 'reason' => 'none'];
+    if(!is_array($user)) return $empty;
+    $betaAccess = normalize_user_beta_access_state($user['beta_access'] ?? null);
+    $code = normalize_beta_key_code((string)$betaAccess['code']);
+    if($code === ''){
+        return $empty;
+    }
+    $keys = normalize_beta_keys_store($store['beta_keys'] ?? []);
+    if(!isset($keys[$code]) || !is_array($keys[$code])){
+        return ['ok' => false, 'source' => 'beta_key', 'code' => $code, 'expires_at' => '', 'reason' => 'beta_key_not_found'];
+    }
+    $key = normalize_beta_key_state($keys[$code], $code);
+    $username = normalize_username((string)($user['username'] ?? ''));
+    if($username === ''){
+        return ['ok' => false, 'source' => 'beta_key', 'code' => $code, 'expires_at' => (string)$key['expires_at'], 'reason' => 'invalid_user'];
+    }
+    if(!array_key_exists($username, $key['redemptions'])){
+        return ['ok' => false, 'source' => 'beta_key', 'code' => $code, 'expires_at' => (string)$key['expires_at'], 'reason' => 'not_redeemed'];
+    }
+    if((string)$key['status'] === 'disabled'){
+        return ['ok' => false, 'source' => 'beta_key', 'code' => $code, 'expires_at' => (string)$key['expires_at'], 'reason' => 'beta_key_disabled'];
+    }
+    if(beta_key_is_expired($key)){
+        return ['ok' => false, 'source' => 'beta_key', 'code' => $code, 'expires_at' => (string)$key['expires_at'], 'reason' => 'beta_key_expired'];
+    }
+    if((string)$key['status'] === 'expired'){
+        return ['ok' => false, 'source' => 'beta_key', 'code' => $code, 'expires_at' => (string)$key['expires_at'], 'reason' => 'beta_key_expired'];
+    }
+    return [
+        'ok' => true,
+        'source' => 'beta_key',
+        'code' => $code,
+        'expires_at' => (string)$key['expires_at'],
+        'reason' => ''
+    ];
+}
+
+function beta_access_public_view($store, $user){
+    $access = normalize_user_beta_access_state(is_array($user) ? ($user['beta_access'] ?? null) : null);
+    if($access['code'] === ''){
+        return [
+            'code' => '',
+            'status' => 'none',
+            'redeemed_at' => '',
+            'expires_at' => '',
+            'active' => false
+        ];
+    }
+    $details = user_beta_key_entitlement_details($store, $user);
+    $status = $details['ok'] ? 'active' : (string)($details['reason'] ?: $access['status']);
+    return [
+        'code' => $access['code'],
+        'status' => $status,
+        'redeemed_at' => $access['redeemed_at'],
+        'expires_at' => ($details['expires_at'] !== '' ? $details['expires_at'] : $access['expires_at']),
+        'active' => !empty($details['ok'])
+    ];
+}
+
+function resolve_user_entitlement($store, $user){
+    if(!is_array($user)){
+        return ['pro' => false, 'source' => 'none', 'beta_key' => ''];
+    }
+    if(subscription_is_active($user['subscription'] ?? null)){
+        return ['pro' => true, 'source' => 'subscription', 'beta_key' => ''];
+    }
+    $beta = user_beta_key_entitlement_details($store, $user);
+    if(!empty($beta['ok'])){
+        return ['pro' => true, 'source' => 'beta_key', 'beta_key' => (string)$beta['code']];
+    }
+    return ['pro' => false, 'source' => 'ce', 'beta_key' => ''];
+}
+
+function user_has_pro_entitlement($user, $store = null){
+    if(!is_array($user)) return false;
+    if(!is_array($store)){
+        return subscription_is_active($user['subscription'] ?? null);
+    }
+    $resolved = resolve_user_entitlement($store, $user);
+    return !empty($resolved['pro']);
+}
+
+function redeem_beta_key_for_user(&$store, $username, $rawCode, $actor = 'self', &$error = ''){
+    $error = '';
+    $u = normalize_username($username);
+    if($u === '' || !isset($store['users'][$u]) || !is_array($store['users'][$u])){
+        $error = 'invalid_user';
+        return null;
+    }
+    $code = normalize_beta_key_code($rawCode);
+    if($code === ''){
+        $error = 'invalid_beta_key';
+        return null;
+    }
+    $store['beta_keys'] = normalize_beta_keys_store($store['beta_keys'] ?? []);
+    if(!isset($store['beta_keys'][$code])){
+        $error = 'beta_key_not_found';
+        return null;
+    }
+    $key = normalize_beta_key_state($store['beta_keys'][$code], $code);
+    $now = date('c');
+    $nowTs = time();
+
+    if($key['status'] === 'active' && beta_key_is_expired($key, $nowTs)){
+        $key['status'] = 'expired';
+        $key['updated_at'] = $now;
+        $store['beta_keys'][$code] = $key;
+        $error = 'beta_key_expired';
+        return null;
+    }
+    if($key['status'] === 'disabled'){
+        $error = 'beta_key_disabled';
+        return null;
+    }
+    if($key['status'] === 'expired'){
+        $error = 'beta_key_expired';
+        return null;
+    }
+
+    $alreadyRedeemed = array_key_exists($u, $key['redemptions']);
+    if(!$alreadyRedeemed && $key['redeemed_count'] >= (int)$key['max_redemptions']){
+        $error = 'beta_key_max_redemptions_reached';
+        return null;
+    }
+
+    if(!$alreadyRedeemed){
+        $key['redemptions'][$u] = $now;
+        $key['redeemed_count'] = count($key['redemptions']);
+        $key['updated_at'] = $now;
+        append_beta_key_audit_event($store, 'beta_key_redeem', $code, $u, $actor, [
+            'max_redemptions' => (int)$key['max_redemptions'],
+            'redeemed_count' => (int)$key['redeemed_count']
+        ]);
+    }
+    $store['beta_keys'][$code] = $key;
+
+    $access = normalize_user_beta_access_state($store['users'][$u]['beta_access'] ?? null);
+    $access['code'] = $code;
+    $access['status'] = 'active';
+    $access['redeemed_at'] = ($alreadyRedeemed && $access['code'] === $code && trim((string)$access['redeemed_at']) !== '')
+        ? (string)$access['redeemed_at']
+        : $now;
+    $access['expires_at'] = trim((string)$key['expires_at']);
+    $access['updated_at'] = $now;
+    $store['users'][$u]['beta_access'] = $access;
+    $store['users'][$u]['updated_at'] = $now;
+
+    return [
+        'ok' => true,
+        'code' => $code,
+        'already_redeemed' => $alreadyRedeemed,
+        'expires_at' => (string)$key['expires_at']
+    ];
+}
+
+function set_beta_key_status(&$store, $rawCode, $nextStatus, $actor = 'ops', $reason = ''){
+    $code = normalize_beta_key_code($rawCode);
+    if($code === ''){
+        return false;
+    }
+    $normalizedStatus = strtolower(trim((string)$nextStatus));
+    if($normalizedStatus === 'revoked'){
+        $normalizedStatus = 'disabled';
+    }
+    if(!in_array($normalizedStatus, ['active','disabled','expired'], true)){
+        return false;
+    }
+    $store['beta_keys'] = normalize_beta_keys_store($store['beta_keys'] ?? []);
+    if(!isset($store['beta_keys'][$code]) || !is_array($store['beta_keys'][$code])){
+        return false;
+    }
+    $now = date('c');
+    $key = normalize_beta_key_state($store['beta_keys'][$code], $code);
+    $key['status'] = $normalizedStatus;
+    $key['updated_at'] = $now;
+    $store['beta_keys'][$code] = $key;
+
+    if(isset($store['users']) && is_array($store['users'])){
+        foreach($key['redemptions'] as $uname => $redeemedAt){
+            if(!isset($store['users'][$uname]) || !is_array($store['users'][$uname])){
+                continue;
+            }
+            $access = normalize_user_beta_access_state($store['users'][$uname]['beta_access'] ?? null);
+            if($access['code'] !== $code){
+                continue;
+            }
+            if($normalizedStatus === 'active'){
+                $access['status'] = 'active';
+            } elseif($normalizedStatus === 'expired'){
+                $access['status'] = 'expired';
+            } else {
+                $access['status'] = 'revoked';
+            }
+            if(trim((string)$access['redeemed_at']) === ''){
+                $access['redeemed_at'] = trim((string)$redeemedAt);
+            }
+            $access['expires_at'] = trim((string)$key['expires_at']);
+            $access['updated_at'] = $now;
+            $store['users'][$uname]['beta_access'] = $access;
+            $store['users'][$uname]['updated_at'] = $now;
+        }
+    }
+
+    append_beta_key_audit_event(
+        $store,
+        ($normalizedStatus === 'active' ? 'beta_key_enable' : 'beta_key_revoke'),
+        $code,
+        '',
+        $actor,
+        ['status' => $normalizedStatus, 'reason' => trim((string)$reason)]
+    );
+    return true;
+}
+
+function build_feature_flags_for_user($user, $store = null){
     global $NOCWALL_FEATURE_PROFILE, $NOCWALL_PRO_FEATURES, $NOCWALL_STRICT_CE, $NOCWALL_STRICT_OVERRIDE_SET;
 
-    $hasUserPro = user_has_pro_entitlement($user);
+    $hasUserPro = user_has_pro_entitlement($user, $store);
     $proEnabled = ($NOCWALL_PRO_FEATURES || $hasUserPro);
 
     // If strict override wasn't explicitly forced, strict mode follows entitlement.
@@ -1062,15 +1487,310 @@ function normalize_user_preferences($input){
     return $base;
 }
 
+function sanitize_dashboard_settings_for_flags($settings, $flags){
+    $normalized = normalize_dashboard_settings($settings);
+    $hasTopology = !empty($flags['topology']);
+    if(!$hasTopology && ($normalized['default_tab'] ?? 'gateways') === 'topology'){
+        $normalized['default_tab'] = 'gateways';
+    }
+    return $normalized;
+}
+
+function sanitize_user_preferences_for_flags($prefs, $flags){
+    $normalized = normalize_user_preferences($prefs);
+    $normalized['dashboard_settings'] = sanitize_dashboard_settings_for_flags($normalized['dashboard_settings'] ?? null, $flags);
+    return $normalized;
+}
+
 function user_demo_data_enabled($user){
     if(!is_array($user)) return false;
     return normalize_toggle_bool($user['demo_data_enabled'] ?? false);
+}
+
+function supported_source_types(){
+    return ['uisp','cisco','juniper','meraki','generic'];
+}
+
+function normalize_source_type($type){
+    $value = strtolower(trim((string)$type));
+    if(!in_array($value, supported_source_types(), true)){
+        return 'uisp';
+    }
+    return $value;
+}
+
+function source_type_label($type){
+    $normalized = normalize_source_type($type);
+    if($normalized === 'cisco') return 'Cisco';
+    if($normalized === 'juniper') return 'Juniper';
+    if($normalized === 'meraki') return 'Meraki';
+    if($normalized === 'generic') return 'Generic HTTP';
+    return 'UISP';
+}
+
+function source_default_name($type){
+    $normalized = normalize_source_type($type);
+    if($normalized === 'cisco') return 'Cisco Source';
+    if($normalized === 'juniper') return 'Juniper Source';
+    if($normalized === 'meraki') return 'Meraki Dashboard';
+    if($normalized === 'generic') return 'Generic Source';
+    return 'UISP Source';
+}
+
+function source_default_api_path($type){
+    $normalized = normalize_source_type($type);
+    if($normalized === 'uisp') return '/nms/api/v2.1/devices';
+    if($normalized === 'meraki') return '/devices/statuses';
+    if($normalized === 'generic') return '/devices';
+    return '/api/v1/devices';
+}
+
+function supported_source_auth_schemes(){
+    return ['bearer','x-auth-token','token','authorization','none'];
+}
+
+function source_default_auth_scheme($type){
+    $normalized = normalize_source_type($type);
+    if($normalized === 'uisp') return 'x-auth-token';
+    if($normalized === 'juniper') return 'x-auth-token';
+    if($normalized === 'meraki') return 'bearer';
+    if($normalized === 'generic') return 'bearer';
+    return 'bearer';
+}
+
+function normalize_source_auth_scheme($value, $type = 'generic'){
+    $scheme = strtolower(trim((string)$value));
+    if(!in_array($scheme, supported_source_auth_schemes(), true)){
+        return source_default_auth_scheme($type);
+    }
+    return $scheme;
+}
+
+function normalize_source_api_path($value, $type = 'uisp'){
+    $path = trim((string)$value);
+    if($path === ''){
+        return source_default_api_path($type);
+    }
+    if($path[0] !== '/'){
+        $path = '/' . $path;
+    }
+    return $path;
+}
+
+function build_source_auth_headers($type, $token, $authScheme = ''){
+    $normalizedType = normalize_source_type($type);
+    $scheme = normalize_source_auth_scheme($authScheme, $normalizedType);
+    $headers = ['accept: application/json'];
+    $secret = trim((string)$token);
+    if($secret === '' || $scheme === 'none'){
+        return $headers;
+    }
+    if($normalizedType === 'uisp' && $authScheme === ''){
+        $headers[] = 'x-auth-token: ' . $secret;
+        $headers[] = 'authorization: Bearer ' . $secret;
+        return $headers;
+    }
+    if($scheme === 'x-auth-token'){
+        $headers[] = 'x-auth-token: ' . $secret;
+    } elseif($scheme === 'token'){
+        $headers[] = 'token: ' . $secret;
+    } elseif($scheme === 'authorization'){
+        $headers[] = 'authorization: ' . $secret;
+    } else {
+        $headers[] = 'authorization: Bearer ' . $secret;
+    }
+    return $headers;
+}
+
+function source_requires_token($src){
+    $type = normalize_source_type($src['type'] ?? 'uisp');
+    $scheme = normalize_source_auth_scheme($src['auth_scheme'] ?? '', $type);
+    return $scheme !== 'none';
+}
+
+function extract_source_response_items($payload){
+    $items = [];
+    if(!is_array($payload)) return $items;
+    $isList = (count($payload) === 0) ? true : (array_keys($payload) === range(0, count($payload) - 1));
+    if($isList){
+        foreach($payload as $row){
+            if(is_array($row)) $items[] = $row;
+        }
+        return $items;
+    }
+    foreach(['devices','items','data','results','nodes'] as $key){
+        if(!isset($payload[$key]) || !is_array($payload[$key])) continue;
+        foreach($payload[$key] as $row){
+            if(is_array($row)) $items[] = $row;
+        }
+        if(count($items) > 0) return $items;
+    }
+    return $items;
+}
+
+function source_pick_path_value($item, $path){
+    $current = $item;
+    foreach($path as $segment){
+        if(!is_array($current) || !array_key_exists($segment, $current)){
+            return null;
+        }
+        $current = $current[$segment];
+    }
+    return $current;
+}
+
+function source_pick_string($item, ...$paths){
+    foreach($paths as $path){
+        $value = source_pick_path_value($item, $path);
+        if(is_string($value) || is_numeric($value)){
+            $text = trim((string)$value);
+            if($text !== '') return $text;
+        }
+    }
+    return '';
+}
+
+function source_pick_bool($item, ...$paths){
+    foreach($paths as $path){
+        $value = source_pick_path_value($item, $path);
+        if(is_bool($value)) return $value;
+        if(is_numeric($value)) return ((float)$value) > 0;
+        if(is_string($value)){
+            $normalized = strtolower(trim($value));
+            if(in_array($normalized, ['true','yes','1','online','up','connected','reachable','healthy','ok','active'], true)) return true;
+            if(in_array($normalized, ['false','no','0','offline','down','disconnected','unreachable','failed','inactive','critical','degraded'], true)) return false;
+        }
+    }
+    return null;
+}
+
+function source_pick_float($item, ...$paths){
+    foreach($paths as $path){
+        $value = source_pick_path_value($item, $path);
+        if(is_numeric($value)) return (float)$value;
+    }
+    return null;
+}
+
+function source_online_from_state($value){
+    $state = strtolower(trim((string)$value));
+    if($state === '') return true;
+    if(in_array($state, ['online','up','connected','reachable','active','healthy','ok','ready','enabled','alerting'], true)) return true;
+    if(in_array($state, ['offline','down','disconnected','unreachable','inactive','failed','critical','degraded','disabled','dormant'], true)) return false;
+    return true;
+}
+
+function normalize_generic_role($value){
+    $role = strtolower(trim((string)$value));
+    if($role === '') return 'router';
+    if(strpos($role, 'gateway') !== false || strpos($role, 'firewall') !== false || strpos($role, 'edge') !== false || strpos($role, 'appliance') !== false) return 'gateway';
+    if(strpos($role, 'cellulargateway') !== false || strpos($role, 'campusgateway') !== false || strpos($role, 'secureconnect') !== false) return 'gateway';
+    if(strpos($role, 'switch') !== false) return 'switch';
+    if(strpos($role, 'ap') !== false || strpos($role, 'wireless') !== false || strpos($role, 'access point') !== false) return 'ap';
+    if(strpos($role, 'router') !== false) return 'router';
+    return 'router';
+}
+
+function normalize_source_wallboard_devices($type, $rows, $src){
+    $normalizedType = normalize_source_type($type);
+    $out = [];
+    foreach(extract_source_response_items($rows) as $row){
+        if(!is_array($row)) continue;
+        if($normalizedType === 'uisp'){
+            $id = device_key($row);
+            $role = device_role($row);
+            if($id === '') continue;
+            $out[] = [
+                'id' => $id,
+                'name' => (string)($row['identification']['name'] ?? $id),
+                'role' => $role,
+                'gateway' => is_gateway($row),
+                'ap' => is_ap($row),
+                'router' => is_router($row),
+                'switch' => is_switch($row),
+                'backbone' => is_backbone($row),
+                'site_id' => (string)($row['identification']['site']['id'] ?? $row['identification']['siteId'] ?? ''),
+                'site' => (string)($row['identification']['site']['name'] ?? $row['site']['name'] ?? $row['identification']['siteName'] ?? ''),
+                'hostname' => (string)($row['identification']['hostname'] ?? ''),
+                'ip' => (string)($row['ipAddress'] ?? ''),
+                'mac' => (string)($row['identification']['mac'] ?? ''),
+                'serial' => (string)($row['identification']['serialNumber'] ?? ''),
+                'vendor' => (string)($row['identification']['vendor'] ?? ''),
+                'model' => (string)($row['identification']['model'] ?? ''),
+                'online' => is_online($row),
+                'cpu' => $row['overview']['cpu'] ?? null,
+                'ram' => $row['overview']['ram'] ?? null,
+                'temp' => $row['overview']['temperature'] ?? null,
+                'latency' => null,
+                'uptime' => ($row['overview']['uptime'] ?? $row['overview']['uptimeSeconds'] ?? $row['overview']['uptime_sec'] ?? null),
+                'source_id' => (string)($src['id'] ?? ''),
+                'source_name' => (string)($src['name'] ?? ''),
+                'source_type' => $normalizedType
+            ];
+            continue;
+        }
+
+        $id = source_pick_string($row,
+            ['id'],
+            ['deviceId'],
+            ['device_id'],
+            ['serial'],
+            ['serialNumber'],
+            ['mac'],
+            ['macAddress'],
+            ['hostname'],
+            ['hostName'],
+            ['name']
+        );
+        if($id === '') continue;
+        $role = normalize_generic_role(source_pick_string($row, ['role'], ['type'], ['deviceType'], ['productType'], ['category']));
+        $online = source_pick_bool($row,
+            ['online'],
+            ['isOnline'],
+            ['reachable'],
+            ['connected'],
+            ['status', 'online'],
+            ['status', 'reachable']
+        );
+        if($online === null){
+            $online = source_online_from_state(source_pick_string($row, ['status'], ['state'], ['health'], ['connectionState'], ['connectivity']));
+        }
+        $out[] = [
+            'id' => $id,
+            'name' => source_pick_string($row, ['name'], ['displayName'], ['deviceName'], ['hostname'], ['hostName']) ?: $id,
+            'role' => $role,
+            'gateway' => ($role === 'gateway'),
+            'ap' => ($role === 'ap'),
+            'router' => ($role === 'router'),
+            'switch' => ($role === 'switch'),
+            'backbone' => in_array($role, ['gateway','ap','router','switch'], true),
+            'site_id' => source_pick_string($row, ['siteId'], ['site_id'], ['site', 'id'], ['networkId'], ['network_id'], ['location', 'id']) ?: (string)$normalizedType,
+            'site' => source_pick_string($row, ['siteName'], ['site_name'], ['site', 'name'], ['networkName'], ['network_name'], ['location', 'name']),
+            'hostname' => source_pick_string($row, ['hostname'], ['hostName'], ['host']),
+            'ip' => source_pick_string($row, ['ip'], ['ipAddress'], ['ip_address'], ['managementIp'], ['management_ip'], ['address']),
+            'mac' => source_pick_string($row, ['mac'], ['macAddress'], ['mac_address']),
+            'serial' => source_pick_string($row, ['serial'], ['serialNumber']),
+            'vendor' => source_pick_string($row, ['vendor'], ['manufacturer']) ?: source_type_label($normalizedType),
+            'model' => source_pick_string($row, ['model'], ['product'], ['sku']),
+            'online' => !!$online,
+            'cpu' => source_pick_float($row, ['cpu'], ['status', 'cpu']),
+            'ram' => source_pick_float($row, ['ram'], ['memory'], ['status', 'memory']),
+            'temp' => source_pick_float($row, ['temperature'], ['temp'], ['status', 'temperature']),
+            'latency' => source_pick_float($row, ['latency'], ['latencyMs'], ['latency_ms'], ['ping'], ['status', 'latencyMs']),
+            'uptime' => source_pick_float($row, ['uptime'], ['uptimeSeconds'], ['uptime_sec']),
+            'source_id' => (string)($src['id'] ?? ''),
+            'source_name' => (string)($src['name'] ?? ''),
+            'source_type' => $normalizedType
+        ];
+    }
+    return $out;
 }
 
 function normalize_source_status_entry($row){
     if(!is_array($row)) return null;
     $id = trim((string)($row['id'] ?? ''));
     if($id === '') return null;
+    $type = normalize_source_type($row['type'] ?? 'uisp');
     $name = trim((string)($row['name'] ?? $id));
     $url = normalize_uisp_url($row['url'] ?? '');
     $lastPollAt = trim((string)($row['last_poll_at'] ?? ''));
@@ -1083,8 +1803,11 @@ function normalize_source_status_entry($row){
     $error = trim((string)($row['error'] ?? ''));
     return [
         'id' => $id,
+        'type' => $type,
         'name' => ($name !== '' ? $name : $id),
         'url' => $url,
+        'api_path' => normalize_source_api_path($row['api_path'] ?? '', $type),
+        'auth_scheme' => normalize_source_auth_scheme($row['auth_scheme'] ?? '', $type),
         'ok' => !empty($row['ok']),
         'http' => $httpCode,
         'latency_ms' => $latency,
@@ -1148,9 +1871,14 @@ function summarize_source_status_rows($rows){
     return $summary;
 }
 
-function probe_uisp_source($src){
+function probe_nms_source($src){
+    $type = normalize_source_type($src['type'] ?? 'uisp');
+    $apiPath = normalize_source_api_path($src['api_path'] ?? '', $type);
+    $authScheme = normalize_source_auth_scheme($src['auth_scheme'] ?? '', $type);
+
     $out = [
         'id' => (string)($src['id'] ?? ''),
+        'type' => $type,
         'name' => (string)($src['name'] ?? ''),
         'url' => normalize_uisp_url($src['url'] ?? ''),
         'ok' => false,
@@ -1172,12 +1900,13 @@ function probe_uisp_source($src){
             'api_http' => 0,
             'api_latency_ms' => 0,
             'api_error' => '',
-            'api_path' => '/nms/api/v2.1/devices'
+            'api_path' => $apiPath,
+            'auth_scheme' => $authScheme
         ]
     ];
     $url = rtrim((string)$out['url'], '/');
     $token = trim((string)($src['token'] ?? ''));
-    if($url === '' || $token === ''){
+    if($url === '' || ($token === '' && $authScheme !== 'none')){
         $out['error'] = 'invalid_source';
         return $out;
     }
@@ -1235,10 +1964,11 @@ function probe_uisp_source($src){
 
     $ch = curl_init();
     $start = microtime(true);
+    $headers = build_source_auth_headers($type, $token, $authScheme);
     curl_setopt_array($ch,[
-        CURLOPT_URL => $url . '/nms/api/v2.1/devices',
+        CURLOPT_URL => $url . $apiPath,
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_HTTPHEADER => ['accept: application/json', 'x-auth-token: ' . $token],
+        CURLOPT_HTTPHEADER => $headers,
         CURLOPT_TIMEOUT => 10
     ]);
     $resp = curl_exec($ch);
@@ -1247,7 +1977,7 @@ function probe_uisp_source($src){
     $err = (string)curl_error($ch);
     curl_close($ch);
     $rows = json_decode((string)$resp, true);
-    $count = is_array($rows) ? count($rows) : 0;
+    $count = count(normalize_source_wallboard_devices($type, $rows, $src));
     $ok = ($code >= 200 && $code < 300);
     $out['ok'] = $ok;
     $out['http'] = $code;
@@ -1259,6 +1989,10 @@ function probe_uisp_source($src){
     $out['diagnostics']['api_latency_ms'] = $lat;
     $out['diagnostics']['api_error'] = $out['error'];
     return $out;
+}
+
+function probe_uisp_source($src){
+    return probe_nms_source($src);
 }
 
 function build_demo_wallboard_devices(&$cache){
@@ -1586,18 +2320,28 @@ function normalize_user_source($src, $fallbackName = 'UISP Source'){
     if(!is_array($src)) return null;
     $id = trim((string)($src['id'] ?? ''));
     if($id === '') $id = generate_source_id();
+    $type = normalize_source_type($src['type'] ?? 'uisp');
     $name = trim((string)($src['name'] ?? ''));
-    if($name === '') $name = $fallbackName;
+    if($name === ''){
+        $resolvedFallback = trim((string)$fallbackName);
+        $name = ($resolvedFallback !== '' ? $resolvedFallback : source_default_name($type));
+    }
     $url = normalize_uisp_url($src['url'] ?? '');
     $token = trim((string)($src['token'] ?? ''));
-    if($url === '' || $token === '') return null;
+    $apiPath = normalize_source_api_path($src['api_path'] ?? '', $type);
+    $authScheme = normalize_source_auth_scheme($src['auth_scheme'] ?? '', $type);
+    if($url === '') return null;
+    if($token === '' && $authScheme !== 'none') return null;
     $enabledRaw = $src['enabled'] ?? true;
     $enabled = !($enabledRaw === false || $enabledRaw === 0 || $enabledRaw === '0' || strtolower((string)$enabledRaw) === 'false');
     return [
         'id' => $id,
+        'type' => $type,
         'name' => $name,
         'url' => $url,
         'token' => $token,
+        'api_path' => $apiPath,
+        'auth_scheme' => $authScheme,
         'enabled' => $enabled,
         'created_at' => (string)($src['created_at'] ?? date('c')),
         'updated_at' => (string)($src['updated_at'] ?? date('c'))
@@ -1616,9 +2360,37 @@ function get_stored_user_sources($user){
     return $out;
 }
 
+function get_effective_sources_for_management($user, $envUrl, $envToken){
+    $sources = [];
+    foreach(get_stored_user_sources($user) as $src){
+        if(!empty($src['enabled'])) $sources[] = $src;
+    }
+    if(count($sources) > 0){
+        return $sources;
+    }
+
+    $fallbackUisp = get_effective_uisp_sources($user, $envUrl, $envToken);
+    foreach($fallbackUisp as $src){
+        $fallbackId = (string)($src['id'] ?? '');
+        $exists = false;
+        for($i=0; $i<count($sources); $i++){
+            if((string)($sources[$i]['id'] ?? '') === $fallbackId){
+                $exists = true;
+                break;
+            }
+        }
+        if(!$exists){
+            $sources[] = $src;
+        }
+    }
+    return $sources;
+}
+
 function get_effective_uisp_sources($user, $envUrl, $envToken){
     $sources = [];
     foreach(get_stored_user_sources($user) as $src){
+        $type = normalize_source_type($src['type'] ?? 'uisp');
+        if($type !== 'uisp') continue;
         if(!empty($src['enabled'])) $sources[] = $src;
     }
 
@@ -1630,6 +2402,7 @@ function get_effective_uisp_sources($user, $envUrl, $envToken){
     if($legacyToken !== '' && $legacyToken !== 'changeme' && $base !== '' && !is_placeholder_uisp_url($base)){
         $sources[] = [
             'id' => 'legacy-account',
+            'type' => 'uisp',
             'name' => 'Legacy Account UISP',
             'url' => $base,
             'token' => $legacyToken,
@@ -1643,6 +2416,7 @@ function get_effective_uisp_sources($user, $envUrl, $envToken){
     if($token !== '' && $token !== 'changeme' && $base !== '' && !is_placeholder_uisp_url($base)){
         $sources[] = [
             'id' => 'server-default',
+            'type' => 'uisp',
             'name' => 'Server Default UISP',
             'url' => $base,
             'token' => $token,
@@ -1663,6 +2437,7 @@ function default_admin_user(){
         'source_status' => [],
         'preferences' => default_user_preferences(),
         'subscription' => default_subscription_state(),
+        'beta_access' => default_user_beta_access_state(),
         'created_at' => $now,
         'updated_at' => $now
     ];
@@ -1673,6 +2448,16 @@ function bootstrap_users_store($usersFile, $legacyAuthFile, $envUrl, $envToken){
     $didMutate = false;
 
     if(is_array($store) && isset($store['users']) && is_array($store['users']) && count($store['users']) > 0){
+        $normalizedBetaKeys = normalize_beta_keys_store($store['beta_keys'] ?? null);
+        if(json_encode($normalizedBetaKeys) !== json_encode($store['beta_keys'] ?? null)){
+            $store['beta_keys'] = $normalizedBetaKeys;
+            $didMutate = true;
+        }
+        $normalizedBetaAudit = normalize_beta_key_audit_events($store['beta_key_audit'] ?? null);
+        if(json_encode($normalizedBetaAudit) !== json_encode($store['beta_key_audit'] ?? null)){
+            $store['beta_key_audit'] = $normalizedBetaAudit;
+            $didMutate = true;
+        }
         foreach($store['users'] as $uname => $user){
             if(!is_array($user)) continue;
             $demoModeEnabled = user_demo_data_enabled($store['users'][$uname]);
@@ -1699,6 +2484,11 @@ function bootstrap_users_store($usersFile, $legacyAuthFile, $envUrl, $envToken){
                 $store['users'][$uname]['subscription'] = $normalizedSub;
                 $didMutate = true;
             }
+            $normalizedBetaAccess = normalize_user_beta_access_state($store['users'][$uname]['beta_access'] ?? null);
+            if(json_encode($normalizedBetaAccess) !== json_encode($store['users'][$uname]['beta_access'] ?? null)){
+                $store['users'][$uname]['beta_access'] = $normalizedBetaAccess;
+                $didMutate = true;
+            }
             if(subscription_is_legacy_local_trial_state($store['users'][$uname]['subscription'] ?? null)){
                 $store['users'][$uname]['subscription'] = default_subscription_state();
                 $store['users'][$uname]['updated_at'] = date('c');
@@ -1711,6 +2501,7 @@ function bootstrap_users_store($usersFile, $legacyAuthFile, $envUrl, $envToken){
                 if($base !== '' && !is_placeholder_uisp_url($base)){
                     $store['users'][$uname]['sources'][] = [
                         'id' => generate_source_id(),
+                        'type' => 'uisp',
                         'name' => 'Primary UISP',
                         'url' => $base,
                         'token' => $legacyToken,
@@ -1745,6 +2536,7 @@ function bootstrap_users_store($usersFile, $legacyAuthFile, $envUrl, $envToken){
         if($legacyBase !== '' && !is_placeholder_uisp_url($legacyBase) && trim((string)$envToken) !== '' && trim((string)$envToken) !== 'changeme'){
             $migratedSources[] = [
                 'id' => generate_source_id(),
+                'type' => 'uisp',
                 'name' => 'Primary UISP',
                 'url' => $legacyBase,
                 'token' => trim((string)$envToken),
@@ -1762,6 +2554,7 @@ function bootstrap_users_store($usersFile, $legacyAuthFile, $envUrl, $envToken){
             'source_status' => [],
             'preferences' => default_user_preferences(),
             'subscription' => default_subscription_state(),
+            'beta_access' => default_user_beta_access_state(),
             'created_at' => (string)($legacy['created_at'] ?? $legacy['updated_at'] ?? $now),
             'updated_at' => (string)($legacy['updated_at'] ?? $now)
         ];
@@ -1770,7 +2563,12 @@ function bootstrap_users_store($usersFile, $legacyAuthFile, $envUrl, $envToken){
         $users[$admin['username']] = $admin;
     }
 
-    $store = ['users' => $users, 'updated_at' => date('c')];
+    $store = [
+        'users' => $users,
+        'beta_keys' => [],
+        'beta_key_audit' => [],
+        'updated_at' => date('c')
+    ];
     write_json_file($usersFile, $store);
     return $store;
 }
@@ -1941,6 +2739,7 @@ if(isset($_GET['action']) && $_GET['action']==='register' && $_SERVER['REQUEST_M
     $u = normalize_username($_POST['username'] ?? '');
     $p = (string)($_POST['password'] ?? '');
     $p2 = (string)($_POST['password_confirm'] ?? '');
+    $betaKeyInput = (string)($_POST['beta_key'] ?? '');
     if(!validate_username($u)){
         $_SESSION['auth_err'] = 'Username must be 3-32 chars: a-z, 0-9, dot, underscore, hyphen.';
         header('Location: ./?login=1');
@@ -1971,9 +2770,20 @@ if(isset($_GET['action']) && $_GET['action']==='register' && $_SERVER['REQUEST_M
         'source_status' => [],
         'preferences' => default_user_preferences(),
         'subscription' => default_subscription_state(),
+        'beta_access' => default_user_beta_access_state(),
         'created_at' => $now,
         'updated_at' => $now
     ];
+    if(trim($betaKeyInput) !== ''){
+        $redeemErr = '';
+        $redeem = redeem_beta_key_for_user($USERS_STORE, $u, $betaKeyInput, 'signup', $redeemErr);
+        if(!is_array($redeem) || empty($redeem['ok'])){
+            unset($USERS_STORE['users'][$u]);
+            $_SESSION['auth_err'] = beta_key_error_message($redeemErr);
+            header('Location: ./?login=1');
+            exit;
+        }
+    }
     save_users_store($USERS_FILE, $USERS_STORE);
     session_regenerate_id(true);
     $_SESSION['auth_ok'] = 1;
@@ -1981,6 +2791,42 @@ if(isset($_GET['action']) && $_GET['action']==='register' && $_SERVER['REQUEST_M
     unset($_SESSION['csrf_token']);
     ensure_csrf_token();
     header('Location: ./');
+    exit;
+}
+if(isset($_GET['action']) && $_GET['action']==='redeem_beta_key' && $_SERVER['REQUEST_METHOD']==='POST'){
+    require_valid_csrf('redirect');
+    if(!isset($_SESSION['auth_ok']) || empty($_SESSION['auth_user'])){
+        header('Location: ./?login=1');
+        exit;
+    }
+    $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
+    $betaKeyInput = (string)($_POST['beta_key'] ?? '');
+    if($sessionUser === '' || !isset($USERS_STORE['users'][$sessionUser])){
+        $_SESSION['settings_notice'] = 'Invalid session. Please sign in again.';
+        $_SESSION['settings_notice_kind'] = 'error';
+        header('Location: ./?login=1');
+        exit;
+    }
+    if(trim($betaKeyInput) === ''){
+        $_SESSION['settings_notice'] = 'Enter a beta key to redeem.';
+        $_SESSION['settings_notice_kind'] = 'error';
+        header('Location: ./?view=settings');
+        exit;
+    }
+    $redeemErr = '';
+    $redeem = redeem_beta_key_for_user($USERS_STORE, $sessionUser, $betaKeyInput, 'settings', $redeemErr);
+    if(!is_array($redeem) || empty($redeem['ok'])){
+        $_SESSION['settings_notice'] = beta_key_error_message($redeemErr);
+        $_SESSION['settings_notice_kind'] = 'error';
+        header('Location: ./?view=settings');
+        exit;
+    }
+    save_users_store($USERS_FILE, $USERS_STORE);
+    $_SESSION['settings_notice'] = !empty($redeem['already_redeemed'])
+        ? ('Beta key ' . (string)$redeem['code'] . ' is already linked to this account.')
+        : ('Beta key ' . (string)$redeem['code'] . ' redeemed. PRO beta access is active.');
+    $_SESSION['settings_notice_kind'] = !empty($redeem['already_redeemed']) ? 'warn' : '';
+    header('Location: ./?view=settings');
     exit;
 }
 if(isset($_GET['action']) && $_GET['action']==='login' && $_SERVER['REQUEST_METHOD']==='POST'){
@@ -2048,7 +2894,7 @@ if(isset($_SESSION['auth_ok']) && empty($_SESSION['auth_user'])){
     }
 }
 
-$NOCWALL_FEATURE_FLAGS = build_feature_flags_for_user(get_session_user($USERS_STORE));
+$NOCWALL_FEATURE_FLAGS = build_feature_flags_for_user(get_session_user($USERS_STORE), $USERS_STORE);
 
 // For AJAX endpoints, require login except for a health or login check
 function require_login_for_ajax(){
@@ -2098,7 +2944,7 @@ function ajax_action_requires_csrf($action){
 function require_pro_feature($featureKey){
     global $USERS_STORE, $NOCWALL_FEATURE_FLAGS;
     $user = get_session_user($USERS_STORE);
-    $flags = build_feature_flags_for_user($user);
+    $flags = build_feature_flags_for_user($user, $USERS_STORE);
     $NOCWALL_FEATURE_FLAGS = $flags;
     $enabled = !empty($flags[$featureKey]);
     if($enabled){
@@ -2392,12 +3238,125 @@ function api_post_json($baseUrl, $path, $body = [], $token = '', $timeoutSec = 6
     ];
 }
 
+function api_get_raw($baseUrl, $path, $token = '', $timeoutSec = 10){
+    $base = rtrim((string)$baseUrl, '/');
+    $uri = '/' . ltrim((string)$path, '/');
+    $url = $base . $uri;
+    $start = microtime(true);
+    $ch = curl_init();
+    $headers = ['accept: application/pdf, text/markdown, application/json'];
+    $respHeaders = [];
+    if(trim((string)$token) !== ''){
+        $headers[] = 'Authorization: Bearer ' . trim((string)$token);
+    }
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER => $headers,
+        CURLOPT_TIMEOUT => max(2, (int)$timeoutSec),
+        CURLOPT_HEADERFUNCTION => function($curl, $headerLine) use (&$respHeaders){
+            $line = trim((string)$headerLine);
+            if($line === '' || strpos($line, ':') === false){
+                return strlen((string)$headerLine);
+            }
+            [$name, $value] = explode(':', $line, 2);
+            $key = strtolower(trim((string)$name));
+            $val = trim((string)$value);
+            if($key !== ''){
+                $respHeaders[$key] = $val;
+            }
+            return strlen((string)$headerLine);
+        },
+    ]);
+    $resp = curl_exec($ch);
+    $err = curl_error($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    $latency = (int)round((microtime(true) - $start) * 1000);
+    $ok = ($code >= 200 && $code < 300 && $resp !== false);
+    return [
+        'ok' => $ok,
+        'code' => $code,
+        'latency_ms' => $latency,
+        'error' => $ok ? '' : ($err ?: ('http_' . $code)),
+        'headers' => $respHeaders,
+        'body' => ($resp === false ? '' : (string)$resp),
+    ];
+}
+
+function normalize_incident_export_format($value){
+    $format = strtolower(trim((string)$value));
+    if($format === '' || $format === 'md' || $format === 'markdown'){
+        return 'markdown';
+    }
+    if($format === 'pdf'){
+        return 'pdf';
+    }
+    return '';
+}
+
+if(isset($_GET['download']) && trim((string)$_GET['download']) === 'incident_export'){
+    require_login_for_ajax();
+    require_valid_csrf('json');
+    require_pro_feature('incident_command_timeline');
+
+    $incidentID = trim((string)($_GET['incident_id'] ?? ''));
+    $format = normalize_incident_export_format($_GET['format'] ?? 'markdown');
+    if($incidentID === '' || $format === ''){
+        http_response_code(400);
+        header('Content-Type: application/json');
+        echo json_encode([
+            'ok' => 0,
+            'error' => 'invalid_export_request',
+            'message' => 'incident_id and format are required.'
+        ]);
+        exit;
+    }
+
+    $path = '/incidents/' . rawurlencode($incidentID) . '/export?format=' . rawurlencode($format);
+    $exportReq = api_get_raw($NOCWALL_API_URL, $path, $NOCWALL_API_TOKEN, 12);
+    if(!$exportReq['ok']){
+        $status = ($exportReq['code'] === 404) ? 404 : (($exportReq['code'] >= 400 && $exportReq['code'] < 500) ? $exportReq['code'] : 502);
+        http_response_code($status);
+        header('Content-Type: application/json');
+        echo json_encode([
+            'ok' => 0,
+            'error' => ($status === 404 ? 'incident_not_found' : 'incident_export_failed'),
+            'message' => ($status === 404 ? 'Incident not found.' : 'Unable to export incident timeline.'),
+            'details' => [
+                'http' => $exportReq['code'],
+                'error' => $exportReq['error'],
+                'latency_ms' => $exportReq['latency_ms']
+            ]
+        ]);
+        exit;
+    }
+
+    $contentType = trim((string)($exportReq['headers']['content-type'] ?? ''));
+    $disposition = trim((string)($exportReq['headers']['content-disposition'] ?? ''));
+    if($contentType === ''){
+        $contentType = ($format === 'pdf') ? 'application/pdf' : 'text/markdown; charset=utf-8';
+    }
+    if($disposition === ''){
+        $suffix = ($format === 'pdf') ? 'pdf' : 'md';
+        $disposition = 'attachment; filename="nocwall-incident-' . preg_replace('/[^a-z0-9_-]+/i', '-', strtolower($incidentID)) . '-timeline.' . $suffix . '"';
+    }
+
+    header('Content-Type: ' . $contentType);
+    header('Content-Disposition: ' . $disposition);
+    header('Content-Length: ' . strlen((string)$exportReq['body']));
+    echo $exportReq['body'];
+    exit;
+}
+
 // AJAX
 if(isset($_GET['ajax'])){
     require_login_for_ajax();
     $ajaxAction = trim((string)($_GET['ajax'] ?? ''));
     $currentUser = get_session_user($USERS_STORE);
-    $effectiveSources = get_effective_uisp_sources($currentUser, $UISP_URL, $UISP_TOKEN);
+    $effectiveSources = get_effective_sources_for_management($currentUser, $UISP_URL, $UISP_TOKEN);
+    $effectiveUispSources = get_effective_uisp_sources($currentUser, $UISP_URL, $UISP_TOKEN);
     header("Content-Type: application/json");
     // Prevent caching of AJAX responses
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
@@ -2443,7 +3402,7 @@ if(isset($_GET['ajax'])){
 
     if($_GET['ajax']==='mobile_config'){
         require_pro_feature('mobile');
-        if(count($effectiveSources) === 0){
+        if(count($effectiveUispSources) === 0){
             http_response_code(503);
             echo json_encode([
                 'error' => 'uisp_sources_not_configured',
@@ -2451,11 +3410,11 @@ if(isset($_GET['ajax'])){
             ]);
             exit;
         }
-        $primary = $effectiveSources[0];
+        $primary = $effectiveUispSources[0];
         echo json_encode([
             'uisp_base_url' => $primary['url'],
             'uisp_token' => $primary['token'],
-            'sources' => $effectiveSources,
+            'sources' => $effectiveUispSources,
             'issued_at' => date('c')
         ]);
         exit;
@@ -2496,8 +3455,8 @@ if(isset($_GET['ajax'])){
                 'http' => 503,
                 'api_latency' => 0,
                 'demo_mode' => false,
-                'error' => 'uisp_sources_not_configured',
-                'message' => 'Add one or more UISP sources in Account Settings.'
+                'error' => 'sources_not_configured',
+                'message' => 'Add one or more monitoring sources in Account Settings.'
             ]);
             exit;
         }
@@ -2506,12 +3465,14 @@ if(isset($_GET['ajax'])){
         $http_codes = [];
         $ok_sources = 0;
         foreach($effectiveSources as $src){
+            $type = normalize_source_type($src['type'] ?? 'uisp');
+            $apiPath = normalize_source_api_path($src['api_path'] ?? '', $type);
             $ch = curl_init();
             $start = microtime(true);
             curl_setopt_array($ch,[
-                CURLOPT_URL=>rtrim((string)$src['url'],"/")."/nms/api/v2.1/devices",
+                CURLOPT_URL=>rtrim((string)$src['url'],"/").$apiPath,
                 CURLOPT_RETURNTRANSFER=>true,
-                CURLOPT_HTTPHEADER=>["accept: application/json","x-auth-token: ".$src['token']],
+                CURLOPT_HTTPHEADER=>build_source_auth_headers($type, $src['token'] ?? '', $src['auth_scheme'] ?? ''),
                 CURLOPT_TIMEOUT=>10
             ]);
             $resp = curl_exec($ch);
@@ -2525,18 +3486,16 @@ if(isset($_GET['ajax'])){
             if(!is_array($rows)) continue;
             if($code >= 200 && $code < 300) $ok_sources++;
 
-            foreach($rows as $d){
-                if(!is_array($d)) continue;
-                $id = device_key($d);
-                $d['_source_id'] = $src['id'];
-                $d['_source_name'] = $src['name'];
+            foreach(normalize_source_wallboard_devices($type, $rows, $src) as $d){
+                $id = (string)($d['id'] ?? '');
+                if($id === '') continue;
                 $existing = $deviceMap[$id] ?? null;
                 if($existing === null){
                     $deviceMap[$id] = $d;
                     continue;
                 }
                 // Prefer an online sample if duplicates exist across sources.
-                if(is_online($d) && !is_online($existing)){
+                if(!empty($d['online']) && empty($existing['online'])){
                     $deviceMap[$id] = $d;
                 }
             }
@@ -2554,27 +3513,24 @@ if(isset($_GET['ajax'])){
         $cpe_ping_set = [];
         $ping_budget = 3; // ping at most 3 backbone/AP devices per poll to keep latency low
         foreach($devices as $d){
-            $id=device_key($d);
-            $name=$d['identification']['name']??$id;
-            $role=device_role($d);
-            $siteName = (string)($d['identification']['site']['name'] ?? $d['site']['name'] ?? $d['identification']['siteName'] ?? '');
-            $siteId = (string)($d['identification']['site']['id'] ?? $d['identification']['siteId'] ?? '');
-            $isGw=is_gateway($d);
-            $isAp=is_ap($d);
-            $isRouter=is_router($d);
-            $isSwitch=is_switch($d);
-            $isStation=is_station($d);
-            $isBackbone=is_backbone($d);
-            $on=is_online($d);
-            $cpu=$d['overview']['cpu']??null;
-            $ram=$d['overview']['ram']??null;
-            $temp=$d['overview']['temperature']??null;
-            // Uptime in seconds if available (UISP may expose different keys)
-            $uptime=$d['overview']['uptime']
-                ?? $d['overview']['uptimeSeconds']
-                ?? $d['overview']['uptime_sec']
-                ?? null;
-            $lat=null;
+            $id = trim((string)($d['id'] ?? ''));
+            if($id === '') continue;
+            $name = (string)($d['name'] ?? $id);
+            $role = (string)($d['role'] ?? 'router');
+            $siteName = (string)($d['site'] ?? '');
+            $siteId = (string)($d['site_id'] ?? '');
+            $isGw = !empty($d['gateway']);
+            $isAp = !empty($d['ap']);
+            $isRouter = !empty($d['router']);
+            $isSwitch = !empty($d['switch']);
+            $isStation = false;
+            $isBackbone = !empty($d['backbone']);
+            $on = !empty($d['online']);
+            $cpu = $d['cpu'] ?? null;
+            $ram = $d['ram'] ?? null;
+            $temp = $d['temp'] ?? null;
+            $uptime = $d['uptime'] ?? null;
+            $lat = (isset($d['latency']) && is_numeric($d['latency'])) ? (float)$d['latency'] : null;
             $cpe_lat=null;
 
             // Skip stations/CPEs entirely to keep UI focused on gateways/APs/routers/switches
@@ -2588,7 +3544,10 @@ if(isset($_GET['ajax'])){
                 $cachedLat  = $cache[$id]['last_ping_ms'] ?? null;
                 if(($now - $lastPingAt) >= 60 || $cachedLat===null){
                     if($ping_budget > 0){
-                        $lat=ping_host($d['ipAddress']??null);
+                        $pingTarget = (string)($d['ip'] ?? $d['hostname'] ?? '');
+                        if($pingTarget !== ''){
+                            $lat = ping_host($pingTarget);
+                        }
                         $cache[$id]['last_ping_at']=$now;
                         $cache[$id]['last_ping_ms']=$lat;
                         $cache_changed=true;
@@ -2735,15 +3694,16 @@ if(isset($_GET['ajax'])){
                 'id'=>$id,'name'=>$name,
                 'gateway'=>$isGw,'ap'=>$isAp,'station'=>$isStation,
                 'router'=>$isRouter,'switch'=>$isSwitch,'role'=>$role,'backbone'=>$isBackbone,
-                'source_id'=>(string)($d['_source_id'] ?? ''),
-                'source_name'=>(string)($d['_source_name'] ?? ''),
+                'source_id'=>(string)($d['source_id'] ?? ''),
+                'source_name'=>(string)($d['source_name'] ?? ''),
+                'source_type'=>(string)($d['source_type'] ?? 'uisp'),
                 'site_id'=>$siteId,
                 'site'=>$siteName,
-                'hostname'=>(string)($d['identification']['hostname'] ?? ''),
-                'mac'=>(string)($d['identification']['mac'] ?? ''),
-                'serial'=>(string)($d['identification']['serialNumber'] ?? ''),
-                'vendor'=>(string)($d['identification']['vendor'] ?? ''),
-                'model'=>(string)($d['identification']['model'] ?? ''),
+                'hostname'=>(string)($d['hostname'] ?? ''),
+                'mac'=>(string)($d['mac'] ?? ''),
+                'serial'=>(string)($d['serial'] ?? ''),
+                'vendor'=>(string)($d['vendor'] ?? ''),
+                'model'=>(string)($d['model'] ?? ''),
                 'online'=>$on,'cpu'=>$cpu,'ram'=>$ram,'temp'=>$temp,'latency'=>$lat,
                 'cpe_latency'=>$cpe_lat,
                 'uptime'=>$uptime,
@@ -3732,7 +4692,8 @@ if(isset($_GET['ajax'])){
         if(!$user){
             echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
         }
-        $prefs = normalize_user_preferences($user['preferences'] ?? null);
+        $flags = build_feature_flags_for_user($user, $USERS_STORE);
+        $prefs = sanitize_user_preferences_for_flags($user['preferences'] ?? null, $flags);
         echo json_encode([
             'ok' => 1,
             'username' => $sessionUser,
@@ -3748,7 +4709,8 @@ if(isset($_GET['ajax'])){
             echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
         }
 
-        $prefs = normalize_user_preferences($user['preferences'] ?? null);
+        $flags = build_feature_flags_for_user($user, $USERS_STORE);
+        $prefs = sanitize_user_preferences_for_flags($user['preferences'] ?? null, $flags);
         $hadInput = false;
 
         if(array_key_exists('dashboard_settings', $_POST)){
@@ -3757,7 +4719,7 @@ if(isset($_GET['ajax'])){
             if(!is_array($decoded)){
                 echo json_encode(['ok'=>0,'error'=>'invalid_dashboard_settings']); exit;
             }
-            $prefs['dashboard_settings'] = normalize_dashboard_settings($decoded);
+            $prefs['dashboard_settings'] = sanitize_dashboard_settings_for_flags($decoded, $flags);
         }
 
         if(array_key_exists('ap_siren_prefs', $_POST)){
@@ -3791,6 +4753,7 @@ if(isset($_GET['ajax'])){
             echo json_encode(['ok'=>0,'error'=>'no_fields']); exit;
         }
 
+        $prefs = sanitize_user_preferences_for_flags($prefs, $flags);
         $USERS_STORE['users'][$sessionUser]['preferences'] = $prefs;
         $USERS_STORE['users'][$sessionUser]['updated_at'] = date('c');
         save_users_store($USERS_FILE, $USERS_STORE);
@@ -3804,13 +4767,16 @@ if(isset($_GET['ajax'])){
             echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
         }
         $statusMap = get_user_source_status_map($user);
-        $effective = get_effective_uisp_sources($user, $UISP_URL, $UISP_TOKEN);
+        $effective = get_effective_sources_for_management($user, $UISP_URL, $UISP_TOKEN);
         $rows = [];
         foreach($effective as $src){
             $id = (string)($src['id'] ?? '');
             $saved = $statusMap[$id] ?? null;
+            $type = normalize_source_type($src['type'] ?? 'uisp');
             $rows[] = [
                 'id' => $id,
+                'type' => $type,
+                'type_label' => source_type_label($type),
                 'name' => (string)($src['name'] ?? $id),
                 'url' => normalize_uisp_url($src['url'] ?? ''),
                 'enabled' => !empty($src['enabled']),
@@ -3839,13 +4805,16 @@ if(isset($_GET['ajax'])){
         if(!$user){
             echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
         }
-        $effective = get_effective_uisp_sources($user, $UISP_URL, $UISP_TOKEN);
+        $effective = get_effective_sources_for_management($user, $UISP_URL, $UISP_TOKEN);
         $rows = [];
         $statusRows = normalize_user_source_status($user['source_status'] ?? null);
         foreach($effective as $src){
-            $probe = probe_uisp_source($src);
+            $probe = probe_nms_source($src);
+            $probeType = normalize_source_type($probe['type'] ?? 'uisp');
             $rows[] = [
                 'id' => (string)$probe['id'],
+                'type' => $probeType,
+                'type_label' => source_type_label($probeType),
                 'name' => (string)$probe['name'],
                 'url' => (string)$probe['url'],
                 'ok' => !empty($probe['ok']),
@@ -3897,8 +4866,12 @@ if(isset($_GET['ajax'])){
             $tail = $len > 4 ? substr($token, -4) : $token;
             $view[] = [
                 'id' => $src['id'],
+                'type' => normalize_source_type($src['type'] ?? 'uisp'),
+                'type_label' => source_type_label($src['type'] ?? 'uisp'),
                 'name' => $src['name'],
                 'url' => $src['url'],
+                'api_path' => normalize_source_api_path($src['api_path'] ?? '', $src['type'] ?? 'uisp'),
+                'auth_scheme' => normalize_source_auth_scheme($src['auth_scheme'] ?? '', $src['type'] ?? 'uisp'),
                 'enabled' => !empty($src['enabled']),
                 'token_hint' => ($len > 0 ? str_repeat('*', max(4, min($len, 12))) . $tail : ''),
                 'has_token' => ($len > 0),
@@ -3921,18 +4894,21 @@ if(isset($_GET['ajax'])){
         }
         $sources = get_stored_user_sources($user);
         $id = trim((string)($_POST['id'] ?? ''));
+        $type = normalize_source_type($_POST['type'] ?? 'uisp');
         $name = trim((string)($_POST['name'] ?? ''));
         $url = normalize_uisp_url($_POST['url'] ?? '');
+        $apiPath = normalize_source_api_path($_POST['api_path'] ?? '', $type);
+        $authScheme = normalize_source_auth_scheme($_POST['auth_scheme'] ?? '', $type);
         $token = trim((string)($_POST['token'] ?? ''));
         $enabledRaw = $_POST['enabled'] ?? '1';
         $enabled = !($enabledRaw === false || $enabledRaw === 0 || $enabledRaw === '0' || strtolower((string)$enabledRaw) === 'false');
 
         if($url === '' || is_placeholder_uisp_url($url)){
-            echo json_encode(['ok'=>0,'error'=>'invalid_url','message'=>'A valid UISP URL is required.']); exit;
+            echo json_encode(['ok'=>0,'error'=>'invalid_url','message'=>'A valid ' . source_type_label($type) . ' URL is required.']); exit;
         }
         if($name === ''){
             $parsed = parse_url($url);
-            $name = (string)($parsed['host'] ?? 'UISP Source');
+            $name = (string)($parsed['host'] ?? source_default_name($type));
         }
 
         $found = -1;
@@ -3947,25 +4923,31 @@ if(isset($_GET['ajax'])){
             if($token === ''){
                 $token = (string)($sources[$found]['token'] ?? '');
             }
-            if($token === ''){
+            if($token === '' && $authScheme !== 'none'){
                 echo json_encode(['ok'=>0,'error'=>'token_required']); exit;
             }
+            $sources[$found]['type'] = $type;
             $sources[$found]['name'] = $name;
             $sources[$found]['url'] = $url;
             $sources[$found]['token'] = $token;
+            $sources[$found]['api_path'] = $apiPath;
+            $sources[$found]['auth_scheme'] = $authScheme;
             $sources[$found]['enabled'] = $enabled;
             $sources[$found]['updated_at'] = date('c');
             $savedId = $sources[$found]['id'];
         } else {
-            if($token === '' || strlen($token) < 12){
-                echo json_encode(['ok'=>0,'error'=>'token_required','message'=>'Provide a valid UISP API token.']); exit;
+            if($authScheme !== 'none' && ($token === '' || strlen($token) < 12)){
+                echo json_encode(['ok'=>0,'error'=>'token_required','message'=>'Provide a valid ' . source_type_label($type) . ' API token.']); exit;
             }
             $savedId = ($id !== '' ? $id : generate_source_id());
             $sources[] = [
                 'id' => $savedId,
+                'type' => $type,
                 'name' => $name,
                 'url' => $url,
                 'token' => $token,
+                'api_path' => $apiPath,
+                'auth_scheme' => $authScheme,
                 'enabled' => $enabled,
                 'created_at' => date('c'),
                 'updated_at' => date('c')
@@ -3976,8 +4958,11 @@ if(isset($_GET['ajax'])){
         $statusRows = normalize_user_source_status($user['source_status'] ?? null);
         foreach($statusRows as &$statusRow){
             if((string)($statusRow['id'] ?? '') !== (string)$savedId) continue;
+            $statusRow['type'] = $type;
             $statusRow['name'] = $name;
             $statusRow['url'] = $url;
+            $statusRow['api_path'] = $apiPath;
+            $statusRow['auth_scheme'] = $authScheme;
         }
         unset($statusRow);
         $USERS_STORE['users'][$sessionUser]['source_status'] = $statusRows;
@@ -4023,7 +5008,7 @@ if(isset($_GET['ajax'])){
         if($id === ''){
             echo json_encode(['ok'=>0,'error'=>'id_required']); exit;
         }
-        $sources = get_effective_uisp_sources($user, $UISP_URL, $UISP_TOKEN);
+        $sources = get_effective_sources_for_management($user, $UISP_URL, $UISP_TOKEN);
         $target = null;
         foreach($sources as $src){
             if((string)$src['id'] === $id){
@@ -4034,7 +5019,7 @@ if(isset($_GET['ajax'])){
         if(!$target){
             echo json_encode(['ok'=>0,'error'=>'source_not_found']); exit;
         }
-        $probe = probe_uisp_source($target);
+        $probe = probe_nms_source($target);
 
         $statusRows = normalize_user_source_status($user['source_status'] ?? null);
         $statusSaved = false;
@@ -4054,6 +5039,8 @@ if(isset($_GET['ajax'])){
         echo json_encode([
             'ok' => !empty($probe['ok']),
             'id' => (string)$probe['id'],
+            'type' => normalize_source_type($probe['type'] ?? 'uisp'),
+            'type_label' => source_type_label($probe['type'] ?? 'uisp'),
             'name' => (string)$probe['name'],
             'url' => (string)$probe['url'],
             'http' => (int)$probe['http'],
@@ -4069,7 +5056,7 @@ if(isset($_GET['ajax'])){
     if($_GET['ajax']==='token_status'){
         $sessionUser = normalize_username($_SESSION['auth_user'] ?? '');
         $user = get_user_by_username($USERS_STORE, $sessionUser);
-        $configuredSources = get_stored_user_sources($user);
+        $configuredSources = get_effective_uisp_sources($user, '', '');
         $effective = get_effective_uisp_sources($user, $UISP_URL, $UISP_TOKEN);
         $source = 'none';
         if(count($configuredSources) > 0){
@@ -4094,7 +5081,9 @@ if(isset($_GET['ajax'])){
             echo json_encode(['ok'=>0,'error'=>'invalid_session']); exit;
         }
         $subscription = get_user_subscription($user);
-        $flags = build_feature_flags_for_user($user);
+        $flags = build_feature_flags_for_user($user, $USERS_STORE);
+        $entitlement = resolve_user_entitlement($USERS_STORE, $user);
+        $betaAccess = beta_access_public_view($USERS_STORE, $user);
         $hasPaymentLinks = (count($NOCWALL_STRIPE_PAYMENT_LINK_MAP) > 0);
         $stripeSessionConfigured = ($NOCWALL_STRIPE_SECRET_KEY !== '' && $NOCWALL_STRIPE_PRICE_ID !== '' && $NOCWALL_STRIPE_WEBHOOK_SECRET !== '');
         $stripeWebhookConfigured = ($NOCWALL_STRIPE_WEBHOOK_SECRET !== '');
@@ -4112,8 +5101,10 @@ if(isset($_GET['ajax'])){
             'stripe_customer_linked' => (trim((string)($subscription['customer_id'] ?? '')) !== ''),
             'price_monthly_usd' => $NOCWALL_PRO_MONTHLY_USD,
             'pro_enabled' => !empty($flags['pro_features']),
+            'entitlement_source' => (string)($entitlement['source'] ?? 'ce'),
             'features' => $flags,
-            'subscription' => subscription_public_view($subscription)
+            'subscription' => subscription_public_view($subscription),
+            'beta_access' => $betaAccess
         ]);
         exit;
     }
@@ -4139,7 +5130,7 @@ if(isset($_GET['ajax'])){
         if($NOCWALL_BILLING_MODE === 'demo'){
             $sub = activate_user_pro_subscription($USERS_STORE, $sessionUser, 'demo');
             save_users_store($USERS_FILE, $USERS_STORE);
-            $flags = build_feature_flags_for_user($USERS_STORE['users'][$sessionUser]);
+            $flags = build_feature_flags_for_user($USERS_STORE['users'][$sessionUser], $USERS_STORE);
             $NOCWALL_FEATURE_FLAGS = $flags;
             echo json_encode([
                 'ok' => 1,
@@ -4354,7 +5345,7 @@ if(isset($_GET['ajax'])){
         $provider = ($NOCWALL_BILLING_MODE === 'stripe') ? 'manual' : $NOCWALL_BILLING_MODE;
         $sub = activate_user_pro_subscription($USERS_STORE, $sessionUser, $provider);
         save_users_store($USERS_FILE, $USERS_STORE);
-        $flags = build_feature_flags_for_user($USERS_STORE['users'][$sessionUser]);
+        $flags = build_feature_flags_for_user($USERS_STORE['users'][$sessionUser], $USERS_STORE);
         $NOCWALL_FEATURE_FLAGS = $flags;
         echo json_encode([
             'ok' => 1,
@@ -4390,6 +5381,7 @@ if(isset($_GET['ajax'])){
             $legacyUpdated = false;
             for($i=0; $i<count($sources); $i++){
                 if(($sources[$i]['id'] ?? '') === 'legacy-account'){
+                    $sources[$i]['type'] = 'uisp';
                     $sources[$i]['token'] = $token;
                     $sources[$i]['url'] = $base;
                     $sources[$i]['enabled'] = true;
@@ -4401,6 +5393,7 @@ if(isset($_GET['ajax'])){
             if(!$legacyUpdated){
                 $sources[] = [
                     'id' => 'legacy-account',
+                    'type' => 'uisp',
                     'name' => 'Legacy Account UISP',
                     'url' => $base,
                     'token' => $token,
@@ -4569,6 +5562,10 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
         exit;
     }
     $authUser = htmlspecialchars((string)($_SESSION['auth_user'] ?? ''), ENT_QUOTES);
+    $settingsNotice = trim((string)($_SESSION['settings_notice'] ?? ''));
+    $settingsNoticeKind = trim((string)($_SESSION['settings_notice_kind'] ?? ''));
+    unset($_SESSION['settings_notice'], $_SESSION['settings_notice_kind']);
+    $settingsCsrfToken = htmlspecialchars(get_csrf_token(), ENT_QUOTES);
     ?>
 <!doctype html>
 <html>
@@ -4604,9 +5601,15 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
     <button class="secondary" onclick="window.location.href='./';">Back To Dashboard</button>
   </header>
   <main>
+    <?php if($settingsNotice !== ''): ?>
+      <div class="status <?=$settingsNoticeKind !== '' ? htmlspecialchars($settingsNoticeKind, ENT_QUOTES) : ''?>" style="margin-bottom:10px">
+        <?=htmlspecialchars($settingsNotice, ENT_QUOTES)?>
+      </div>
+    <?php endif; ?>
     <section class="card">
       <h3 style="margin-top:0">Subscription & Licensing</h3>
       <div id="billingSummary" class="small">Loading subscription status...</div>
+      <div id="betaAccessSummary" class="small" style="margin-top:6px">Beta key access: none</div>
       <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
         <span id="billingPlanPill" class="pill">Plan: CE</span>
         <span id="billingMobilePill" class="pill">Mobile App: Disabled</span>
@@ -4625,6 +5628,18 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
       <div class="small" style="margin-top:10px">
         Pro unlocks advanced features, phone companion app access, and local agent enrollment.
       </div>
+      <form method="post" action="?action=redeem_beta_key" style="margin-top:12px">
+        <input type="hidden" name="_csrf" value="<?=$settingsCsrfToken?>">
+        <div class="grid">
+          <div>
+            <label for="betaKeyInput">Closed Beta Key (optional)</label>
+            <input id="betaKeyInput" type="text" name="beta_key" placeholder="NOCWALL-BETA-XXXX-XXXX">
+          </div>
+        </div>
+        <div class="row-actions" style="margin-top:10px">
+          <button type="submit" class="secondary">Redeem Beta Key</button>
+        </div>
+      </form>
       <pre id="mobileConfigPreview" class="small" style="display:none;margin-top:10px;background:#0f0f0f;border:1px solid #2c2c2c;border-radius:8px;padding:10px;white-space:pre-wrap"></pre>
       <pre id="agentConfigPreview" class="small" style="display:none;margin-top:10px;background:#0f0f0f;border:1px solid #2c2c2c;border-radius:8px;padding:10px;white-space:pre-wrap"></pre>
       <div id="billingStatus" class="status"></div>
@@ -4634,29 +5649,53 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
       <h3 style="margin-top:0">Demo Wallboard Preview</h3>
       <label style="display:flex;align-items:center;gap:8px;margin:0 0 10px 0">
         <input id="demoModeEnabled" type="checkbox">
-        Enable demo data feed for instant dashboard preview (no UISP source required).
+        Enable demo data feed for instant dashboard preview (no NMS source required).
       </label>
       <div class="row-actions">
         <button onclick="saveDemoMode()">Save Demo Mode</button>
       </div>
-      <div class="small" style="margin-top:10px">When enabled, dashboard polling uses simulated devices instead of live UISP APIs.</div>
+      <div class="small" style="margin-top:10px">When enabled, dashboard polling uses simulated devices instead of live NMS APIs.</div>
       <div id="demoModeStatus" class="status"></div>
     </section>
 
     <section class="card">
-      <h3 style="margin-top:0">Add UISP Source</h3>
+      <h3 style="margin-top:0">Add NMS Source</h3>
       <div class="grid">
+        <div>
+          <label for="srcType">Source Type</label>
+          <select id="srcType">
+            <option value="uisp">UISP</option>
+            <option value="cisco">Cisco</option>
+            <option value="juniper">Juniper</option>
+            <option value="meraki">Meraki</option>
+            <option value="generic">Generic HTTP</option>
+          </select>
+        </div>
         <div>
           <label for="srcName">Source Name</label>
           <input id="srcName" type="text" placeholder="Main UISP">
         </div>
         <div>
-          <label for="srcUrl">UISP Base URL</label>
+          <label id="srcUrlLabel" for="srcUrl">UISP Base URL</label>
           <input id="srcUrl" type="url" placeholder="https://isp.unmsapp.com" required>
         </div>
         <div>
-          <label for="srcToken">UISP API Token</label>
+          <label id="srcTokenLabel" for="srcToken">UISP API Token</label>
           <input id="srcToken" type="password" placeholder="Paste API token" required>
+        </div>
+        <div>
+          <label for="srcApiPath">API Path</label>
+          <input id="srcApiPath" type="text" placeholder="/nms/api/v2.1/devices">
+        </div>
+        <div>
+          <label for="srcAuthScheme">Auth Scheme</label>
+          <select id="srcAuthScheme">
+            <option value="bearer">Bearer</option>
+            <option value="x-auth-token">X-Auth-Token</option>
+            <option value="token">Token</option>
+            <option value="authorization">Authorization (raw)</option>
+            <option value="none">None</option>
+          </select>
         </div>
       </div>
       <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -4664,15 +5703,16 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
         <button onclick="saveSource()">Save Source</button>
         <button class="secondary" id="cancelEditBtn" onclick="cancelEdit()" style="display:none">Cancel Edit</button>
       </div>
-      <div class="small" style="margin-top:10px">Each account can store multiple UISP endpoints and tokens.</div>
+      <div class="small" style="margin-top:10px">Each account can store multiple monitoring endpoints. Use `Meraki` for Cisco Meraki Dashboard API org monitoring, or `Generic HTTP` for any vendor/system that can expose device status as JSON.</div>
       <div id="settingsStatus" class="status"></div>
     </section>
 
     <section class="card">
-      <h3 style="margin-top:0">Configured UISP Sources</h3>
+      <h3 style="margin-top:0">Configured NMS Sources</h3>
       <table>
         <thead>
           <tr>
+            <th>Type</th>
             <th>Name</th>
             <th>URL</th>
             <th>Status</th>
@@ -4681,7 +5721,7 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
           </tr>
         </thead>
         <tbody id="sourcesBody">
-          <tr><td colspan="5" class="small">Loading...</td></tr>
+          <tr><td colspan="6" class="small">Loading...</td></tr>
         </tbody>
       </table>
     </section>
@@ -4771,6 +5811,83 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
       }
       return boolPill(!!value, goodLabel, badLabel);
     }
+    const sourceTypeMeta = {
+      uisp: {
+        label: 'UISP',
+        urlLabel: 'UISP Base URL',
+        tokenLabel: 'UISP API Token',
+        namePlaceholder: 'Main UISP',
+        urlPlaceholder: 'https://isp.unmsapp.com',
+        apiPath: '/nms/api/v2.1/devices',
+        authScheme: 'x-auth-token',
+        tokenOptional: false
+      },
+      cisco: {
+        label: 'Cisco',
+        urlLabel: 'Cisco API Base URL',
+        tokenLabel: 'Cisco API Token',
+        namePlaceholder: 'Cisco Controller',
+        urlPlaceholder: 'https://cisco.example.com',
+        apiPath: '/api/v1/devices',
+        authScheme: 'bearer',
+        tokenOptional: false
+      },
+      juniper: {
+        label: 'Juniper',
+        urlLabel: 'Juniper API Base URL',
+        tokenLabel: 'Juniper API Token',
+        namePlaceholder: 'Juniper Controller',
+        urlPlaceholder: 'https://juniper.example.com',
+        apiPath: '/api/v1/devices',
+        authScheme: 'x-auth-token',
+        tokenOptional: false
+      },
+      meraki: {
+        label: 'Meraki',
+        urlLabel: 'Meraki Org API Base URL',
+        tokenLabel: 'Meraki API Key',
+        namePlaceholder: 'Meraki Dashboard Org',
+        urlPlaceholder: 'https://api.meraki.com/api/v1/organizations/<organizationId>',
+        apiPath: '/devices/statuses',
+        authScheme: 'bearer',
+        tokenOptional: false
+      },
+      generic: {
+        label: 'Generic HTTP',
+        urlLabel: 'Generic API Base URL',
+        tokenLabel: 'API Token',
+        namePlaceholder: 'Generic Device Feed',
+        urlPlaceholder: 'https://monitoring.example.com',
+        apiPath: '/devices',
+        authScheme: 'bearer',
+        tokenOptional: true
+      }
+    };
+    function sourceLabel(type){
+      const key = String(type || 'uisp').toLowerCase();
+      return (sourceTypeMeta[key] && sourceTypeMeta[key].label) ? sourceTypeMeta[key].label : 'UISP';
+    }
+    function applySourceTypeHints(type){
+      const key = String(type || 'uisp').toLowerCase();
+      const meta = sourceTypeMeta[key] || sourceTypeMeta.uisp;
+      const urlLabel = document.getElementById('srcUrlLabel');
+      const tokenLabel = document.getElementById('srcTokenLabel');
+      const srcName = document.getElementById('srcName');
+      const srcUrl = document.getElementById('srcUrl');
+      const srcApiPath = document.getElementById('srcApiPath');
+      const srcAuthScheme = document.getElementById('srcAuthScheme');
+      const srcToken = document.getElementById('srcToken');
+      if(urlLabel) urlLabel.textContent = meta.urlLabel;
+      if(tokenLabel) tokenLabel.textContent = meta.tokenLabel;
+      if(srcName && !srcName.value) srcName.placeholder = meta.namePlaceholder;
+      if(srcUrl) srcUrl.placeholder = meta.urlPlaceholder;
+      if(srcApiPath && !srcApiPath.value) srcApiPath.value = meta.apiPath;
+      if(srcAuthScheme && !srcAuthScheme.value) srcAuthScheme.value = meta.authScheme;
+      if(srcToken){
+        srcToken.placeholder = meta.tokenOptional ? 'Optional when auth scheme is None' : 'Paste API token';
+        srcToken.required = !meta.tokenOptional;
+      }
+    }
     function prefsFileStamp(){
       const d = new Date();
       const pad = n => String(n).padStart(2, '0');
@@ -4791,6 +5908,7 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
     }
     async function loadBillingStatus(){
       const summary = document.getElementById('billingSummary');
+      const betaSummary = document.getElementById('betaAccessSummary');
       const planPill = document.getElementById('billingPlanPill');
       const mobilePill = document.getElementById('billingMobilePill');
       const agentsPill = document.getElementById('billingAgentsPill');
@@ -4812,8 +5930,10 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
         }
         billingState = j;
         const sub = j.subscription || {};
+        const beta = (j.beta_access && typeof j.beta_access === 'object') ? j.beta_access : {};
         const status = String(sub.status || 'inactive');
         const pro = !!j.pro_enabled;
+        const entitlementSource = String(j.entitlement_source || (pro ? 'subscription' : 'ce'));
         const cancelAtPeriodEnd = !!sub.cancel_at_period_end;
         const periodEnd = String(sub.current_period_end || '').trim();
         const periodTxt = periodEnd ? (' Current period ends: ' + periodEnd + '.') : '';
@@ -4821,19 +5941,30 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
         const stripeNote = (String(j.billing_mode) === 'stripe' && !j.stripe_configured) ? ' Stripe is not fully configured on server.' : '';
         const webhookNote = (String(j.billing_mode) === 'stripe' && !j.stripe_webhook_configured) ? ' Stripe webhook secret is missing, so automatic entitlement sync will not work.' : '';
         if(summary){
-          summary.textContent = `Mode: ${j.billing_mode}. Status: ${status}. ${pro ? 'Pro is active.' : 'Pro is not active.'}${periodTxt}${stripeTrialNote}${stripeNote}${webhookNote}`;
+          summary.textContent = `Mode: ${j.billing_mode}. Status: ${status}. Entitlement source: ${entitlementSource}. ${pro ? 'Pro is active.' : 'Pro is not active.'}${periodTxt}${stripeTrialNote}${stripeNote}${webhookNote}`;
+        }
+        if(betaSummary){
+          const betaCode = String(beta.code || '').trim();
+          const betaStatus = String(beta.status || 'none').trim();
+          const betaExpires = String(beta.expires_at || '').trim();
+          if(betaCode){
+            const expiresText = betaExpires ? `, expires ${betaExpires}` : '';
+            betaSummary.textContent = `Beta key access: ${betaCode} (${betaStatus}${expiresText}).`;
+          } else {
+            betaSummary.textContent = 'Beta key access: none';
+          }
         }
         if(planPill){
           planPill.className = billingPillClass(pro);
           planPill.textContent = pro ? 'Plan: PRO Monthly' : 'Plan: CE Free';
         }
         if(mobilePill){
-          const enabled = !!sub.mobile_enabled;
+          const enabled = !!(j.features && j.features.mobile);
           mobilePill.className = billingPillClass(enabled);
           mobilePill.textContent = `Mobile App: ${enabled ? 'Enabled' : 'Disabled'}`;
         }
         if(agentsPill){
-          const enabled = !!sub.agents_enabled;
+          const enabled = !!(j.features && j.features.agents);
           agentsPill.className = billingPillClass(enabled);
           agentsPill.textContent = `Local Agents: ${enabled ? 'Enabled' : 'Disabled'}`;
         }
@@ -5090,7 +6221,7 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
           return;
         }
         el.checked = !!j.enabled;
-        setDemoModeStatus(j.enabled ? 'Demo mode enabled. Dashboard now uses simulated data.' : 'Demo mode disabled. Dashboard will use live UISP sources.');
+        setDemoModeStatus(j.enabled ? 'Demo mode enabled. Dashboard now uses simulated data.' : 'Demo mode disabled. Dashboard will use live NMS sources.');
       }catch(_){
         setDemoModeStatus('Demo mode save request failed.', 'error');
       }
@@ -5116,8 +6247,9 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
         if(d.dns_error) details.push('DNS err: ' + d.dns_error);
         if(d.tls_error && d.tls_error !== 'not_applicable_http') details.push('TLS err: ' + d.tls_error);
         const detailTxt = details.length ? details.join(' | ') : 'No additional details';
+        const sourceType = esc(row.type_label || sourceLabel(row.type));
         return `<tr>
-          <td>${esc(row.name || row.id || '(unknown)')}</td>
+          <td>${esc(row.name || row.id || '(unknown)')} <span class="small">(${sourceType})</span></td>
           <td>${dnsPill}</td>
           <td>${tlsPill}</td>
           <td>${apiPill}</td>
@@ -5234,11 +6366,16 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
     }
     function cancelEdit(){
       editSourceId = '';
+      const srcType = document.getElementById('srcType');
+      if(srcType) srcType.value = 'uisp';
       document.getElementById('srcName').value = '';
       document.getElementById('srcUrl').value = '';
       document.getElementById('srcToken').value = '';
+      document.getElementById('srcApiPath').value = '';
+      document.getElementById('srcAuthScheme').value = '';
       document.getElementById('srcEnabled').checked = true;
       document.getElementById('cancelEditBtn').style.display = 'none';
+      applySourceTypeHints('uisp');
       setStatus('');
     }
     async function loadSources(){
@@ -5247,18 +6384,21 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
       if(r.status === 401){ location.href='./?login=1'; return; }
       const j = await r.json().catch(()=>null);
       if(!j || !j.ok){
-        body.innerHTML = '<tr><td colspan="5" class="small">Failed to load sources.</td></tr>';
+        body.innerHTML = '<tr><td colspan="6" class="small">Failed to load sources.</td></tr>';
         return;
       }
       cachedSources = Array.isArray(j.sources) ? j.sources : [];
       if(cachedSources.length === 0){
-        body.innerHTML = '<tr><td colspan="5" class="small">No UISP sources added yet.</td></tr>';
+        body.innerHTML = '<tr><td colspan="6" class="small">No NMS sources added yet.</td></tr>';
         return;
       }
       body.innerHTML = cachedSources.map(s=>{
+        const sourceType = esc(s.type_label || sourceLabel(s.type));
+        const advanced = `${esc(s.auth_scheme || 'bearer')} | ${esc(s.api_path || '')}`;
         return `<tr>
+          <td>${sourceType}</td>
           <td>${esc(s.name)}</td>
-          <td>${esc(s.url)}</td>
+          <td>${esc(s.url)}<div class="small">${advanced}</div></td>
           <td>${s.enabled ? 'Enabled' : 'Disabled'}</td>
           <td>${esc(s.token_hint || '(none)')}</td>
           <td class="row-actions">
@@ -5273,25 +6413,38 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
       const src = cachedSources.find(x=>x.id===id);
       if(!src) return;
       editSourceId = id;
+      const srcType = document.getElementById('srcType');
+      if(srcType) srcType.value = src.type || 'uisp';
       document.getElementById('srcName').value = src.name || '';
       document.getElementById('srcUrl').value = src.url || '';
       document.getElementById('srcToken').value = '';
+      document.getElementById('srcApiPath').value = src.api_path || '';
+      document.getElementById('srcAuthScheme').value = src.auth_scheme || '';
       document.getElementById('srcEnabled').checked = !!src.enabled;
       document.getElementById('cancelEditBtn').style.display = '';
-      setStatus('Editing source "' + (src.name || id) + '". Leave token empty to keep existing token.', 'warn');
+      applySourceTypeHints(src.type || 'uisp');
+      setStatus('Editing ' + sourceLabel(src.type) + ' source "' + (src.name || id) + '". Leave token empty to keep existing token.', 'warn');
     }
     async function saveSource(){
+      const type = (document.getElementById('srcType').value || 'uisp').trim().toLowerCase();
+      const typeLabel = sourceLabel(type);
       const name = document.getElementById('srcName').value.trim();
       const url = document.getElementById('srcUrl').value.trim();
       const token = document.getElementById('srcToken').value.trim();
+      const apiPath = document.getElementById('srcApiPath').value.trim();
+      const authScheme = (document.getElementById('srcAuthScheme').value || '').trim().toLowerCase();
       const enabled = document.getElementById('srcEnabled').checked ? '1' : '0';
-      if(!url){ setStatus('UISP URL is required.', 'error'); return; }
-      if(!editSourceId && !token){ setStatus('UISP API token is required for new sources.', 'error'); return; }
+      const tokenRequired = authScheme !== 'none';
+      if(!url){ setStatus(typeLabel + ' URL is required.', 'error'); return; }
+      if(!editSourceId && tokenRequired && !token){ setStatus(typeLabel + ' API token is required for new sources.', 'error'); return; }
       const fd = new FormData();
       if(editSourceId) fd.append('id', editSourceId);
+      fd.append('type', type);
       fd.append('name', name);
       fd.append('url', url);
       fd.append('token', token);
+      fd.append('api_path', apiPath);
+      fd.append('auth_scheme', authScheme);
       fd.append('enabled', enabled);
       const r = await fetch('?ajax=sources_save', { method:'POST', body:fd });
       if(r.status === 401){ location.href='./?login=1'; return; }
@@ -5301,12 +6454,14 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
         return;
       }
       cancelEdit();
-      setStatus('Source saved.');
+      setStatus(typeLabel + ' source saved.');
       await loadSources();
       await runSourceDiagnostics();
     }
     async function deleteSource(id){
-      if(!confirm('Delete this UISP source?')) return;
+      const src = cachedSources.find(x=>x.id===id);
+      const label = sourceLabel(src && src.type ? src.type : 'uisp');
+      if(!confirm('Delete this ' + label + ' source?')) return;
       const fd = new FormData();
       fd.append('id', id);
       const r = await fetch('?ajax=sources_delete', { method:'POST', body:fd });
@@ -5331,10 +6486,11 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
         setStatus('Test failed: bad response', 'error');
         return;
       }
+      const sourceType = sourceLabel(j.type || 'uisp');
       if(j.ok){
-        setStatus('Test passed. HTTP ' + j.http + ', devices: ' + j.device_count + ', latency: ' + j.latency_ms + 'ms');
+        setStatus(sourceType + ' test passed. HTTP ' + j.http + ', devices: ' + j.device_count + ', latency: ' + j.latency_ms + 'ms');
       } else {
-        setStatus('Test failed. HTTP ' + j.http + (j.error ? (', err: ' + j.error) : ''), 'error');
+        setStatus(sourceType + ' test failed. HTTP ' + j.http + (j.error ? (', err: ' + j.error) : ''), 'error');
       }
       runSourceDiagnostics();
     }
@@ -5345,6 +6501,11 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
         const file = input && input.files && input.files[0] ? input.files[0] : null;
         importPreferencesFile(file);
       });
+    }
+    const srcType = document.getElementById('srcType');
+    if(srcType){
+      srcType.addEventListener('change', ()=>applySourceTypeHints(srcType.value || 'uisp'));
+      applySourceTypeHints(srcType.value || 'uisp');
     }
     loadSources();
     loadBillingStatus();
@@ -5410,8 +6571,12 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
         <label>Confirm password</label>
         <input type="password" name="password_confirm" minlength="8" autocomplete="new-password" required>
       </div>
+      <div class="field">
+        <label>Closed beta key (optional)</label>
+        <input type="text" name="beta_key" autocomplete="off" placeholder="NOCWALL-BETA-XXXX-XXXX">
+      </div>
       <button class="btn" type="submit">Create account</button>
-      <div class="hint">After signup, open Account Settings and add one or more UISP sources.</div>
+      <div class="hint">After signup, open Account Settings to add sources and optionally redeem a beta key for temporary PRO access.</div>
     </form>
   </div>
 </body>
@@ -5429,7 +6594,7 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
   <?php $AUTH_USER = htmlspecialchars((string)($_SESSION['auth_user'] ?? ''), ENT_QUOTES); ?>
   <?php
     $AUTH_SESSION_USER = get_session_user($USERS_STORE);
-    $AUTH_PLAN = user_has_pro_entitlement($AUTH_SESSION_USER) ? 'PRO' : 'CE';
+    $AUTH_PLAN = user_has_pro_entitlement($AUTH_SESSION_USER, $USERS_STORE) ? 'PRO' : 'CE';
   ?>
   <div class="brand">
     <span class="brand-title">NOCWALL-CE<?=!empty($NOCWALL_FEATURE_FLAGS['strict_ce']) ? ' <small style="font-size:12px;color:#f5b87c;">(Strict CE Mode)</small>' : ''?></span>
@@ -5469,7 +6634,7 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
       <button class="tablink" data-tab="topology" onclick="openTab('topology', event)">Topology</button>
     <?php endif; ?>
 </div>
-<section class="source-status-strip" aria-label="UISP source status">
+<section class="source-status-strip" aria-label="NMS source status">
   <div class="source-status-head">
     <div id="sourceStatusSummary" class="source-status-summary">Checking source health...</div>
     <button id="pollAllSourcesBtn" type="button" class="btn-outline">Poll All Sources</button>

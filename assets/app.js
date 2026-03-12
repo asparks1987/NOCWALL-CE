@@ -2516,6 +2516,7 @@ function renderIncidentWorkspace(){
       const latestAt = latest && latest.at ? new Date(latest.at).toLocaleString() : "--";
       const canCommander = featureEnabled("incident_commander_mode");
       const canTimeline = featureEnabled("incident_command_timeline");
+      const canExport = featureEnabled("incident_command_timeline");
       return `<div class="topology-ha-item" data-incident-id="${incidentIDEsc}">
         <div><strong>${deviceID}</strong> <span class="topology-ha-sep">(${type})</span></div>
         <div class="topology-ha-meta">
@@ -2525,6 +2526,10 @@ function renderIncidentWorkspace(){
           <span>Source: ${source}</span>
         </div>
         <div class="topology-ha-note">Latest timeline: ${latestText} (${escapeHtml(latestAt)})</div>
+        ${canExport ? `<div class="topology-ha-meta">
+          <button type="button" class="btn-outline" data-incident-action="export_markdown" data-incident-id="${incidentIDEsc}">Export MD</button>
+          <button type="button" class="btn-outline" data-incident-action="export_pdf" data-incident-id="${incidentIDEsc}">Export PDF</button>
+        </div>` : ""}
         ${canCommander ? `<div class="topology-ha-meta">
           <input type="text" data-commander-input="${incidentIDEsc}" placeholder="commander username" value="${escapeHtml(commander || SESSION_USER)}">
           <button type="button" class="btn-outline" data-incident-action="claim" data-incident-id="${incidentIDEsc}">Claim</button>
@@ -2543,12 +2548,15 @@ function renderIncidentWorkspace(){
     recentEl.innerHTML = `<div class="topology-ha-empty">No recent incidents to display.</div>`;
   } else {
     recentEl.innerHTML = recent.slice(0, 24).map(inc=>{
+      const incidentID = String(inc && inc.id || "").trim();
+      const incidentIDEsc = escapeHtml(incidentID);
       const deviceID = escapeHtml(inc && inc.device_id || "--");
       const type = escapeHtml(inc && inc.type || "incident");
       const severity = escapeHtml(inc && inc.severity || "unknown");
       const timeline = Array.isArray(inc && inc.command_timeline) ? inc.command_timeline : [];
       const events = timeline.slice(-3).reverse();
       const resolvedAt = inc && inc.resolved_at ? new Date(inc.resolved_at).toLocaleString() : "";
+      const canExport = featureEnabled("incident_command_timeline");
       const eventsHtml = events.length
         ? events.map(entry=>{
             const at = entry && entry.at ? new Date(entry.at).toLocaleString() : "--";
@@ -2564,6 +2572,10 @@ function renderIncidentWorkspace(){
           <span class="badge ${incidentSeverityBadgeClass(severity)}">${severity}</span>
           ${resolvedAt ? `<span>Resolved: ${escapeHtml(resolvedAt)}</span>` : `<span>Active</span>`}
         </div>
+        ${canExport ? `<div class="topology-ha-meta">
+          <button type="button" class="btn-outline" data-incident-action="export_markdown" data-incident-id="${incidentIDEsc}">Export MD</button>
+          <button type="button" class="btn-outline" data-incident-action="export_pdf" data-incident-id="${incidentIDEsc}">Export PDF</button>
+        </div>` : ""}
         ${eventsHtml}
       </div>`;
     }).join("");
@@ -2587,6 +2599,28 @@ async function postIncidentTimelineNote(incidentID, message){
   const resp = await fetch("?ajax=incident_timeline_add", { method:"POST", body:fd });
   if(resp.status===401){ location.reload(); return { ok:false, error:"unauthorized" }; }
   return await resp.json().catch(()=>null);
+}
+
+function triggerIncidentTimelineExport(incidentID, format){
+  const id = String(incidentID || "").trim();
+  const normalized = String(format || "").trim().toLowerCase();
+  if(!id || (normalized !== "markdown" && normalized !== "pdf")) return false;
+  const token = (typeof window.NOCWALL_CSRF_TOKEN === "string") ? window.NOCWALL_CSRF_TOKEN : "";
+  const params = new URLSearchParams({
+    download: "incident_export",
+    incident_id: id,
+    format: normalized
+  });
+  if(token){
+    params.set("_csrf", token);
+  }
+  const link = document.createElement("a");
+  link.href = `?${params.toString()}`;
+  link.rel = "noopener";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  return true;
 }
 
 async function runIncidentWorkspaceAction(action, incidentID, triggerEl){
@@ -2649,6 +2683,15 @@ async function runIncidentWorkspaceAction(action, incidentID, triggerEl){
       if(noteInput) noteInput.value = "";
       setIncidentWorkspaceStatus(`Timeline note added for incident ${id}.`, false);
       await loadTopology(true);
+      return;
+    }
+    if(action === "export_markdown" || action === "export_pdf"){
+      const format = action === "export_pdf" ? "pdf" : "markdown";
+      if(!triggerIncidentTimelineExport(id, format)){
+        setIncidentWorkspaceStatus("Unable to start incident export.", true);
+        return;
+      }
+      setIncidentWorkspaceStatus(`Incident ${id} ${format.toUpperCase()} export started.`, false);
     }
   } finally {
     if(triggerEl) triggerEl.disabled = false;
@@ -2657,15 +2700,17 @@ async function runIncidentWorkspaceAction(action, incidentID, triggerEl){
 
 function bindIncidentWorkspaceControls(){
   if(!featureEnabled("incident_workspace")) return;
-  const activeEl = document.getElementById("incidentWorkspaceActive");
-  if(!activeEl || activeEl.dataset.bound === "1") return;
-  activeEl.dataset.bound = "1";
-  activeEl.addEventListener("click", (ev)=>{
-    const btn = ev.target && ev.target.closest ? ev.target.closest("button[data-incident-action]") : null;
-    if(!btn) return;
-    const action = String(btn.getAttribute("data-incident-action") || "").trim();
-    const incidentID = String(btn.getAttribute("data-incident-id") || "").trim();
-    runIncidentWorkspaceAction(action, incidentID, btn);
+  ["incidentWorkspaceActive", "incidentWorkspaceRecent"].forEach((id)=>{
+    const container = document.getElementById(id);
+    if(!container || container.dataset.bound === "1") return;
+    container.dataset.bound = "1";
+    container.addEventListener("click", (ev)=>{
+      const btn = ev.target && ev.target.closest ? ev.target.closest("button[data-incident-action]") : null;
+      if(!btn) return;
+      const action = String(btn.getAttribute("data-incident-action") || "").trim();
+      const incidentID = String(btn.getAttribute("data-incident-id") || "").trim();
+      runIncidentWorkspaceAction(action, incidentID, btn);
+    });
   });
 }
 

@@ -152,7 +152,7 @@ Follow these rules strictly.
 # NOCWALL-CE Burndown (Recreated)
 
 Chronological multi-phase plan to move from the current state to a fully functional, distributable, and sellable NOCWALL platform.
-Strategic connector direction: UISP is first; closed beta v1 targets UISP + Cisco + Juniper ("Jupiter"), then expands toward comprehensive multi-vendor NMS API coverage.
+Strategic connector direction: UISP is first; closed beta v1 targets UISP + Cisco + Juniper plus a generic JSON/HTTP source for unsupported hardware, then expands toward comprehensive multi-vendor NMS API coverage.
 Open-core product rule: CE remains a minimal wall-mounted online/offline dashboard; advanced workflows, analytics, and operations are PRO.
 
 Legend:
@@ -174,34 +174,108 @@ Legend:
   - Notes: Added CSRF token validation for login/register/logout and mutating AJAX routes, session cookie hardening (`HttpOnly` + `SameSite=Lax` + HTTPS-secure), session ID regeneration on login/register, and file-backed login lockout controls.
 - [x] Stripe-managed trial + payment-link tier checkout flow  
   - Notes: Removed server-managed signup trial assignment; billing now supports Stripe payment-link tiers (env-configured) so trial windows and plan flows are owned by Stripe checkout/webhooks.
-- [ ] Planned product split change: move non-minimal CE capabilities behind PRO gates.
+- [x] Planned product split change: move non-minimal CE capabilities behind PRO gates.
+  - Notes: Enforced strict CE defaults for non-PRO accounts, sanitized non-PRO dashboard preferences away from hidden PRO tabs, and added CE smoke assertions that topology, inventory, simulation, mobile, and agent flows remain gated with `pro_feature_required`.
+  - Files: `app.php`, `scripts/ce-feature-pack-smoke.sh`, `README.md`
+  - Tests: `docker run --rm -v ${PWD}:/work -w /work php:8.2-cli php -l app.php`; `docker run --rm -v ${PWD}:/work -w /work alpine:3.20 sh -n scripts/ce-feature-pack-smoke.sh`; `BASE_URL=http://localhost/app bash scripts/ce-feature-pack-smoke.sh`
 
 ## Closed Beta v1 - Launch Scope (Priority Now)
 
 Closed beta objective: NOCWALL-CE stays open/free for everyone; beta keys grant temporary PRO access during the closed beta window only.
 
 ### Closed Beta v1 Exit Criteria
-- [ ] CB1 Account flow is production-stable: user can create account, log in, and retain session securely.
-- [ ] CB2 Dashboard flow is production-stable: user can load dashboard after login and keep it running as a TV wallboard.
-- [ ] CB3 Settings flow is production-stable: user can manage all settings from the settings screen with persistence.
-- [ ] CB4 Source onboarding is production-stable: user can link at least one NMS source and pass connectivity diagnostics.
-- [ ] CB5 CE baseline remains open and free without any beta key requirement.
+- [x] CB1 Account flow is production-stable: user can create account, log in, and retain session securely.
+  - Notes: Added closed-beta v1 smoke validation covering register, logout, login, and authenticated dashboard access.
+  - Files: `scripts/closed-beta-v1-smoke.sh`
+  - Tests: `BASE_URL=http://localhost/app bash scripts/closed-beta-v1-smoke.sh`
+- [x] CB2 Dashboard flow is production-stable: user can load dashboard after login and keep it running as a TV wallboard.
+  - Notes: Added smoke assertions for dashboard render and wallboard controls (`source-status-strip`, `Kiosk`) after authenticated login.
+  - Files: `scripts/closed-beta-v1-smoke.sh`
+  - Tests: `BASE_URL=http://localhost/app bash scripts/closed-beta-v1-smoke.sh`
+- [x] CB3 Settings flow is production-stable: user can manage all settings from the settings screen with persistence.
+  - Notes: Added smoke assertions for settings page load, beta-key redemption control visibility, source management UI visibility, and prefs fetch/save endpoints.
+  - Files: `scripts/closed-beta-v1-smoke.sh`, `app.php`
+  - Tests: `BASE_URL=http://localhost/app bash scripts/closed-beta-v1-smoke.sh`
+- [x] CB4 Source onboarding is production-stable: user can link at least one NMS source and pass connectivity diagnostics.
+  - Notes: Added deterministic CB4 smoke coverage that auto-starts a disposable local UISP mock endpoint when live creds are not provided, and still supports live UISP credential validation.
+  - Files: `scripts/closed-beta-v1-smoke.sh`, `docs/beta_auth_and_trial.md`
+  - Tests: `BASE_URL=http://localhost/app bash scripts/closed-beta-v1-smoke.sh`; optional live validation: `BASE_URL=http://localhost/app UISP_TEST_URL=<url> UISP_TEST_TOKEN=<token> bash scripts/closed-beta-v1-smoke.sh`
+- [x] CB5 CE baseline remains open and free without any beta key requirement.
+  - Notes: Added smoke assertion that new account registration without beta key succeeds and entitlement source remains CE.
+  - Files: `scripts/closed-beta-v1-smoke.sh`
+  - Tests: `BASE_URL=http://localhost/app bash scripts/closed-beta-v1-smoke.sh`
 
 ### Closed Beta Access Keys (Temporary PRO Entitlement)
-- [ ] CBK1 Define beta key schema (`code`, `status`, `max_redemptions`, `redeemed_count`, `expires_at`, `issued_by`, `notes`, `created_at`, `updated_at`).
-- [ ] CBK2 Add admin/ops key generation path (CLI first; optional UI second) with configurable expiry and redemption caps.
-- [ ] CBK3 Add key redemption flow at signup and from account settings for existing CE users.
-- [ ] CBK4 Add entitlement precedence rules: paid PRO > valid beta key PRO > CE free.
-- [ ] CBK5 Add key revoke/disable flow with immediate entitlement re-evaluation.
-- [ ] CBK6 Add audit logging for key issue/redeem/revoke events.
-- [ ] CBK7 Add beta-access docs/runbook (issue, rotate, revoke, expiration handling).
+- [x] CBK1 Define beta key schema (`code`, `status`, `max_redemptions`, `redeemed_count`, `expires_at`, `issued_by`, `notes`, `created_at`, `updated_at`).
+  - Notes: Added normalized beta key schema in `cache/users.json` (`beta_keys` map + `redemptions`) and per-user `beta_access` linkage state.
+  - Files: `app.php`
+  - Tests: `docker run --rm -v ${PWD}:/work -w /work php:8.2-cli php -l app.php`
+- [x] CBK2 Add admin/ops key generation path (CLI first; optional UI second) with configurable expiry and redemption caps.
+  - Notes: Added CLI tooling for `generate`, `list`, `disable/revoke`, and `enable` key operations with configurable `max_redemptions`, `ttl-days`, and `expires-at`.
+  - Files: `scripts/beta_keys.php`, `docs/beta_access_keys.md`
+  - Tests: `docker run --rm -v ${PWD}:/work -w /work php:8.2-cli php -l scripts/beta_keys.php`; `docker run --rm -v ${PWD}:/work -w /work php:8.2-cli php scripts/beta_keys.php generate --users-file cache/beta-key-test-users.json --code NOCWALL-BETA-TEST-0002 --max-redemptions 1 --issued-by ci`; `docker run --rm -v ${PWD}:/work -w /work php:8.2-cli php scripts/beta_keys.php disable --users-file cache/beta-key-test-users.json --code NOCWALL-BETA-TEST-0002`; `docker run --rm -v ${PWD}:/work -w /work php:8.2-cli php scripts/beta_keys.php list --users-file cache/beta-key-test-users.json`
+- [x] CBK3 Add key redemption flow at signup and from account settings for existing CE users.
+  - Notes: Added optional signup `beta_key` field redemption and Account Settings redemption form/action with CSRF validation and user-facing status messages.
+  - Files: `app.php`
+  - Tests: `docker run --rm -v ${PWD}:/work -w /work php:8.2-cli php -l app.php`
+- [x] CBK4 Add entitlement precedence rules: paid PRO > valid beta key PRO > CE free.
+  - Notes: Added entitlement resolver and feature-flag integration so subscription entitlement takes precedence, then beta key entitlement, then CE.
+  - Files: `app.php`
+  - Tests: `docker run --rm -v ${PWD}:/work -w /work php:8.2-cli php -l app.php`
+- [x] CBK5 Add key revoke/disable flow with immediate entitlement re-evaluation.
+  - Notes: Added disable/re-enable status transitions and user beta-access state updates; entitlement checks now evaluate live key status/expiry.
+  - Files: `app.php`, `scripts/beta_keys.php`
+  - Tests: `docker run --rm -v ${PWD}:/work -w /work php:8.2-cli php scripts/beta_keys.php disable --users-file cache/beta-key-test-users.json --code NOCWALL-BETA-TEST-0002`
+- [x] CBK6 Add audit logging for key issue/redeem/revoke events.
+  - Notes: Added `beta_key_audit` event stream with bounded retention for issue, redeem, revoke, and re-enable actions.
+  - Files: `app.php`, `scripts/beta_keys.php`
+  - Tests: `docker run --rm -v ${PWD}:/work -w /work php:8.2-cli php scripts/beta_keys.php list --users-file cache/beta-key-test-users.json`
+- [x] CBK7 Add beta-access docs/runbook (issue, rotate, revoke, expiration handling).
+  - Notes: Added closed-beta key runbook and updated auth/trial documentation with key lifecycle and entitlement behavior.
+  - Files: `docs/beta_access_keys.md`, `docs/beta_auth_and_trial.md`, `README.md`
+  - Tests: Documentation update (no runtime test required)
 
 ### Closed Beta Connector Scope (v1)
-- [ ] CBC1 UISP connector remains primary and fully supported for beta.
-- [ ] CBC2 Ship Cisco connector v1 (read-only inventory + device status + connectivity health).
-- [ ] CBC3 Ship Juniper ("Jupiter") connector v1 (read-only inventory + device status + connectivity health).
-- [ ] CBC4 Add compatibility matrix + smoke tests for UISP/Cisco/Juniper connectors.
-- [ ] CBC5 Defer additional NMS connectors until after closed beta v1 stabilization.
+- [x] CBC1 UISP connector remains primary and fully supported for beta.
+  - Notes: Closed beta smoke coverage now validates UISP source onboarding, connectivity test, and diagnostics path end-to-end (local mock by default, optional live credentials).
+  - Files: `scripts/closed-beta-v1-smoke.sh`, `app.php`
+  - Tests: `BASE_URL=http://localhost/app bash scripts/closed-beta-v1-smoke.sh`; optional live validation: `BASE_URL=http://localhost/app UISP_TEST_URL=<url> UISP_TEST_TOKEN=<token> bash scripts/closed-beta-v1-smoke.sh`
+- [x] CBC2 Ship Cisco connector v1 (read-only inventory + device status + connectivity health).
+  - Notes: Added Cisco connector v1 in Go API with configurable base URL/devices path/auth scheme, poll + status endpoints, background poller support, demo fallback, and connectivity/error health surfaced via source status.
+  - Files: `api/vendor_connectors.go`, `api/main.go`, `api/vendor_connectors_test.go`, `README.md`
+  - Tests: `docker run --rm -v ${PWD}:/work -w /work/api golang:1.22 go test ./...`
+- [x] CBC3 Ship Juniper connector v1 (read-only inventory + device status + connectivity health).
+  - Notes: Added Juniper connector v1 in Go API with configurable base URL/devices path/auth scheme, poll + status endpoints, background poller support, demo fallback, and connectivity/error health surfaced via source status.
+  - Files: `api/vendor_connectors.go`, `api/main.go`, `api/vendor_connectors_test.go`, `README.md`
+  - Tests: `docker run --rm -v ${PWD}:/work -w /work/api golang:1.22 go test ./...`
+- [x] CBC4 Add compatibility matrix + smoke tests for UISP/Cisco/Juniper connectors.
+  - Notes: Added connector compatibility matrix/runbook and automated connector smoke coverage in Go tests across UISP/Cisco/Juniper poll/status flows.
+  - Files: `docs/connector_compatibility_matrix.md`, `api/vendor_connectors_test.go`
+  - Tests: `docker run --rm -v ${PWD}:/work -w /work/api golang:1.22 go test ./...`
+- [x] CBC5 Defer additional NMS connectors until after closed beta v1 stabilization.
+  - Notes: Original closed-beta freeze was documented here; this was later explicitly superseded by product reprioritization to resume connector rollout one vendor at a time.
+  - Files: `docs/connector_compatibility_matrix.md`, `README.md`
+  - Tests: Documentation update (no runtime test required)
+- [x] CBC6 Expose Cisco connector configuration in Account Settings UI (per-account save/test/diagnostics).
+  - Notes: Extended Account Settings source management to support typed NMS sources; Cisco sources can now be saved, listed, tested, and included in diagnostics with per-source type metadata.
+  - Files: `app.php`, `scripts/closed-beta-v1-smoke.sh`
+  - Tests: `docker run --rm -v ${PWD}:/work -w /work php:8.2-cli php -l app.php`; `BASE_URL=http://localhost/app bash scripts/closed-beta-v1-smoke.sh`
+- [x] CBC7 Expose Juniper connector configuration in Account Settings UI (per-account save/test/diagnostics).
+  - Notes: Extended Account Settings source management to support typed NMS sources; Juniper sources can now be saved, listed, tested, and included in diagnostics with per-source type metadata.
+  - Files: `app.php`, `scripts/closed-beta-v1-smoke.sh`
+  - Tests: `docker run --rm -v ${PWD}:/work -w /work php:8.2-cli php -l app.php`; `BASE_URL=http://localhost/app bash scripts/closed-beta-v1-smoke.sh`
+- [x] CBC8 Extend closed-beta web smoke (`scripts/closed-beta-v1-smoke.sh`) to include Cisco/Juniper UI onboarding once CBC6/CBC7 ship.
+  - Notes: Added deterministic CBC8 smoke assertions for Cisco and Juniper onboarding/test paths with mock fallback support and type-aware diagnostics assertions.
+  - Files: `scripts/closed-beta-v1-smoke.sh`, `docs/beta_auth_and_trial.md`, `docs/connector_compatibility_matrix.md`
+  - Tests: `docker run --rm -v ${PWD}:/work -w /work alpine:3.20 sh -n scripts/closed-beta-v1-smoke.sh`; `BASE_URL=http://localhost/app bash scripts/closed-beta-v1-smoke.sh`
+- [x] CBC9 Add vendor-agnostic Generic HTTP source support so unsupported gateways/routers can still be monitored during closed beta v1.
+  - Notes: Added Generic HTTP source save/test/diagnostics support with configurable auth scheme and API path, normalized JSON device ingestion into wallboard cards, and smoke coverage that proves Generic HTTP, Cisco, and Juniper devices all appear in `?ajax=devices`.
+  - Files: `app.php`, `scripts/closed-beta-v1-smoke.sh`, `README.md`, `docs/beta_auth_and_trial.md`, `docs/connector_compatibility_matrix.md`
+  - Tests: `docker run --rm -v ${PWD}:/work -w /work php:8.2-cli php -l app.php`; `docker run --rm -v ${PWD}:/work -w /work alpine:3.20 sh -n scripts/closed-beta-v1-smoke.sh`; `BASE_URL=http://localhost/app bash scripts/closed-beta-v1-smoke.sh`
+- [x] CBC10 Ship Meraki connector v1 (Dashboard API device status + wallboard onboarding).
+  - Notes: Added Meraki source support in web settings and Go API using the current `meraki/dashboard-api-python` contract (`Authorization: Bearer <api_key>`, organization-scoped base URL, `/devices/statuses` poll path). Mocked smoke and Go tests pass; live validation is still blocked because the provided read-only key returned `401 Unauthorized` on March 12, 2026.
+  - Files: `app.php`, `api/main.go`, `api/vendor_connectors.go`, `api/vendor_connectors_test.go`, `scripts/closed-beta-v1-smoke.sh`, `README.md`, `docs/beta_auth_and_trial.md`, `docs/connector_compatibility_matrix.md`
+  - Tests: `docker run --rm -v ${PWD}:/work -w /work php:8.2-cli php -l app.php`; `docker run --rm -v ${PWD}:/work -w /work/api golang:1.22 go test ./...`; `docker run --rm -v ${PWD}:/work -w /work alpine:3.20 sh -n scripts/closed-beta-v1-smoke.sh`; `BASE_URL=http://localhost/app bash scripts/closed-beta-v1-smoke.sh`
 
 ## 25 New CE Adoption Features (Strictly Non-PRO)
 
@@ -436,7 +510,10 @@ They avoid PRO-only domains (team workflows, correlation, automation, enterprise
   - Notes: Added shift handoff generation and history in API store with active/unassigned counts plus delta summaries (new incidents, resolved incidents, commander changes) relative to prior handoff; exposed API/PHP bridge actions and topology UI handoff generator/history panel.
   - Files: `api/models.go`, `api/store.go`, `api/main.go`, `app.php`, `assets/app.js`, `api/store_test.go`
   - Tests: `node --check assets/app.js`; `docker run --rm -v ${PWD}:/work -w /work/api golang:1.24 go test ./...`; `docker run --rm -v ${PWD}:/work -w /work php:8.2-cli php -l app.php`
-- [ ] R35 Add export pipeline for incident timeline to Markdown and PDF.
+- [x] R35 Add export pipeline for incident timeline to Markdown and PDF.
+  - Notes: Added API-backed incident timeline export generation for Markdown and PDF, a session-authenticated PHP download bridge, and workspace UI export actions on active/recent incidents.
+  - Files: `api/incident_exports.go`, `api/incident_exports_test.go`, `api/main.go`, `app.php`, `assets/app.js`, `docs/incident_commander_workspace.md`
+  - Tests: `node --check assets/app.js`; `docker run --rm -v ${PWD}:/work -w /work php:8.2-cli php -l app.php`; `docker run --rm -v ${PWD}:/work -w /work/api golang:1.24 go test ./...`
 - [ ] R36 Add root-cause hypothesis panel with confidence and evidence links.
 - [ ] R37 Build playbook checklist runner with step state and completion tracking.
 - [x] R38 Add audit events for checklist actions and commander handoffs.
@@ -486,7 +563,7 @@ They avoid PRO-only domains (team workflows, correlation, automation, enterprise
 - [ ] R64a Publish multi-vendor NMS connector contract (`discover`, `inventory`, `metrics`, `events`, `auth`).
 - [ ] R64b Implement connector registry with per-vendor adapter loading and health state.
 - [ ] R64c Ship Cisco NMS adapter and compatibility test matrix.
-- [ ] R64c1 Ship Juniper ("Jupiter") NMS adapter and compatibility test matrix.
+- [ ] R64c1 Ship Juniper NMS adapter and compatibility test matrix.
 - [ ] R64d Define rolling goal and tracking for broad NMS API coverage.
 
 ## Phase 5 - Trust, Operability, and Commercial Readiness

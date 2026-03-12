@@ -9,6 +9,7 @@ This document describes the Phase 3 incident commander workflow added for `R33` 
 - Incident workspace view in the topology tab
 - Shift handoff brief generation with delta summaries
 - Incident audit event stream for commander handoff and checklist actions
+- Incident timeline export to Markdown and PDF
 
 ## API Endpoints
 
@@ -51,6 +52,14 @@ All endpoints require API auth (`Authorization: Bearer ...` when enabled).
     - resolved-since-last deltas
     - commander-change deltas
 
+- `GET /incidents/:id/export`
+  - Query params:
+    - `format` (`markdown` or `pdf`, default `markdown`)
+  - Returns a downloadable incident timeline export with:
+    - incident metadata and current ownership
+    - summary message
+    - full command timeline in chronological order
+
 - `GET /incidents/audit`
   - Query params:
     - `limit` (default `120`)
@@ -86,6 +95,7 @@ UI-facing AJAX actions in `app.php`:
 - `?ajax=incident_handoff_generate` (`POST`, CSRF required)
 - `?ajax=incident_audit_events`
 - `?ajax=incident_checklist_audit_add` (`POST`, CSRF required)
+- `?download=incident_export` (`GET`, session + CSRF required)
 
 These actions proxy to the API and include the current session username as timeline actor.
 
@@ -99,6 +109,9 @@ When PRO incident workspace flags are enabled, topology tab includes:
   - Assign (username input)
   - Clear
 - Timeline note input per active incident
+- Per-incident export buttons:
+  - `Export MD`
+  - `Export PDF`
 - Recent incident timeline panel
 - Shift handoff generator controls and brief history
 - Incident audit events list
@@ -111,4 +124,10 @@ Suggested checks:
 node --check assets/app.js
 php -l app.php
 (cd api && go test ./...)
+```
+
+Manual export spot-check:
+
+```bash
+curl -I "http://localhost/app/?download=incident_export&incident_id=<incident-id>&format=pdf&_csrf=<token>"
 ```

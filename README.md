@@ -6,7 +6,7 @@ Target product direction:
 - Users sign up at `nocwall.com`.
 - Each user gets a provisioned browser-based NOC workspace.
 - Telemetry is collected from:
-  - Vendor/NMS APIs (UISP first, expanding to broad NMS API coverage)
+  - Vendor/NMS APIs (UISP first, expanding to broad NMS API coverage plus vendor-agnostic JSON feeds)
   - Local network agents (Linux/SBC daemon)
 - The wallboard UI focuses on dense, glanceable, per-device status cards with alert-first behavior.
 - CE/PRO split direction: CE is intentionally minimal wallboard functionality; advanced capabilities are PRO.
@@ -28,7 +28,7 @@ Long description:
 ## Current State Snapshot (2026-02-19)
 
 - Account login/signup is functional for local CE testing.
-- UISP sources are saved per account and load across browsers after login.
+- NMS sources (UISP, Cisco, Juniper, Meraki, Generic HTTP) are saved per account and load across browsers after login.
 - Dashboard settings (density/metrics/AP siren mode) are account-synced.
 - API inventory foundation is live:
   - canonical schema endpoints
@@ -37,11 +37,15 @@ Long description:
   - drift fingerprint snapshots
   - telemetry retention tiering with hot/warm/cold partitions
 - Current connector status:
-  - UISP connector implemented first
-  - multi-vendor NMS adapter expansion in roadmap
+  - UISP connector implemented first and remains primary
+  - Cisco connector v1 (read-only poll/status with configurable endpoint/auth)
+  - Juniper connector v1 (read-only poll/status with configurable endpoint/auth)
+  - Meraki connector v1 (Dashboard API device status polling with org-scoped base URL)
+  - Generic HTTP source path for unsupported hardware that can expose device status as JSON
+  - additional vendor rollout is now resuming one vendor at a time as docs and test access are secured
 - Product split status:
-  - current branch is transitional and still contains features that will be gated/moved to PRO
-- upcoming releases prioritize reducing CE to minimal wallboard scope
+  - CE defaults are now enforced as strict wallboard mode for non-PRO accounts
+  - advanced inventory, topology, incident workflow, simulation, mobile, and agent flows are gated behind PRO entitlement
 
 ## Web Routing Split (Marketing vs App)
 
@@ -92,7 +96,7 @@ PRO target:
   - ack / clear ack
   - outage simulation
   - station ping history modal
-  - per-account UISP source management (`Account Settings`) with multiple UISP URLs and tokens
+  - per-account NMS source management (`Account Settings`) with UISP, Cisco, Juniper, Meraki, and Generic HTTP source URLs/tokens/auth/path
   - per-account demo preview toggle (dashboard header + Account Settings) for instant simulated wallboard data
   - source connectivity diagnostics panel (DNS/TLS/API reachability) in `Account Settings`
   - local browser notification toggle for new offline events (permission-aware, account preference synced)
@@ -115,6 +119,7 @@ PRO target:
   - account subscription controls in `Account Settings`:
     - start monthly PRO subscription
     - cancel/resume subscription
+    - closed-beta key redemption (temporary PRO access during beta)
     - mobile and local-agent entitlement indicators
     - agent bootstrap config preview for licensed users
 - Go API preview with in-memory/file-backed store:
@@ -132,6 +137,10 @@ PRO target:
   - `POST /events/ingest` (stub)
   - `POST /sources/uisp/poll` (stub)
   - `GET /sources/uisp/status` (stub)
+  - `POST /sources/cisco/poll` (stub)
+  - `GET /sources/cisco/status` (stub)
+  - `POST /sources/juniper/poll` (stub)
+  - `GET /sources/juniper/status` (stub)
   - `GET /inventory/schema` (stub)
   - `GET /inventory/identities` (stub)
   - `GET /inventory/observations` (stub)
@@ -264,7 +273,8 @@ GitHub Actions release publishing:
 3. Open the dashboard:
 - `http://localhost`
 - Create an account from the login screen (or sign in with bootstrap `admin` / `admin`).
-- After login, open `Account Settings` from the header and add one or more UISP sources (`base URL + API token`) for that user.
+- After login, open `Account Settings` from the header and add one or more NMS sources (`base URL + API token`, plus optional auth scheme and API path) for that user.
+- Use `Generic HTTP` when the hardware vendor is not natively supported but a JSON device-status endpoint is available.
 
 
 Optional UISP source polling env vars:
@@ -272,6 +282,27 @@ Optional UISP source polling env vars:
 - `UISP_DEVICES_PATH` (default `/nms/api/v2.1/devices`)
 - `UISP_POLL_INTERVAL_SEC` (0 disables background polling)
 - `UISP_POLL_RETRIES` (default `1`)
+
+Optional Cisco connector v1 env vars:
+- `CISCO_URL` and `CISCO_TOKEN`
+- `CISCO_DEVICES_PATH` (default `/api/v1/devices`)
+- `CISCO_AUTH_SCHEME` (`bearer`, `x-auth-token`, `token`, `authorization`, `none`)
+- `CISCO_POLL_INTERVAL_SEC` (0 disables background polling)
+- `CISCO_POLL_RETRIES` (default `1`)
+
+Optional Juniper connector v1 env vars:
+- `JUNIPER_URL` and `JUNIPER_TOKEN`
+- `JUNIPER_DEVICES_PATH` (default `/api/v1/devices`)
+- `JUNIPER_AUTH_SCHEME` (`bearer`, `x-auth-token`, `token`, `authorization`, `none`)
+- `JUNIPER_POLL_INTERVAL_SEC` (0 disables background polling)
+- `JUNIPER_POLL_RETRIES` (default `1`)
+
+Optional Meraki connector v1 env vars:
+- `MERAKI_URL` and `MERAKI_TOKEN`
+- `MERAKI_DEVICES_PATH` (default `/devices/statuses`)
+- `MERAKI_AUTH_SCHEME` (default `bearer`)
+- `MERAKI_POLL_INTERVAL_SEC` (0 disables background polling)
+- `MERAKI_POLL_RETRIES` (default `1`)
 
 Optional inventory bridge vars (web -> API):
 - `NOCWALL_API_URL` (default `http://api:8080`)
@@ -281,6 +312,10 @@ Feature profile vars:
 - `NOCWALL_FEATURE_PROFILE` (`ce` default, `pro` enables advanced UI/actions)
 - `NOCWALL_PRO_FEATURES` (optional explicit `true/false` override)
 - `NOCWALL_STRICT_CE` (optional explicit `true/false` override)
+
+Strict CE behavior:
+- Non-PRO accounts default to CE wallboard scope even if stale preferences reference PRO-only tabs.
+- PRO-only web/API surfaces return `403 pro_feature_required` for CE accounts.
 
 Billing + licensing vars:
 - `NOCWALL_BILLING_MODE` (`stripe`, `demo`, `off`)
@@ -316,13 +351,14 @@ CE release gate:
 ```
 
 Note:
-- `UISP_*` variables are current connector-specific settings.
-- As additional NMS connectors are added, each will get equivalent connector-scoped config.
+- `UISP_*`, `CISCO_*`, `JUNIPER_*`, and `MERAKI_*` are the currently supported connector-scoped settings.
+- `Generic HTTP` is configured per account from `Account Settings`; it does not require dedicated env vars.
+- Additional named connector families are intentionally deferred until after closed-beta v1 stabilization.
 4. Open:
 - Dashboard: `http://localhost` (or your Caddy endpoint)
 - API: `http://localhost:8080`
 
-## Account + UISP Sources Flow (curl)
+## Account + NMS Sources Flow (curl)
 
 Register:
 
@@ -342,10 +378,27 @@ Add a UISP source to the account:
 
 ```bash
 curl -c cookies.txt -b cookies.txt -X POST "http://localhost/?ajax=sources_save" \
-  -d "name=MainUISP&url=https://isp.unmsapp.com&token=demo_token_1234567890&enabled=1"
+  -d "type=uisp&name=MainUISP&url=https://isp.unmsapp.com&token=demo_token_1234567890&enabled=1"
 ```
 
-List configured UISP sources:
+Add a Meraki source for an organization-scoped Dashboard API base URL:
+
+```bash
+curl -c cookies.txt -b cookies.txt -X POST "http://localhost/?ajax=sources_save" \
+  -d "type=meraki&name=MerakiOrg&url=https://api.meraki.com/api/v1/organizations/123456&token=demo_token_here&api_path=/devices/statuses&auth_scheme=bearer&enabled=1"
+```
+
+Add a vendor-agnostic Generic HTTP source for unsupported hardware:
+
+```bash
+curl -c cookies.txt -b cookies.txt -X POST "http://localhost/?ajax=sources_save" \
+  -d "type=generic&name=EdgeJSON&url=https://monitoring.example.com&api_path=/feeds/devices&auth_scheme=none&enabled=1"
+```
+
+Generic HTTP source payloads can be either a top-level array or an object containing `devices`, `items`, `data`, `results`, or `nodes`.
+Recognized device fields include `id`, `name`, `role`, `status`, `online`, `ip`/`ipAddress`, `siteName`, `vendor`/`manufacturer`, `model`, `latencyMs`, and `uptime`.
+
+List configured sources:
 
 ```bash
 curl -c cookies.txt -b cookies.txt "http://localhost/?ajax=sources_list"
