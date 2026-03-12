@@ -60,6 +60,7 @@ This document captures the beta-focused auth and account entitlements hardening 
 - `CBC10` Meraki validation supports:
   - `MERAKI_TEST_URL` using an organization-scoped base URL such as `https://api.meraki.com/api/v1/organizations/<organizationId>`
   - `MERAKI_TEST_TOKEN` for the Dashboard API key
+  - auth mode is `x-cisco-meraki-api-key` based on live validation against the Meraki API on March 12, 2026
   - when unset and mock mode is enabled, the script reuses a local mock Meraki status feed and confirms those devices appear in `?ajax=devices`
 
 Example:

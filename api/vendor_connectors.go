@@ -288,6 +288,8 @@ func (v *VendorConnector) applyAuthHeaders(req *http.Request) {
 	switch v.authScheme {
 	case "x-auth-token":
 		req.Header.Set("X-Auth-Token", v.token)
+	case "x-cisco-meraki-api-key":
+		req.Header.Set("X-Cisco-Meraki-API-Key", v.token)
 	case "token":
 		req.Header.Set("Token", v.token)
 	case "authorization":

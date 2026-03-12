@@ -50,7 +50,7 @@ func main() {
 		getenv("MERAKI_URL", ""),
 		getenv("MERAKI_TOKEN", ""),
 		getenv("MERAKI_DEVICES_PATH", "/devices/statuses"),
-		getenv("MERAKI_AUTH_SCHEME", "bearer"),
+		getenv("MERAKI_AUTH_SCHEME", "x-cisco-meraki-api-key"),
 	)
 
 	pollSec := getenvInt("UISP_POLL_INTERVAL_SEC", 0)

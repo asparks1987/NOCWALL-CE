@@ -300,7 +300,7 @@ Optional Juniper connector v1 env vars:
 Optional Meraki connector v1 env vars:
 - `MERAKI_URL` and `MERAKI_TOKEN`
 - `MERAKI_DEVICES_PATH` (default `/devices/statuses`)
-- `MERAKI_AUTH_SCHEME` (default `bearer`)
+- `MERAKI_AUTH_SCHEME` (default `x-cisco-meraki-api-key`)
 - `MERAKI_POLL_INTERVAL_SEC` (0 disables background polling)
 - `MERAKI_POLL_RETRIES` (default `1`)
 
@@ -385,7 +385,7 @@ Add a Meraki source for an organization-scoped Dashboard API base URL:
 
 ```bash
 curl -c cookies.txt -b cookies.txt -X POST "http://localhost/?ajax=sources_save" \
-  -d "type=meraki&name=MerakiOrg&url=https://api.meraki.com/api/v1/organizations/123456&token=demo_token_here&api_path=/devices/statuses&auth_scheme=bearer&enabled=1"
+  -d "type=meraki&name=MerakiOrg&url=https://api.meraki.com/api/v1/organizations/123456&token=demo_token_here&api_path=/devices/statuses&auth_scheme=x-cisco-meraki-api-key&enabled=1"
 ```
 
 Add a vendor-agnostic Generic HTTP source for unsupported hardware:

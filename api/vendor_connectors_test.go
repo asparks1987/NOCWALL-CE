@@ -136,10 +136,10 @@ func TestVendorConnectorPollJuniperXAuthToken(t *testing.T) {
 	}
 }
 
-func TestVendorConnectorPollMerakiBearer(t *testing.T) {
-	authHeader := ""
+func TestVendorConnectorPollMerakiAPIKeyHeader(t *testing.T) {
+	apiKeyHeader := ""
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authHeader = r.Header.Get("Authorization")
+		apiKeyHeader = r.Header.Get("X-Cisco-Meraki-API-Key")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`[
 			{"name":"Meraki MX 1","serial":"Q2XX-AAAA-0001","networkId":"net-1","status":"online","productType":"appliance","model":"MX95"},
@@ -149,13 +149,13 @@ func TestVendorConnectorPollMerakiBearer(t *testing.T) {
 	}))
 	defer server.Close()
 
-	connector := NewVendorConnector("meraki", "Meraki", server.URL, "meraki-token-123456", "/devices/statuses", "bearer")
+	connector := NewVendorConnector("meraki", "Meraki", server.URL, "meraki-token-123456", "/devices/statuses", "x-cisco-meraki-api-key")
 	batch, err := connector.Poll(context.Background(), SourcePollRequest{Limit: 10})
 	if err != nil {
 		t.Fatalf("expected no error, got=%v", err)
 	}
-	if authHeader != "Bearer meraki-token-123456" {
-		t.Fatalf("expected bearer auth header, got=%q", authHeader)
+	if apiKeyHeader != "meraki-token-123456" {
+		t.Fatalf("expected Meraki API key header, got=%q", apiKeyHeader)
 	}
 	if batch.Response.Source != "meraki" {
 		t.Fatalf("unexpected source=%q", batch.Response.Source)

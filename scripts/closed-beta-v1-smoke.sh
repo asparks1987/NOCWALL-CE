@@ -391,7 +391,7 @@ if [ -z "$MERAKI_TEST_URL" ] || [ -z "$MERAKI_TEST_TOKEN" ]; then
 fi
 
 if [ "$cbc10_mode" = "ready" ]; then
-  run_source_onboarding_test "meraki" "Meraki" "Smoke Meraki" "$MERAKI_TEST_URL" "$MERAKI_TEST_TOKEN" "/devices/statuses" "bearer"
+  run_source_onboarding_test "meraki" "Meraki" "Smoke Meraki" "$MERAKI_TEST_URL" "$MERAKI_TEST_TOKEN" "/devices/statuses" "x-cisco-meraki-api-key"
   diag_meraki="$(curl -sS -L -c "$COOKIE_FILE" -b "$COOKIE_FILE" "$BASE_URL/?ajax=sources_diagnostics")"
   check_contains "$diag_meraki" '"type":"meraki"' 'diagnostics include Meraki source type'
 

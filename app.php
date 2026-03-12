@@ -1546,14 +1546,14 @@ function source_default_api_path($type){
 }
 
 function supported_source_auth_schemes(){
-    return ['bearer','x-auth-token','token','authorization','none'];
+    return ['bearer','x-auth-token','x-cisco-meraki-api-key','token','authorization','none'];
 }
 
 function source_default_auth_scheme($type){
     $normalized = normalize_source_type($type);
     if($normalized === 'uisp') return 'x-auth-token';
     if($normalized === 'juniper') return 'x-auth-token';
-    if($normalized === 'meraki') return 'bearer';
+    if($normalized === 'meraki') return 'x-cisco-meraki-api-key';
     if($normalized === 'generic') return 'bearer';
     return 'bearer';
 }
@@ -1592,6 +1592,8 @@ function build_source_auth_headers($type, $token, $authScheme = ''){
     }
     if($scheme === 'x-auth-token'){
         $headers[] = 'x-auth-token: ' . $secret;
+    } elseif($scheme === 'x-cisco-meraki-api-key'){
+        $headers[] = 'x-cisco-meraki-api-key: ' . $secret;
     } elseif($scheme === 'token'){
         $headers[] = 'token: ' . $secret;
     } elseif($scheme === 'authorization'){
@@ -5692,6 +5694,7 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
           <select id="srcAuthScheme">
             <option value="bearer">Bearer</option>
             <option value="x-auth-token">X-Auth-Token</option>
+            <option value="x-cisco-meraki-api-key">X-Cisco-Meraki-API-Key</option>
             <option value="token">Token</option>
             <option value="authorization">Authorization (raw)</option>
             <option value="none">None</option>
@@ -5849,7 +5852,7 @@ if(isset($_GET['view']) && $_GET['view']==='settings'){
         namePlaceholder: 'Meraki Dashboard Org',
         urlPlaceholder: 'https://api.meraki.com/api/v1/organizations/<organizationId>',
         apiPath: '/devices/statuses',
-        authScheme: 'bearer',
+        authScheme: 'x-cisco-meraki-api-key',
         tokenOptional: false
       },
       generic: {
